@@ -1,0 +1,95 @@
+{
+  "patients": [
+    {
+      "patient_id": "patient_sergey_ivanov",
+      "clinic_id": "clinic_main",
+      "patient_number": "P-1001",
+      "full_name_legal": "Иванов Сергей Павлович",
+      "first_name": "Сергей",
+      "last_name": "Иванов",
+      "middle_name": "Павлович",
+      "display_name": "Сергей Иванов",
+      "birth_date": "1988-04-11",
+      "sex_marker": "male"
+    },
+    {
+      "patient_id": "patient_elena_ivanova",
+      "clinic_id": "clinic_main",
+      "patient_number": "P-1002",
+      "full_name_legal": "Elena Ivanova",
+      "first_name": "Elena",
+      "last_name": "Ivanova",
+      "display_name": "Elena Ivanova"
+    },
+    {
+      "patient_id": "patient_giorgi_beridze",
+      "clinic_id": "clinic_main",
+      "patient_number": "P-1003",
+      "full_name_legal": "Giorgi Beridze",
+      "first_name": "Giorgi",
+      "last_name": "Beridze",
+      "display_name": "გიორგი Beridze"
+    }
+  ],
+  "patient_contacts": [
+    {
+      "patient_id": "patient_sergey_ivanov",
+      "contact_type": "phone",
+      "contact_value": "+7 (999) 123-45-67",
+      "is_primary": true,
+      "is_verified": true
+    }
+  ],
+  "patient_preferences": [
+    {
+      "patient_preference_id": "pref_sergey",
+      "patient_id": "patient_sergey_ivanov",
+      "preferred_language": "ru",
+      "preferred_reminder_channel": "telegram",
+      "allow_sms": true,
+      "allow_telegram": true,
+      "allow_call": false,
+      "allow_email": false,
+      "marketing_opt_in": false,
+      "contact_time_window": {"from": "09:00", "to": "20:00"}
+    }
+  ],
+  "patient_flags": [
+    {
+      "patient_flag_id": "flag_allergy_sergey",
+      "patient_id": "patient_sergey_ivanov",
+      "flag_type": "allergy",
+      "flag_severity": "high",
+      "is_active": true,
+      "set_by_actor_id": "actor_doctor",
+      "note": "Lidocaine sensitivity"
+    }
+  ],
+  "patient_photos": [
+    {
+      "patient_photo_id": "photo_elena",
+      "patient_id": "patient_elena_ivanova",
+      "external_ref": "s3://dentflow-demo/patient_elena.jpg",
+      "is_primary": true,
+      "source_type": "manual_upload"
+    }
+  ],
+  "patient_medical_summaries": [
+    {
+      "patient_medical_summary_id": "summary_sergey",
+      "patient_id": "patient_sergey_ivanov",
+      "allergy_summary": "Possible reaction to lidocaine",
+      "current_primary_dental_issue_summary": "Lower molar pain",
+      "important_history_summary": "Orthodontic treatment in 2015"
+    }
+  ],
+  "patient_external_ids": [
+    {
+      "patient_external_id_id": "ext_elena_crm",
+      "patient_id": "patient_elena_ivanova",
+      "external_system": "legacy_crm",
+      "external_id": "crm-7791",
+      "is_primary": true
+    }
+  ]
+}

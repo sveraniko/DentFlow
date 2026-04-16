@@ -65,7 +65,7 @@ class LoggingConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LOGGING_", extra="ignore")
 
     level: str = "INFO"
-    json: bool = False
+    json_logs: bool = False
 
 
 class Settings(BaseSettings):

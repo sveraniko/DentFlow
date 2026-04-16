@@ -36,7 +36,7 @@ class _Engine:
 
 
 @pytest.mark.asyncio
-async def test_db_bootstrap_creates_all_schemas_and_stack1_tables(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_db_bootstrap_creates_all_schemas_and_stack1_stack2_tables(monkeypatch: pytest.MonkeyPatch) -> None:
     engine = _Engine()
     monkeypatch.setattr(db_bootstrap, "create_engine", lambda config: engine)
 
@@ -48,3 +48,15 @@ async def test_db_bootstrap_creates_all_schemas_and_stack1_tables(monkeypatch: p
     assert "CREATE TABLE IF NOT EXISTS core_reference.clinics" in executed
     assert "CREATE TABLE IF NOT EXISTS access_identity.actor_identities" in executed
     assert "CREATE TABLE IF NOT EXISTS policy_config.policy_sets" in executed
+
+
+
+def test_stack2_patient_tables_declared() -> None:
+    ddl = "\n".join(db_bootstrap.STACK1_TABLES)
+    assert "CREATE TABLE IF NOT EXISTS core_patient.patients" in ddl
+    assert "CREATE TABLE IF NOT EXISTS core_patient.patient_contacts" in ddl
+    assert "CREATE TABLE IF NOT EXISTS core_patient.patient_preferences" in ddl
+    assert "CREATE TABLE IF NOT EXISTS core_patient.patient_flags" in ddl
+    assert "CREATE TABLE IF NOT EXISTS core_patient.patient_photos" in ddl
+    assert "CREATE TABLE IF NOT EXISTS core_patient.patient_medical_summaries" in ddl
+    assert "CREATE TABLE IF NOT EXISTS core_patient.patient_external_ids" in ddl

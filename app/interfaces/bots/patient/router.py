@@ -4,5 +4,5 @@ from app.common.i18n import I18nService
 from app.interfaces.bots.common import build_role_router
 
 
-def make_router(i18n: I18nService) -> Router:
-    return build_role_router(role_key="patient", i18n=i18n)
+def make_router(i18n: I18nService, *, default_locale: str) -> Router:
+    return build_role_router(role_key="patient", i18n=i18n, locale=default_locale)
