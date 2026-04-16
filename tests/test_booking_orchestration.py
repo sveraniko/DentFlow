@@ -24,6 +24,7 @@ from app.application.booking.state_services import (
     WaitlistStateService,
 )
 from app.application.policy import InMemoryPolicyRepository, PolicyResolver
+from app.application.communication import BookingReminderPlanner, BookingReminderService
 from app.domain.booking import (
     AdminEscalation,
     AvailabilitySlot,
@@ -34,6 +35,8 @@ from app.domain.booking import (
     SlotHold,
     WaitlistEntry,
 )
+from app.domain.communication import ReminderJob
+from app.domain.patient_registry.models import PatientPreference
 
 
 class _Tx(AbstractAsyncContextManager):
@@ -228,7 +231,42 @@ class _Finder:
         return self.rows
 
 
-def _build_orchestrator(repo: _Repo, finder_rows: list[dict]) -> BookingOrchestrationService:
+class _ReminderRepo:
+    def __init__(self) -> None:
+        self.jobs: dict[str, ReminderJob] = {}
+
+    async def create_reminder_job(self, item: ReminderJob) -> None:
+        self.jobs[item.reminder_id] = item
+
+    async def list_reminder_jobs_for_booking(self, *, booking_id: str) -> list[ReminderJob]:
+        return sorted([j for j in self.jobs.values() if j.booking_id == booking_id], key=lambda row: row.scheduled_for)
+
+    async def cancel_scheduled_reminders_for_booking(self, *, booking_id: str, canceled_at: datetime, reason_code: str) -> int:
+        affected = 0
+        for reminder_id, job in list(self.jobs.items()):
+            if job.booking_id != booking_id or job.status != "scheduled" or job.scheduled_for <= canceled_at:
+                continue
+            self.jobs[reminder_id] = ReminderJob(
+                **{**asdict(job), "status": "canceled", "updated_at": canceled_at, "canceled_at": canceled_at, "cancel_reason_code": reason_code}
+            )
+            affected += 1
+        return affected
+
+
+class _PreferenceReader:
+    def __init__(self, pref: PatientPreference | None) -> None:
+        self.pref = pref
+
+    async def get_preferences(self, patient_id: str) -> PatientPreference | None:
+        return self.pref if self.pref and self.pref.patient_id == patient_id else None
+
+
+def _build_orchestrator(
+    repo: _Repo,
+    finder_rows: list[dict],
+    *,
+    reminder_service: BookingReminderService | None = None,
+) -> BookingOrchestrationService:
     patient_resolution = BookingPatientResolutionService(_Finder(finder_rows))
     policy = PolicyResolver(InMemoryPolicyRepository())
     return BookingOrchestrationService(
@@ -239,6 +277,7 @@ def _build_orchestrator(repo: _Repo, finder_rows: list[dict]) -> BookingOrchestr
         waitlist_state_service=WaitlistStateService(repo),  # type: ignore[arg-type]
         patient_resolution_service=patient_resolution,
         policy_resolver=policy,
+        reminder_service=reminder_service,
     )
 
 
@@ -523,3 +562,202 @@ def test_cancel_expire_escalate_waitlist_and_booking_lifecycle() -> None:
     assert isinstance(canceled_booking, OrchestrationSuccess)
     assert any(row.new_status == "reschedule_requested" for row in repo.history)
     assert any(row.new_status == "canceled" for row in repo.history)
+
+
+def test_reminder_scheduling_on_finalize_and_storage_outside_booking() -> None:
+    repo = _Repo()
+    reminder_repo = _ReminderRepo()
+    reminder_service = BookingReminderService(
+        repository=reminder_repo,
+        planner=BookingReminderPlanner(PolicyResolver(InMemoryPolicyRepository())),
+        policy_resolver=PolicyResolver(InMemoryPolicyRepository()),
+    )
+    orchestrator = _build_orchestrator(
+        repo,
+        [{"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"}],
+        reminder_service=reminder_service,
+    )
+    repo.sessions["s1"] = BookingSession(**{**asdict(repo.sessions["s1"]), "resolved_patient_id": "pat_1", "status": "review_ready"})
+    hold = asyncio.run(orchestrator.select_slot_and_activate_hold(booking_session_id="s1", slot_id="slot1"))
+    assert isinstance(hold, OrchestrationSuccess)
+    repo.sessions["s1"] = BookingSession(**{**asdict(repo.sessions["s1"]), "status": "review_ready", "service_id": "service_consult"})
+
+    finalized = asyncio.run(orchestrator.finalize_booking_from_session(booking_session_id="s1"))
+    assert isinstance(finalized, OrchestrationSuccess)
+    assert finalized.entity.booking_id in repo.bookings
+    jobs = asyncio.run(reminder_service.list_booking_reminders(booking_id=finalized.entity.booking_id))
+    assert jobs
+    assert all(job.status == "scheduled" for job in jobs)
+    assert all(job.booking_id == finalized.entity.booking_id for job in jobs)
+    assert not hasattr(finalized.entity, "reminder_status")
+
+
+def test_reminder_replacement_on_reschedule_and_cancel_on_cancel() -> None:
+    repo = _Repo()
+    reminder_repo = _ReminderRepo()
+    reminder_service = BookingReminderService(
+        repository=reminder_repo,
+        planner=BookingReminderPlanner(PolicyResolver(InMemoryPolicyRepository())),
+        policy_resolver=PolicyResolver(InMemoryPolicyRepository()),
+    )
+    orchestrator = _build_orchestrator(repo, [{"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"}], reminder_service=reminder_service)
+    now = datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc)
+    booking = Booking(
+        booking_id="b_sched",
+        clinic_id="clinic_main",
+        branch_id="branch_central",
+        patient_id="pat_1",
+        doctor_id="doctor_anna",
+        service_id="service_consult",
+        slot_id="slot1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=now.replace(day=21, hour=10),
+        scheduled_end_at=now.replace(day=21, hour=10, minute=30),
+        status="confirmed",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=now,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    repo.bookings[booking.booking_id] = booking
+    asyncio.run(reminder_service.replace_booking_reminder_plan(booking=booking))
+    before = asyncio.run(reminder_service.list_booking_reminders(booking_id=booking.booking_id))
+    assert before and all(item.status == "scheduled" for item in before)
+
+    rescheduled = asyncio.run(
+        orchestrator.reschedule_booking(
+            booking_id=booking.booking_id,
+            scheduled_start_at=now.replace(day=22, hour=13),
+            scheduled_end_at=now.replace(day=22, hour=13, minute=30),
+        )
+    )
+    assert isinstance(rescheduled, OrchestrationSuccess)
+    after = asyncio.run(reminder_service.list_booking_reminders(booking_id=booking.booking_id))
+    assert any(item.status == "canceled" for item in after)
+    assert any(item.status == "scheduled" and item.scheduled_for.date().day == 22 for item in after)
+
+    canceled = asyncio.run(orchestrator.cancel_booking(booking_id=booking.booking_id))
+    assert isinstance(canceled, OrchestrationSuccess)
+    done = asyncio.run(reminder_service.list_booking_reminders(booking_id=booking.booking_id))
+    assert not any(item.status == "scheduled" for item in done if item.scheduled_for > datetime.now(timezone.utc))
+
+
+def test_reminder_policy_uses_patient_preferences_then_clinic_fallback() -> None:
+    policy_repo = InMemoryPolicyRepository()
+    resolver = PolicyResolver(policy_repo)
+
+    pref_reader = _PreferenceReader(
+        PatientPreference(
+            patient_preference_id="pp1",
+            patient_id="pat_1",
+            preferred_language="uk",
+            preferred_reminder_channel="sms",
+            allow_sms=True,
+            allow_telegram=True,
+            allow_call=False,
+            allow_email=False,
+        )
+    )
+    reminder_repo = _ReminderRepo()
+    service = BookingReminderService(
+        repository=reminder_repo,
+        planner=BookingReminderPlanner(resolver),
+        policy_resolver=resolver,
+        patient_preference_reader=pref_reader,
+    )
+    booking = Booking(
+        booking_id="b_pref",
+        clinic_id="clinic_main",
+        branch_id="branch_central",
+        patient_id="pat_1",
+        doctor_id="doctor_anna",
+        service_id="service_consult",
+        slot_id="slot1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=datetime(2026, 4, 22, 10, 0, tzinfo=timezone.utc),
+        scheduled_end_at=datetime(2026, 4, 22, 10, 30, tzinfo=timezone.utc),
+        status="confirmed",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc),
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc),
+    )
+    jobs = asyncio.run(service.replace_booking_reminder_plan(booking=booking))
+    assert jobs and all(job.channel == "sms" and job.locale_at_send_time == "uk" for job in jobs)
+
+    fallback_service = BookingReminderService(
+        repository=reminder_repo,
+        planner=BookingReminderPlanner(resolver),
+        policy_resolver=resolver,
+        patient_preference_reader=_PreferenceReader(None),
+    )
+    jobs_fb = asyncio.run(fallback_service.replace_booking_reminder_plan(booking=Booking(**{**asdict(booking), "booking_id": "b_fallback", "patient_id": "pat_2"})))
+    assert jobs_fb and all(job.channel == "telegram" for job in jobs_fb)
+    assert all(job.locale_at_send_time == "ru" for job in jobs_fb)
+
+
+def test_reminder_cancel_on_completed_and_no_show() -> None:
+    repo = _Repo()
+    reminder_repo = _ReminderRepo()
+    service = BookingReminderService(
+        repository=reminder_repo,
+        planner=BookingReminderPlanner(PolicyResolver(InMemoryPolicyRepository())),
+        policy_resolver=PolicyResolver(InMemoryPolicyRepository()),
+    )
+    orchestrator = _build_orchestrator(repo, [{"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"}], reminder_service=service)
+    start = datetime(2026, 4, 22, 10, 0, tzinfo=timezone.utc)
+    booking = Booking(
+        booking_id="b_done",
+        clinic_id="clinic_main",
+        branch_id="branch_central",
+        patient_id="pat_1",
+        doctor_id="doctor_anna",
+        service_id="service_consult",
+        slot_id="slot1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=start,
+        scheduled_end_at=start.replace(minute=30),
+        status="in_service",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=start,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=start,
+        completed_at=None,
+        no_show_at=None,
+        created_at=start,
+        updated_at=start,
+    )
+    repo.bookings[booking.booking_id] = booking
+    asyncio.run(service.replace_booking_reminder_plan(booking=booking))
+    completed = asyncio.run(orchestrator.complete_booking(booking_id=booking.booking_id))
+    assert isinstance(completed, OrchestrationSuccess)
+    completed_jobs = asyncio.run(service.list_booking_reminders(booking_id=booking.booking_id))
+    assert all(job.status == "canceled" for job in completed_jobs if job.scheduled_for > datetime.now(timezone.utc))
+
+    booking2 = Booking(**{**asdict(booking), "booking_id": "b_noshow", "status": "confirmed", "in_service_at": None})
+    repo.bookings[booking2.booking_id] = booking2
+    asyncio.run(service.replace_booking_reminder_plan(booking=booking2))
+    no_show = asyncio.run(orchestrator.mark_booking_no_show(booking_id=booking2.booking_id))
+    assert isinstance(no_show, OrchestrationSuccess)
+    no_show_jobs = asyncio.run(service.list_booking_reminders(booking_id=booking2.booking_id))
+    assert all(job.status == "canceled" for job in no_show_jobs if job.scheduled_for > datetime.now(timezone.utc))

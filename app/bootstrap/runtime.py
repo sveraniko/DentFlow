@@ -20,11 +20,18 @@ from app.application.booking import (
     WaitlistService,
 )
 from app.application.clinic_reference import ClinicReferenceService
+from app.application.communication import BookingReminderPlanner, BookingReminderService
 from app.application.policy import PolicyResolver
 from app.common.i18n import I18nService
 from app.config.settings import Settings
 from app.infrastructure.db.booking_repository import DbBookingRepository
-from app.infrastructure.db.patient_repository import DbCanonicalPatientCreator, find_patients_by_exact_contact, find_patients_by_external_id
+from app.infrastructure.db.communication_repository import DbReminderJobRepository
+from app.infrastructure.db.patient_repository import (
+    DbCanonicalPatientCreator,
+    DbPatientPreferenceReader,
+    find_patients_by_exact_contact,
+    find_patients_by_external_id,
+)
 from app.infrastructure.db.repositories import DbAccessRepository, DbClinicReferenceRepository, DbPolicyRepository
 from app.interfaces.bots.admin.router import make_router as make_admin_router
 from app.interfaces.bots.doctor.router import make_router as make_doctor_router
@@ -41,6 +48,8 @@ class RuntimeRegistry:
         self.access_repository = asyncio.run(DbAccessRepository.load(settings.db))
         self.policy_repository = asyncio.run(DbPolicyRepository.load(settings.db))
         self.booking_repository = DbBookingRepository(settings.db)
+        self.reminder_repository = DbReminderJobRepository(settings.db)
+        self.patient_preference_reader = DbPatientPreferenceReader(settings.db)
 
         self.reference_service = ClinicReferenceService(self.clinic_reference_repository)
         self.access_resolver = AccessResolver(self.access_repository)
@@ -56,6 +65,12 @@ class RuntimeRegistry:
         self.slot_hold_state_service = SlotHoldStateService(self.booking_repository)
         self.booking_state_service = BookingStateService(self.booking_repository)
         self.waitlist_state_service = WaitlistStateService(self.booking_repository)
+        self.booking_reminder_service = BookingReminderService(
+            repository=self.reminder_repository,
+            planner=BookingReminderPlanner(self.policy_resolver),
+            policy_resolver=self.policy_resolver,
+            patient_preference_reader=self.patient_preference_reader,
+        )
         self.booking_orchestration_service = BookingOrchestrationService(
             repository=self.booking_repository,
             booking_session_state_service=self.booking_session_state_service,
@@ -64,6 +79,7 @@ class RuntimeRegistry:
             waitlist_state_service=self.waitlist_state_service,
             patient_resolution_service=self.booking_patient_resolution_service,
             policy_resolver=self.policy_resolver,
+            reminder_service=self.booking_reminder_service,
         )
         self.booking_patient_flow_service = BookingPatientFlowService(
             orchestration=self.booking_orchestration_service,

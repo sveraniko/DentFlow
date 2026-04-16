@@ -608,3 +608,45 @@ async def find_patients_by_external_id(db_config, *, external_system: str, exter
         rows = list(result.mappings())
     await engine.dispose()
     return [dict(row) for row in rows]
+
+
+class DbPatientPreferenceReader:
+    def __init__(self, db_config) -> None:
+        self._db_config = db_config
+
+    async def get_preferences(self, patient_id: str) -> PatientPreference | None:
+        row = await _fetch_preference_row(self._db_config, patient_id=patient_id)
+        if row is None:
+            return None
+        return PatientPreference(
+            patient_preference_id=row["patient_preference_id"],
+            patient_id=row["patient_id"],
+            preferred_language=row["preferred_language"],
+            preferred_reminder_channel=row["preferred_reminder_channel"],
+            allow_sms=row["allow_sms"],
+            allow_telegram=row["allow_telegram"],
+            allow_call=row["allow_call"],
+            allow_email=row["allow_email"],
+            marketing_opt_in=row["marketing_opt_in"],
+            contact_time_window=row["contact_time_window"],
+        )
+
+
+async def _fetch_preference_row(db_config, *, patient_id: str) -> dict | None:
+    engine = create_engine(db_config)
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT patient_preference_id, patient_id, preferred_language, preferred_reminder_channel,
+                           allow_sms, allow_telegram, allow_call, allow_email, marketing_opt_in, contact_time_window
+                    FROM core_patient.patient_preferences
+                    WHERE patient_id=:patient_id
+                    """
+                ),
+                {"patient_id": patient_id},
+            )
+        ).mappings().first()
+    await engine.dispose()
+    return dict(row) if row else None
