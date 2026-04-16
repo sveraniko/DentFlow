@@ -3,6 +3,16 @@ from app.application.booking.patient_resolution import (
     BookingPatientResolutionService,
     PatientResolutionCandidate,
 )
+from app.application.booking.orchestration import BookingOrchestrationService
+from app.application.booking.orchestration_outcomes import (
+    AmbiguousMatchOutcome,
+    ConflictOutcome,
+    EscalatedOutcome,
+    InvalidStateOutcome,
+    NoMatchOutcome,
+    OrchestrationSuccess,
+    SlotUnavailableOutcome,
+)
 from app.application.booking.services import (
     AdminEscalationService,
     AvailabilitySlotService,
@@ -32,4 +42,12 @@ __all__ = [
     "SlotHoldStateService",
     "BookingStateService",
     "WaitlistStateService",
+    "BookingOrchestrationService",
+    "OrchestrationSuccess",
+    "NoMatchOutcome",
+    "AmbiguousMatchOutcome",
+    "SlotUnavailableOutcome",
+    "ConflictOutcome",
+    "EscalatedOutcome",
+    "InvalidStateOutcome",
 ]

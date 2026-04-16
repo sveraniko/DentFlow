@@ -7,10 +7,15 @@ from app.application.access import AccessResolver
 from app.application.booking import (
     AdminEscalationService,
     AvailabilitySlotService,
+    BookingOrchestrationService,
     BookingPatientResolutionService,
+    BookingSessionStateService,
     BookingService,
     BookingSessionService,
+    BookingStateService,
     SlotHoldService,
+    SlotHoldStateService,
+    WaitlistStateService,
     WaitlistService,
 )
 from app.application.clinic_reference import ClinicReferenceService
@@ -46,6 +51,19 @@ class RuntimeRegistry:
         self.waitlist_service = WaitlistService(self.booking_repository)
         self.admin_escalation_service = AdminEscalationService(self.booking_repository)
         self.booking_patient_resolution_service = BookingPatientResolutionService(_RuntimePatientFinder(settings))
+        self.booking_session_state_service = BookingSessionStateService(self.booking_repository)
+        self.slot_hold_state_service = SlotHoldStateService(self.booking_repository)
+        self.booking_state_service = BookingStateService(self.booking_repository)
+        self.waitlist_state_service = WaitlistStateService(self.booking_repository)
+        self.booking_orchestration_service = BookingOrchestrationService(
+            repository=self.booking_repository,
+            booking_session_state_service=self.booking_session_state_service,
+            slot_hold_state_service=self.slot_hold_state_service,
+            booking_state_service=self.booking_state_service,
+            waitlist_state_service=self.waitlist_state_service,
+            patient_resolution_service=self.booking_patient_resolution_service,
+            policy_resolver=self.policy_resolver,
+        )
 
     def build_dispatcher(self) -> Dispatcher:
         dispatcher = Dispatcher()

@@ -395,6 +395,11 @@ STACK1_TABLES: tuple[str, ...] = (
     ON booking.slot_holds (slot_id, status)
     """,
     """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_slot_holds_active_slot
+    ON booking.slot_holds (slot_id)
+    WHERE status = 'active'
+    """,
+    """
     CREATE TABLE IF NOT EXISTS booking.bookings (
       booking_id TEXT PRIMARY KEY,
       clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
@@ -434,6 +439,12 @@ STACK1_TABLES: tuple[str, ...] = (
     """
     CREATE INDEX IF NOT EXISTS idx_bookings_status_start
     ON booking.bookings (clinic_id, status, scheduled_start_at)
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_bookings_live_slot
+    ON booking.bookings (slot_id)
+    WHERE slot_id IS NOT NULL
+      AND status IN ('pending_confirmation', 'confirmed', 'reschedule_requested', 'checked_in', 'in_service')
     """,
     """
     CREATE TABLE IF NOT EXISTS booking.booking_status_history (
