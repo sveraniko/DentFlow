@@ -119,6 +119,7 @@ def make_router(
         for item in items:
             lines.append(
                 i18n.t("admin.booking.escalations.item", locale).format(
+                    escalation_id=item.admin_escalation_id,
                     session_id=item.booking_session_id,
                     priority=item.priority,
                     reason=item.reason_code,
@@ -153,16 +154,92 @@ def make_router(
             return
         lines = [i18n.t("admin.booking.new.title", locale)]
         for booking in bookings:
+            card = booking_flow.build_booking_card(booking=booking)
             lines.append(
                 i18n.t("admin.booking.new.item", locale).format(
                     booking_id=booking.booking_id,
-                    status=booking.status,
-                    doctor=booking.doctor_id,
-                    service=booking.service_id,
-                    dt=booking.scheduled_start_at.strftime("%Y-%m-%d %H:%M"),
+                    status=i18n.t(card.status_label, locale),
+                    doctor=card.doctor_label,
+                    service=card.service_label,
+                    dt=card.datetime_label,
                 )
             )
         await message.answer("\n".join(lines))
+
+    @router.message(Command("booking_escalation_open"))
+    async def booking_escalation_open(message: Message) -> None:
+        allowed = await guard_roles(
+            message,
+            i18n=i18n,
+            access_resolver=access_resolver,
+            allowed_roles={RoleCode.ADMIN},
+            fallback_locale=default_locale,
+        )
+        if not allowed or not message.from_user or not message.text:
+            return
+        actor_context = access_resolver.resolve_actor_context(message.from_user.id)
+        if not actor_context:
+            return
+        locale = await resolve_locale(
+            message,
+            access_resolver=access_resolver,
+            fallback_locale=default_locale,
+            clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
+        )
+        parts = message.text.strip().split(maxsplit=1)
+        if len(parts) != 2:
+            await message.answer(i18n.t("admin.booking.escalation.open.usage", locale))
+            return
+        escalation = await booking_flow.get_admin_escalation_detail(clinic_id=actor_context.clinic_id, escalation_id=parts[1])
+        if escalation is None:
+            await message.answer(i18n.t("admin.booking.escalation.open.missing", locale))
+            return
+        await message.answer(
+            i18n.t("admin.booking.escalation.open.panel", locale).format(
+                escalation_id=escalation.admin_escalation_id,
+                session_id=escalation.booking_session_id,
+                reason=escalation.reason_code,
+                priority=escalation.priority,
+                status=escalation.status,
+            )
+        )
+
+    @router.message(Command("booking_open"))
+    async def booking_open(message: Message) -> None:
+        allowed = await guard_roles(
+            message,
+            i18n=i18n,
+            access_resolver=access_resolver,
+            allowed_roles={RoleCode.ADMIN},
+            fallback_locale=default_locale,
+        )
+        if not allowed or not message.from_user or not message.text:
+            return
+        locale = await resolve_locale(
+            message,
+            access_resolver=access_resolver,
+            fallback_locale=default_locale,
+            clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
+        )
+        parts = message.text.strip().split(maxsplit=1)
+        if len(parts) != 2:
+            await message.answer(i18n.t("admin.booking.open.usage", locale))
+            return
+        card = await booking_flow.get_admin_booking_detail(booking_id=parts[1])
+        if card is None:
+            await message.answer(i18n.t("admin.booking.open.missing", locale))
+            return
+        await message.answer(
+            i18n.t("admin.booking.open.panel", locale).format(
+                booking_id=card.booking_id,
+                doctor=card.doctor_label,
+                service=card.service_label,
+                datetime=card.datetime_label,
+                branch=card.branch_label,
+                status=i18n.t(card.status_label, locale),
+                next_step=i18n.t(card.next_step_key, locale),
+            )
+        )
 
     return router
 

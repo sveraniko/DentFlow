@@ -172,6 +172,12 @@ class _Repo:
         rows = [row for row in self.bookings.values() if row.clinic_id == clinic_id and row.status in statuses]
         return sorted(rows, key=lambda row: row.created_at, reverse=True)[:limit]
 
+    async def list_bookings_by_patient(self, *, patient_id: str) -> list[Booking]:
+        return [row for row in self.bookings.values() if row.patient_id == patient_id]
+
+    async def get_booking(self, booking_id: str) -> Booking | None:
+        return self.bookings.get(booking_id)
+
 
 class _Finder:
     def __init__(self, rows: list[dict]) -> None:
@@ -335,3 +341,158 @@ def test_admin_visibility_lists_escalations_and_pending_bookings() -> None:
     bookings = asyncio.run(flow.list_admin_new_bookings(clinic_id="clinic_main"))
     assert escalations[0].booking_session_id == "s42"
     assert bookings[0].booking_id == "b1"
+
+
+def test_session_resume_mapping_and_stale_callback_guard() -> None:
+    flow, _, _ = _build_flow(finder_rows=[])
+    session = asyncio.run(flow.start_or_resume_session(clinic_id="clinic_main", telegram_user_id=4001))
+    mapped = asyncio.run(flow.determine_resume_panel(booking_session_id=session.booking_session_id))
+    assert mapped is not None
+    assert mapped.panel_key == "service_selection"
+    asyncio.run(flow.update_service(booking_session_id=session.booking_session_id, service_id="service_consult"))
+    mapped = asyncio.run(flow.determine_resume_panel(booking_session_id=session.booking_session_id))
+    assert mapped is not None
+    assert mapped.panel_key == "doctor_preference_selection"
+    valid = asyncio.run(
+        flow.validate_active_session_callback(
+            clinic_id="clinic_main",
+            telegram_user_id=4001,
+            callback_session_id=session.booking_session_id,
+        )
+    )
+    stale = asyncio.run(
+        flow.validate_active_session_callback(
+            clinic_id="clinic_main",
+            telegram_user_id=4001,
+            callback_session_id="bs_stale",
+        )
+    )
+    assert valid is True
+    assert stale is False
+
+
+def test_existing_booking_controls_exact_match_no_match_and_ambiguous() -> None:
+    flow, repo, _ = _build_flow(finder_rows=[{"patient_id": "pat_existing", "clinic_id": "clinic_main", "display_name": "Existing"}])
+    now = datetime(2026, 4, 16, 11, 0, tzinfo=timezone.utc)
+    repo.bookings["b1"] = Booking(
+        booking_id="b1",
+        clinic_id="clinic_main",
+        branch_id="branch_1",
+        patient_id="pat_existing",
+        doctor_id="doctor_1",
+        service_id="service_consult",
+        slot_id="slot_1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=now + timedelta(days=1),
+        scheduled_end_at=now + timedelta(days=1, minutes=30),
+        status="confirmed",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=None,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    exact = asyncio.run(
+        flow.resolve_existing_booking_by_contact(
+            clinic_id="clinic_main",
+            telegram_user_id=4101,
+            phone="+15550101010",
+        )
+    )
+    assert exact.kind == "exact_match"
+    assert exact.bookings[0].booking_id == "b1"
+
+    flow_no_match, _, _ = _build_flow(finder_rows=[])
+    no_match = asyncio.run(
+        flow_no_match.resolve_existing_booking_by_contact(
+            clinic_id="clinic_main",
+            telegram_user_id=4102,
+            phone="+15550101011",
+        )
+    )
+    assert no_match.kind == "no_match"
+
+    flow_ambiguous, repo_ambiguous, _ = _build_flow(
+        finder_rows=[
+            {"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"},
+            {"patient_id": "pat_2", "clinic_id": "clinic_main", "display_name": "Two"},
+        ]
+    )
+    ambiguous = asyncio.run(
+        flow_ambiguous.resolve_existing_booking_by_contact(
+            clinic_id="clinic_main",
+            telegram_user_id=4103,
+            phone="+15550101012",
+        )
+    )
+    assert ambiguous.kind == "ambiguous_escalated"
+    assert len(repo_ambiguous.escalations) == 1
+
+
+def test_reschedule_cancel_waitlist_and_admin_open_details() -> None:
+    flow, repo, _ = _build_flow(finder_rows=[])
+    now = datetime(2026, 4, 16, 11, 0, tzinfo=timezone.utc)
+    repo.escalations["e1"] = AdminEscalation(
+        admin_escalation_id="e1",
+        clinic_id="clinic_main",
+        booking_session_id="s42",
+        patient_id=None,
+        reason_code="ambiguous_exact_contact",
+        priority="high",
+        status="open",
+        assigned_to_actor_id=None,
+        payload_summary={"session_status": "admin_escalated"},
+        created_at=now,
+        updated_at=now,
+    )
+    repo.bookings["b1"] = Booking(
+        booking_id="b1",
+        clinic_id="clinic_main",
+        branch_id="branch_1",
+        patient_id="pat_1",
+        doctor_id="doctor_1",
+        service_id="service_consult",
+        slot_id="slot_1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=now + timedelta(days=1),
+        scheduled_end_at=now + timedelta(days=1, minutes=30),
+        status="confirmed",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=None,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    rescheduled = asyncio.run(flow.request_reschedule(booking_id="b1"))
+    assert isinstance(rescheduled, OrchestrationSuccess)
+    assert rescheduled.entity.status == "reschedule_requested"
+
+    canceled = asyncio.run(flow.cancel_booking(booking_id="b1"))
+    assert isinstance(canceled, OrchestrationSuccess)
+    assert canceled.entity.status == "canceled"
+
+    waitlist = asyncio.run(flow.join_earlier_slot_waitlist(booking_id="b1", telegram_user_id=5010))
+    assert isinstance(waitlist, OrchestrationSuccess)
+    assert len(repo.waitlist) == 1
+    assert next(iter(repo.waitlist.values())).status == "active"
+
+    escalation_detail = asyncio.run(flow.get_admin_escalation_detail(clinic_id="clinic_main", escalation_id="e1"))
+    booking_detail = asyncio.run(flow.get_admin_booking_detail(booking_id="b1"))
+    assert escalation_detail is not None
+    assert booking_detail is not None
+    assert booking_detail.doctor_label == "Dr One"
