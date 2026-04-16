@@ -24,6 +24,8 @@ ACTIVE_SESSION_STATUSES: tuple[str, ...] = (
     "awaiting_contact_confirmation",
     "review_ready",
 )
+NEW_BOOKING_ROUTE_TYPES: frozenset[str] = frozenset({"service_first"})
+EXISTING_BOOKING_CONTROL_ROUTE_TYPES: frozenset[str] = frozenset({"existing_booking_control"})
 
 
 class BookingFlowReadRepository(Protocol):
@@ -95,9 +97,13 @@ class BookingPatientFlowService:
     patient_creator: CanonicalPatientCreator
 
     async def start_or_resume_session(self, *, clinic_id: str, telegram_user_id: int, branch_id: str | None = None) -> BookingSession:
-        active = await self.reads.list_active_sessions_for_telegram_user(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
-        if active:
-            return sorted(active, key=lambda row: row.updated_at, reverse=True)[0]
+        latest = await self._latest_active_session(
+            clinic_id=clinic_id,
+            telegram_user_id=telegram_user_id,
+            allowed_route_types=NEW_BOOKING_ROUTE_TYPES,
+        )
+        if latest is not None:
+            return latest
         started = await self.orchestration.start_booking_session(
             clinic_id=clinic_id,
             telegram_user_id=telegram_user_id,
@@ -107,10 +113,13 @@ class BookingPatientFlowService:
         return started.entity
 
     async def start_or_resume_existing_booking_session(self, *, clinic_id: str, telegram_user_id: int) -> BookingSession:
-        active = await self.reads.list_active_sessions_for_telegram_user(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
-        for session in sorted(active, key=lambda row: row.updated_at, reverse=True):
-            if session.route_type == "existing_booking_control":
-                return session
+        latest = await self._latest_active_session(
+            clinic_id=clinic_id,
+            telegram_user_id=telegram_user_id,
+            allowed_route_types=EXISTING_BOOKING_CONTROL_ROUTE_TYPES,
+        )
+        if latest is not None:
+            return latest
         started = await self.orchestration.start_booking_session(
             clinic_id=clinic_id,
             telegram_user_id=telegram_user_id,
@@ -133,12 +142,20 @@ class BookingPatientFlowService:
         return BookingResumePanel(panel_key=self._panel_for_session(session), booking_session=session)
 
     async def validate_active_session_callback(
-        self, *, clinic_id: str, telegram_user_id: int, callback_session_id: str
+        self,
+        *,
+        clinic_id: str,
+        telegram_user_id: int,
+        callback_session_id: str,
+        allowed_route_types: frozenset[str] = NEW_BOOKING_ROUTE_TYPES,
     ) -> bool:
-        active = await self.reads.list_active_sessions_for_telegram_user(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
-        if not active:
+        latest = await self._latest_active_session(
+            clinic_id=clinic_id,
+            telegram_user_id=telegram_user_id,
+            allowed_route_types=allowed_route_types,
+        )
+        if latest is None:
             return False
-        latest = sorted(active, key=lambda row: row.updated_at, reverse=True)[0]
         return latest.booking_session_id == callback_session_id
 
     def list_services(self, *, clinic_id: str) -> list[Service]:
@@ -343,10 +360,10 @@ class BookingPatientFlowService:
         allowed_statuses: set[str] | None = None,
     ) -> ExistingBookingControlValidationResult:
         active = await self.reads.list_active_sessions_for_telegram_user(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
-        if not active:
+        latest = self._latest_for_route_types(active, allowed_route_types=EXISTING_BOOKING_CONTROL_ROUTE_TYPES)
+        if latest is None:
             return ExistingBookingControlValidationResult(kind="missing_session")
-        latest = sorted(active, key=lambda row: row.updated_at, reverse=True)[0]
-        if latest.booking_session_id != callback_session_id or latest.route_type != "existing_booking_control":
+        if latest.booking_session_id != callback_session_id:
             return ExistingBookingControlValidationResult(kind="stale_or_mismatched_session", booking_session=latest)
         if not latest.resolved_patient_id:
             return ExistingBookingControlValidationResult(kind="missing_resolved_patient", booking_session=latest)
@@ -479,3 +496,24 @@ class BookingPatientFlowService:
         if status == "canceled":
             return "patient.booking.card.next.canceled"
         return "patient.booking.card.next.default"
+
+    async def _latest_active_session(
+        self,
+        *,
+        clinic_id: str,
+        telegram_user_id: int,
+        allowed_route_types: frozenset[str],
+    ) -> BookingSession | None:
+        active = await self.reads.list_active_sessions_for_telegram_user(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
+        return self._latest_for_route_types(active, allowed_route_types=allowed_route_types)
+
+    def _latest_for_route_types(
+        self,
+        active_sessions: list[BookingSession],
+        *,
+        allowed_route_types: frozenset[str],
+    ) -> BookingSession | None:
+        matched = [row for row in active_sessions if row.route_type in allowed_route_types]
+        if not matched:
+            return None
+        return sorted(matched, key=lambda row: row.updated_at, reverse=True)[0]
