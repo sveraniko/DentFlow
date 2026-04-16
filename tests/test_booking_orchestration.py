@@ -316,6 +316,81 @@ def test_finalize_invalid_and_atomic_rollback() -> None:
     assert next(iter(repo.holds.values())).status == "active"
 
 
+def test_select_slot_uses_canonical_session_transitions_from_initiated() -> None:
+    repo = _Repo()
+    repo.sessions["s1"] = BookingSession(
+        **{**asdict(repo.sessions["s1"]), "status": "initiated", "contact_phone_snapshot": None}
+    )
+    orchestrator = _build_orchestrator(repo, [{"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"}])
+
+    selected = asyncio.run(orchestrator.select_slot_and_activate_hold(booking_session_id="s1", slot_id="slot1"))
+    assert isinstance(selected, OrchestrationSuccess)
+    assert repo.sessions["s1"].status == "awaiting_contact_confirmation"
+    lifecycle_events = [event.event_name for event in repo.session_events if event.event_name.startswith("booking_session.")]
+    assert lifecycle_events[-3:] == [
+        "booking_session.in_progress",
+        "booking_session.awaiting_slot_selection",
+        "booking_session.awaiting_contact_confirmation",
+    ]
+
+
+def test_release_hold_transitions_session_canonically_and_clears_selection() -> None:
+    repo = _Repo()
+    repo.sessions["s1"] = BookingSession(
+        **{**asdict(repo.sessions["s1"]), "status": "awaiting_contact_confirmation", "contact_phone_snapshot": None}
+    )
+    orchestrator = _build_orchestrator(repo, [{"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"}])
+
+    hold = asyncio.run(orchestrator.select_slot_and_activate_hold(booking_session_id="s1", slot_id="slot1"))
+    assert isinstance(hold, OrchestrationSuccess)
+    released = asyncio.run(orchestrator.release_or_expire_hold_for_session(booking_session_id="s1", action="released"))
+    assert isinstance(released, OrchestrationSuccess)
+    assert repo.sessions["s1"].status == "awaiting_slot_selection"
+    assert repo.sessions["s1"].selected_hold_id is None
+    assert repo.sessions["s1"].selected_slot_id is None
+    assert any(event.event_name == "booking_session.awaiting_slot_selection" for event in repo.session_events)
+
+
+def test_finalize_fails_cleanly_when_service_missing() -> None:
+    repo = _Repo()
+    repo.sessions["s1"] = BookingSession(
+        **{
+            **asdict(repo.sessions["s1"]),
+            "resolved_patient_id": "pat_1",
+            "status": "review_ready",
+            "service_id": None,
+        }
+    )
+    orchestrator = _build_orchestrator(repo, [{"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"}])
+    held = asyncio.run(orchestrator.select_slot_and_activate_hold(booking_session_id="s1", slot_id="slot1"))
+    assert isinstance(held, OrchestrationSuccess)
+    repo.sessions["s1"] = BookingSession(**{**asdict(repo.sessions["s1"]), "status": "review_ready", "service_id": None})
+
+    finalized = asyncio.run(orchestrator.finalize_booking_from_session(booking_session_id="s1"))
+    assert isinstance(finalized, InvalidStateOutcome)
+    assert "selected service" in finalized.reason
+    assert repo.bookings == {}
+
+
+@pytest.mark.parametrize("terminal_status", ["released", "expired", "canceled", "consumed"])
+def test_same_session_same_slot_terminal_hold_gets_fresh_hold(terminal_status: str) -> None:
+    repo = _Repo()
+    repo.sessions["s1"] = BookingSession(
+        **{**asdict(repo.sessions["s1"]), "status": "awaiting_contact_confirmation", "contact_phone_snapshot": None}
+    )
+    orchestrator = _build_orchestrator(repo, [{"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"}])
+    first = asyncio.run(orchestrator.select_slot_and_activate_hold(booking_session_id="s1", slot_id="slot1"))
+    assert isinstance(first, OrchestrationSuccess)
+    old_hold_id = first.entity.slot_hold_id
+    repo.holds[old_hold_id] = SlotHold(**{**asdict(repo.holds[old_hold_id]), "status": terminal_status})
+    repo.sessions["s1"] = BookingSession(**{**asdict(repo.sessions["s1"]), "selected_hold_id": None, "selected_slot_id": None})
+
+    second = asyncio.run(orchestrator.select_slot_and_activate_hold(booking_session_id="s1", slot_id="slot1"))
+    assert isinstance(second, OrchestrationSuccess)
+    assert second.entity.status == "active"
+    assert second.entity.slot_hold_id != old_hold_id
+
+
 def test_cancel_expire_escalate_waitlist_and_booking_lifecycle() -> None:
     repo = _Repo()
     orchestrator = _build_orchestrator(repo, [{"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"}])
