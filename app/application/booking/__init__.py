@@ -11,6 +11,12 @@ from app.application.booking.services import (
     SlotHoldService,
     WaitlistService,
 )
+from app.application.booking.state_services import (
+    BookingSessionStateService,
+    BookingStateService,
+    SlotHoldStateService,
+    WaitlistStateService,
+)
 
 __all__ = [
     "BookingPatientResolutionResult",
@@ -22,4 +28,8 @@ __all__ = [
     "BookingService",
     "WaitlistService",
     "AdminEscalationService",
+    "BookingSessionStateService",
+    "SlotHoldStateService",
+    "BookingStateService",
+    "WaitlistStateService",
 ]
