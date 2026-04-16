@@ -4,6 +4,7 @@ import json
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import text
 
@@ -19,45 +20,51 @@ class DbBookingRepository(BookingRepository):
     def _engine(self):
         return create_engine(self._db_config)
 
-    async def upsert_booking_session(self, item: BookingSession) -> None:
+    def transaction(self):
+        return DbBookingUnitOfWork(self._engine())
+
+    async def _upsert_booking_session_on_conn(self, conn: Any, item: BookingSession) -> None:
         payload = asdict(item)
+        await conn.execute(
+            text(
+                """
+                INSERT INTO booking.booking_sessions (
+                  booking_session_id, clinic_id, branch_id, telegram_user_id, resolved_patient_id, status, route_type, service_id,
+                  urgency_type, requested_date_type, requested_date, time_window, doctor_preference_type, doctor_id, doctor_code_raw,
+                  selected_slot_id, selected_hold_id, contact_phone_snapshot, notes, expires_at, created_at, updated_at
+                ) VALUES (
+                  :booking_session_id, :clinic_id, :branch_id, :telegram_user_id, :resolved_patient_id, :status, :route_type, :service_id,
+                  :urgency_type, :requested_date_type, :requested_date, :time_window, :doctor_preference_type, :doctor_id, :doctor_code_raw,
+                  :selected_slot_id, :selected_hold_id, :contact_phone_snapshot, :notes, :expires_at, :created_at, :updated_at
+                )
+                ON CONFLICT (booking_session_id) DO UPDATE SET
+                  branch_id=EXCLUDED.branch_id,
+                  resolved_patient_id=EXCLUDED.resolved_patient_id,
+                  status=EXCLUDED.status,
+                  route_type=EXCLUDED.route_type,
+                  service_id=EXCLUDED.service_id,
+                  urgency_type=EXCLUDED.urgency_type,
+                  requested_date_type=EXCLUDED.requested_date_type,
+                  requested_date=EXCLUDED.requested_date,
+                  time_window=EXCLUDED.time_window,
+                  doctor_preference_type=EXCLUDED.doctor_preference_type,
+                  doctor_id=EXCLUDED.doctor_id,
+                  doctor_code_raw=EXCLUDED.doctor_code_raw,
+                  selected_slot_id=EXCLUDED.selected_slot_id,
+                  selected_hold_id=EXCLUDED.selected_hold_id,
+                  contact_phone_snapshot=EXCLUDED.contact_phone_snapshot,
+                  notes=EXCLUDED.notes,
+                  expires_at=EXCLUDED.expires_at,
+                  updated_at=EXCLUDED.updated_at
+                """
+            ),
+            payload,
+        )
+
+    async def upsert_booking_session(self, item: BookingSession) -> None:
         engine = self._engine()
         async with engine.begin() as conn:
-            await conn.execute(
-                text(
-                    """
-                    INSERT INTO booking.booking_sessions (
-                      booking_session_id, clinic_id, branch_id, telegram_user_id, resolved_patient_id, status, route_type, service_id,
-                      urgency_type, requested_date_type, requested_date, time_window, doctor_preference_type, doctor_id, doctor_code_raw,
-                      selected_slot_id, selected_hold_id, contact_phone_snapshot, notes, expires_at, created_at, updated_at
-                    ) VALUES (
-                      :booking_session_id, :clinic_id, :branch_id, :telegram_user_id, :resolved_patient_id, :status, :route_type, :service_id,
-                      :urgency_type, :requested_date_type, :requested_date, :time_window, :doctor_preference_type, :doctor_id, :doctor_code_raw,
-                      :selected_slot_id, :selected_hold_id, :contact_phone_snapshot, :notes, :expires_at, :created_at, :updated_at
-                    )
-                    ON CONFLICT (booking_session_id) DO UPDATE SET
-                      branch_id=EXCLUDED.branch_id,
-                      resolved_patient_id=EXCLUDED.resolved_patient_id,
-                      status=EXCLUDED.status,
-                      route_type=EXCLUDED.route_type,
-                      service_id=EXCLUDED.service_id,
-                      urgency_type=EXCLUDED.urgency_type,
-                      requested_date_type=EXCLUDED.requested_date_type,
-                      requested_date=EXCLUDED.requested_date,
-                      time_window=EXCLUDED.time_window,
-                      doctor_preference_type=EXCLUDED.doctor_preference_type,
-                      doctor_id=EXCLUDED.doctor_id,
-                      doctor_code_raw=EXCLUDED.doctor_code_raw,
-                      selected_slot_id=EXCLUDED.selected_slot_id,
-                      selected_hold_id=EXCLUDED.selected_hold_id,
-                      contact_phone_snapshot=EXCLUDED.contact_phone_snapshot,
-                      notes=EXCLUDED.notes,
-                      expires_at=EXCLUDED.expires_at,
-                      updated_at=EXCLUDED.updated_at
-                    """
-                ),
-                payload,
-            )
+            await self._upsert_booking_session_on_conn(conn, item)
         await engine.dispose()
 
     async def get_booking_session(self, booking_session_id: str) -> BookingSession | None:
@@ -74,24 +81,27 @@ class DbBookingRepository(BookingRepository):
         )
         return BookingSession(**row) if row else None
 
-    async def append_session_event(self, event: SessionEvent) -> None:
+    async def _append_session_event_on_conn(self, conn: Any, event: SessionEvent) -> None:
         payload = asdict(event)
+        payload["payload_json"] = json.dumps(payload["payload_json"]) if payload["payload_json"] is not None else None
+        await conn.execute(
+            text(
+                """
+                INSERT INTO booking.session_events (
+                  session_event_id, booking_session_id, event_name, payload_json, actor_type, actor_id, occurred_at
+                ) VALUES (
+                  :session_event_id, :booking_session_id, :event_name, CAST(:payload_json AS JSONB), :actor_type, :actor_id, :occurred_at
+                )
+                ON CONFLICT (session_event_id) DO NOTHING
+                """
+            ),
+            payload,
+        )
+
+    async def append_session_event(self, event: SessionEvent) -> None:
         engine = self._engine()
         async with engine.begin() as conn:
-            payload["payload_json"] = json.dumps(payload["payload_json"]) if payload["payload_json"] is not None else None
-            await conn.execute(
-                text(
-                    """
-                    INSERT INTO booking.session_events (
-                      session_event_id, booking_session_id, event_name, payload_json, actor_type, actor_id, occurred_at
-                    ) VALUES (
-                      :session_event_id, :booking_session_id, :event_name, CAST(:payload_json AS JSONB), :actor_type, :actor_id, :occurred_at
-                    )
-                    ON CONFLICT (session_event_id) DO NOTHING
-                    """
-                ),
-                payload,
-            )
+            await self._append_session_event_on_conn(conn, event)
         await engine.dispose()
 
     async def upsert_availability_slot(self, item: AvailabilitySlot) -> None:
@@ -149,25 +159,28 @@ class DbBookingRepository(BookingRepository):
         )
         return [AvailabilitySlot(**row) for row in rows]
 
-    async def upsert_slot_hold(self, item: SlotHold) -> None:
+    async def _upsert_slot_hold_on_conn(self, conn: Any, item: SlotHold) -> None:
         payload = asdict(item)
+        await conn.execute(
+            text(
+                """
+                INSERT INTO booking.slot_holds (
+                  slot_hold_id, clinic_id, slot_id, booking_session_id, telegram_user_id, status, expires_at, created_at
+                ) VALUES (
+                  :slot_hold_id, :clinic_id, :slot_id, :booking_session_id, :telegram_user_id, :status, :expires_at, :created_at
+                )
+                ON CONFLICT (slot_hold_id) DO UPDATE SET
+                  status=EXCLUDED.status,
+                  expires_at=EXCLUDED.expires_at
+                """
+            ),
+            payload,
+        )
+
+    async def upsert_slot_hold(self, item: SlotHold) -> None:
         engine = self._engine()
         async with engine.begin() as conn:
-            await conn.execute(
-                text(
-                    """
-                    INSERT INTO booking.slot_holds (
-                      slot_hold_id, clinic_id, slot_id, booking_session_id, telegram_user_id, status, expires_at, created_at
-                    ) VALUES (
-                      :slot_hold_id, :clinic_id, :slot_id, :booking_session_id, :telegram_user_id, :status, :expires_at, :created_at
-                    )
-                    ON CONFLICT (slot_hold_id) DO UPDATE SET
-                      status=EXCLUDED.status,
-                      expires_at=EXCLUDED.expires_at
-                    """
-                ),
-                payload,
-            )
+            await self._upsert_slot_hold_on_conn(conn, item)
         await engine.dispose()
 
     async def get_slot_hold(self, slot_hold_id: str) -> SlotHold | None:
@@ -195,47 +208,50 @@ class DbBookingRepository(BookingRepository):
         )
         return SlotHold(**row) if row else None
 
-    async def upsert_booking(self, item: Booking) -> None:
+    async def _upsert_booking_on_conn(self, conn: Any, item: Booking) -> None:
         payload = asdict(item)
+        await conn.execute(
+            text(
+                """
+                INSERT INTO booking.bookings (
+                  booking_id, clinic_id, branch_id, patient_id, doctor_id, service_id, slot_id, booking_mode, source_channel,
+                  scheduled_start_at, scheduled_end_at, status, reason_for_visit_short, patient_note, confirmation_required,
+                  confirmed_at, canceled_at, checked_in_at, in_service_at, completed_at, no_show_at, created_at, updated_at
+                ) VALUES (
+                  :booking_id, :clinic_id, :branch_id, :patient_id, :doctor_id, :service_id, :slot_id, :booking_mode, :source_channel,
+                  :scheduled_start_at, :scheduled_end_at, :status, :reason_for_visit_short, :patient_note, :confirmation_required,
+                  :confirmed_at, :canceled_at, :checked_in_at, :in_service_at, :completed_at, :no_show_at, :created_at, :updated_at
+                )
+                ON CONFLICT (booking_id) DO UPDATE SET
+                  branch_id=EXCLUDED.branch_id,
+                  patient_id=EXCLUDED.patient_id,
+                  doctor_id=EXCLUDED.doctor_id,
+                  service_id=EXCLUDED.service_id,
+                  slot_id=EXCLUDED.slot_id,
+                  booking_mode=EXCLUDED.booking_mode,
+                  source_channel=EXCLUDED.source_channel,
+                  scheduled_start_at=EXCLUDED.scheduled_start_at,
+                  scheduled_end_at=EXCLUDED.scheduled_end_at,
+                  status=EXCLUDED.status,
+                  reason_for_visit_short=EXCLUDED.reason_for_visit_short,
+                  patient_note=EXCLUDED.patient_note,
+                  confirmation_required=EXCLUDED.confirmation_required,
+                  confirmed_at=EXCLUDED.confirmed_at,
+                  canceled_at=EXCLUDED.canceled_at,
+                  checked_in_at=EXCLUDED.checked_in_at,
+                  in_service_at=EXCLUDED.in_service_at,
+                  completed_at=EXCLUDED.completed_at,
+                  no_show_at=EXCLUDED.no_show_at,
+                  updated_at=EXCLUDED.updated_at
+                """
+            ),
+            payload,
+        )
+
+    async def upsert_booking(self, item: Booking) -> None:
         engine = self._engine()
         async with engine.begin() as conn:
-            await conn.execute(
-                text(
-                    """
-                    INSERT INTO booking.bookings (
-                      booking_id, clinic_id, branch_id, patient_id, doctor_id, service_id, slot_id, booking_mode, source_channel,
-                      scheduled_start_at, scheduled_end_at, status, reason_for_visit_short, patient_note, confirmation_required,
-                      confirmed_at, canceled_at, checked_in_at, in_service_at, completed_at, no_show_at, created_at, updated_at
-                    ) VALUES (
-                      :booking_id, :clinic_id, :branch_id, :patient_id, :doctor_id, :service_id, :slot_id, :booking_mode, :source_channel,
-                      :scheduled_start_at, :scheduled_end_at, :status, :reason_for_visit_short, :patient_note, :confirmation_required,
-                      :confirmed_at, :canceled_at, :checked_in_at, :in_service_at, :completed_at, :no_show_at, :created_at, :updated_at
-                    )
-                    ON CONFLICT (booking_id) DO UPDATE SET
-                      branch_id=EXCLUDED.branch_id,
-                      patient_id=EXCLUDED.patient_id,
-                      doctor_id=EXCLUDED.doctor_id,
-                      service_id=EXCLUDED.service_id,
-                      slot_id=EXCLUDED.slot_id,
-                      booking_mode=EXCLUDED.booking_mode,
-                      source_channel=EXCLUDED.source_channel,
-                      scheduled_start_at=EXCLUDED.scheduled_start_at,
-                      scheduled_end_at=EXCLUDED.scheduled_end_at,
-                      status=EXCLUDED.status,
-                      reason_for_visit_short=EXCLUDED.reason_for_visit_short,
-                      patient_note=EXCLUDED.patient_note,
-                      confirmation_required=EXCLUDED.confirmation_required,
-                      confirmed_at=EXCLUDED.confirmed_at,
-                      canceled_at=EXCLUDED.canceled_at,
-                      checked_in_at=EXCLUDED.checked_in_at,
-                      in_service_at=EXCLUDED.in_service_at,
-                      completed_at=EXCLUDED.completed_at,
-                      no_show_at=EXCLUDED.no_show_at,
-                      updated_at=EXCLUDED.updated_at
-                    """
-                ),
-                payload,
-            )
+            await self._upsert_booking_on_conn(conn, item)
         await engine.dispose()
 
     async def get_booking(self, booking_id: str) -> Booking | None:
@@ -252,23 +268,26 @@ class DbBookingRepository(BookingRepository):
         )
         return Booking(**row) if row else None
 
-    async def append_booking_status_history(self, item: BookingStatusHistory) -> None:
+    async def _append_booking_status_history_on_conn(self, conn: Any, item: BookingStatusHistory) -> None:
         payload = asdict(item)
+        await conn.execute(
+            text(
+                """
+                INSERT INTO booking.booking_status_history (
+                  booking_status_history_id, booking_id, old_status, new_status, reason_code, actor_type, actor_id, occurred_at
+                ) VALUES (
+                  :booking_status_history_id, :booking_id, :old_status, :new_status, :reason_code, :actor_type, :actor_id, :occurred_at
+                )
+                ON CONFLICT (booking_status_history_id) DO NOTHING
+                """
+            ),
+            payload,
+        )
+
+    async def append_booking_status_history(self, item: BookingStatusHistory) -> None:
         engine = self._engine()
         async with engine.begin() as conn:
-            await conn.execute(
-                text(
-                    """
-                    INSERT INTO booking.booking_status_history (
-                      booking_status_history_id, booking_id, old_status, new_status, reason_code, actor_type, actor_id, occurred_at
-                    ) VALUES (
-                      :booking_status_history_id, :booking_id, :old_status, :new_status, :reason_code, :actor_type, :actor_id, :occurred_at
-                    )
-                    ON CONFLICT (booking_status_history_id) DO NOTHING
-                    """
-                ),
-                payload,
-            )
+            await self._append_booking_status_history_on_conn(conn, item)
         await engine.dispose()
 
     async def list_bookings_by_patient(self, *, patient_id: str) -> list[Booking]:
@@ -316,38 +335,41 @@ class DbBookingRepository(BookingRepository):
         )
         return [Booking(**row) for row in rows]
 
-    async def upsert_waitlist_entry(self, item: WaitlistEntry) -> None:
+    async def _upsert_waitlist_entry_on_conn(self, conn: Any, item: WaitlistEntry) -> None:
         payload = asdict(item)
         payload["date_window"] = json.dumps(payload["date_window"]) if payload["date_window"] is not None else None
+        await conn.execute(
+            text(
+                """
+                INSERT INTO booking.waitlist_entries (
+                  waitlist_entry_id, clinic_id, branch_id, patient_id, telegram_user_id, service_id, doctor_id, date_window,
+                  time_window, priority, status, source_session_id, notes, created_at, updated_at
+                ) VALUES (
+                  :waitlist_entry_id, :clinic_id, :branch_id, :patient_id, :telegram_user_id, :service_id, :doctor_id,
+                  CAST(:date_window AS JSONB), :time_window, :priority, :status, :source_session_id, :notes, :created_at, :updated_at
+                )
+                ON CONFLICT (waitlist_entry_id) DO UPDATE SET
+                  branch_id=EXCLUDED.branch_id,
+                  patient_id=EXCLUDED.patient_id,
+                  telegram_user_id=EXCLUDED.telegram_user_id,
+                  service_id=EXCLUDED.service_id,
+                  doctor_id=EXCLUDED.doctor_id,
+                  date_window=EXCLUDED.date_window,
+                  time_window=EXCLUDED.time_window,
+                  priority=EXCLUDED.priority,
+                  status=EXCLUDED.status,
+                  source_session_id=EXCLUDED.source_session_id,
+                  notes=EXCLUDED.notes,
+                  updated_at=EXCLUDED.updated_at
+                """
+            ),
+            payload,
+        )
+
+    async def upsert_waitlist_entry(self, item: WaitlistEntry) -> None:
         engine = self._engine()
         async with engine.begin() as conn:
-            await conn.execute(
-                text(
-                    """
-                    INSERT INTO booking.waitlist_entries (
-                      waitlist_entry_id, clinic_id, branch_id, patient_id, telegram_user_id, service_id, doctor_id, date_window,
-                      time_window, priority, status, source_session_id, notes, created_at, updated_at
-                    ) VALUES (
-                      :waitlist_entry_id, :clinic_id, :branch_id, :patient_id, :telegram_user_id, :service_id, :doctor_id,
-                      CAST(:date_window AS JSONB), :time_window, :priority, :status, :source_session_id, :notes, :created_at, :updated_at
-                    )
-                    ON CONFLICT (waitlist_entry_id) DO UPDATE SET
-                      branch_id=EXCLUDED.branch_id,
-                      patient_id=EXCLUDED.patient_id,
-                      telegram_user_id=EXCLUDED.telegram_user_id,
-                      service_id=EXCLUDED.service_id,
-                      doctor_id=EXCLUDED.doctor_id,
-                      date_window=EXCLUDED.date_window,
-                      time_window=EXCLUDED.time_window,
-                      priority=EXCLUDED.priority,
-                      status=EXCLUDED.status,
-                      source_session_id=EXCLUDED.source_session_id,
-                      notes=EXCLUDED.notes,
-                      updated_at=EXCLUDED.updated_at
-                    """
-                ),
-                payload,
-            )
+            await self._upsert_waitlist_entry_on_conn(conn, item)
         await engine.dispose()
 
     async def get_waitlist_entry(self, waitlist_entry_id: str) -> WaitlistEntry | None:
@@ -404,6 +426,53 @@ class DbBookingRepository(BookingRepository):
             {"admin_escalation_id": admin_escalation_id},
         )
         return AdminEscalation(**row) if row else None
+
+
+class DbBookingUnitOfWork:
+    def __init__(self, engine) -> None:
+        self._engine = engine
+        self._tx_ctx = None
+        self._conn = None
+        self._repo = None
+
+    async def __aenter__(self):
+        self._repo = DbBookingRepository.__new__(DbBookingRepository)
+        self._repo._db_config = None
+        self._repo._engine = lambda: self._engine
+        self._tx_ctx = self._engine.begin()
+        self._conn = await self._tx_ctx.__aenter__()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        assert self._tx_ctx is not None
+        try:
+            return await self._tx_ctx.__aexit__(exc_type, exc, tb)
+        finally:
+            await self._engine.dispose()
+
+    async def upsert_booking_session(self, item: BookingSession) -> None:
+        assert self._repo is not None and self._conn is not None
+        await self._repo._upsert_booking_session_on_conn(self._conn, item)
+
+    async def append_session_event(self, event: SessionEvent) -> None:
+        assert self._repo is not None and self._conn is not None
+        await self._repo._append_session_event_on_conn(self._conn, event)
+
+    async def upsert_slot_hold(self, item: SlotHold) -> None:
+        assert self._repo is not None and self._conn is not None
+        await self._repo._upsert_slot_hold_on_conn(self._conn, item)
+
+    async def upsert_booking(self, item: Booking) -> None:
+        assert self._repo is not None and self._conn is not None
+        await self._repo._upsert_booking_on_conn(self._conn, item)
+
+    async def append_booking_status_history(self, item: BookingStatusHistory) -> None:
+        assert self._repo is not None and self._conn is not None
+        await self._repo._append_booking_status_history_on_conn(self._conn, item)
+
+    async def upsert_waitlist_entry(self, item: WaitlistEntry) -> None:
+        assert self._repo is not None and self._conn is not None
+        await self._repo._upsert_waitlist_entry_on_conn(self._conn, item)
 
 
 async def _fetch_one(db_config, sql: str, params: dict) -> dict | None:
