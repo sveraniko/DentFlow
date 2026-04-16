@@ -513,6 +513,56 @@ STACK1_TABLES: tuple[str, ...] = (
       UNIQUE(scope_type, scope_ref, flag_key)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS communication.reminder_jobs (
+      reminder_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      patient_id TEXT NOT NULL REFERENCES core_patient.patients(patient_id),
+      booking_id TEXT NULL REFERENCES booking.bookings(booking_id) ON DELETE SET NULL,
+      care_order_id TEXT NULL,
+      recommendation_id TEXT NULL,
+      reminder_type TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      status TEXT NOT NULL,
+      scheduled_for TIMESTAMPTZ NOT NULL,
+      payload_key TEXT NOT NULL,
+      locale_at_send_time TEXT NULL,
+      planning_group TEXT NULL,
+      supersedes_reminder_id TEXT NULL REFERENCES communication.reminder_jobs(reminder_id),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      sent_at TIMESTAMPTZ NULL,
+      acknowledged_at TIMESTAMPTZ NULL,
+      canceled_at TIMESTAMPTZ NULL,
+      cancel_reason_code TEXT NULL,
+      CHECK (status IN ('scheduled', 'queued', 'sent', 'failed', 'canceled', 'expired'))
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_reminder_jobs_booking_status_scheduled
+    ON communication.reminder_jobs (booking_id, status, scheduled_for)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_reminder_jobs_planning_group
+    ON communication.reminder_jobs (planning_group, status, scheduled_for)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS communication.message_deliveries (
+      message_delivery_id TEXT PRIMARY KEY,
+      reminder_id TEXT NULL REFERENCES communication.reminder_jobs(reminder_id) ON DELETE SET NULL,
+      patient_id TEXT NOT NULL REFERENCES core_patient.patients(patient_id),
+      channel TEXT NOT NULL,
+      delivery_status TEXT NOT NULL,
+      provider_message_id TEXT NULL,
+      attempt_no INTEGER NOT NULL DEFAULT 1,
+      error_text TEXT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_message_deliveries_reminder
+    ON communication.message_deliveries (reminder_id, created_at DESC)
+    """,
 )
 
 
