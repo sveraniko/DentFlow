@@ -76,24 +76,52 @@ class BookingSessionStateService:
         if decision.is_noop:
             return TransitionResult(entity=current, changed=False, decision=decision)
 
+        async with self.repository.transaction() as tx:
+            return await self.transition_session_in_transaction(
+                tx=tx,
+                current=current,
+                to_status=to_status,
+                reason_code=reason_code,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                payload_json=payload_json,
+                occurred_at=now,
+            )
+
+    async def transition_session_in_transaction(
+        self,
+        *,
+        tx: BookingTransaction,
+        current: BookingSession,
+        to_status: str,
+        reason_code: str | None = None,
+        actor_type: str | None = None,
+        actor_id: str | None = None,
+        payload_json: dict[str, object] | None = None,
+        occurred_at: datetime | None = None,
+    ) -> TransitionResult[BookingSession]:
+        now = occurred_at or datetime.now(timezone.utc)
+        decision = evaluate_booking_session_transition(current.status, to_status)
+        if not decision.is_allowed:
+            raise InvalidSessionTransitionError(current_status=current.status, requested_status=to_status)
+        if decision.is_noop:
+            return TransitionResult(entity=current, changed=False, decision=decision)
         updated = BookingSession(**{**asdict(current), "status": to_status, "updated_at": now})
         event_payload = dict(payload_json or {})
         if reason_code is not None:
             event_payload.setdefault("reason_code", reason_code)
-        session_event = SessionEvent(
-            session_event_id=f"bse_{uuid4().hex}",
-            booking_session_id=booking_session_id,
-            event_name=f"booking_session.{to_status}",
-            payload_json=event_payload or None,
-            actor_type=actor_type,
-            actor_id=actor_id,
-            occurred_at=now,
+        await tx.upsert_booking_session(updated)
+        await tx.append_session_event(
+            SessionEvent(
+                session_event_id=f"bse_{uuid4().hex}",
+                booking_session_id=current.booking_session_id,
+                event_name=f"booking_session.{to_status}",
+                payload_json=event_payload or None,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                occurred_at=now,
+            )
         )
-
-        async with self.repository.transaction() as tx:
-            await tx.upsert_booking_session(updated)
-            await tx.append_session_event(session_event)
-
         return TransitionResult(entity=updated, changed=True, decision=decision)
 
 
@@ -124,26 +152,55 @@ class SlotHoldStateService:
         if decision.is_noop:
             return TransitionResult(entity=current, changed=False, decision=decision)
 
-        updated = SlotHold(**{**asdict(current), "status": to_status})
-
         async with self.repository.transaction() as tx:
-            await tx.upsert_slot_hold(updated)
-            if session_event_name:
-                event_payload = dict(payload_json or {})
-                if reason_code is not None:
-                    event_payload.setdefault("reason_code", reason_code)
-                await tx.append_session_event(
-                    SessionEvent(
-                        session_event_id=f"bse_{uuid4().hex}",
-                        booking_session_id=updated.booking_session_id,
-                        event_name=session_event_name,
-                        payload_json=event_payload or None,
-                        actor_type=actor_type,
-                        actor_id=actor_id,
-                        occurred_at=now,
-                    )
-                )
+            return await self.transition_hold_in_transaction(
+                tx=tx,
+                current=current,
+                to_status=to_status,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                reason_code=reason_code,
+                session_event_name=session_event_name,
+                payload_json=payload_json,
+                occurred_at=now,
+            )
 
+    async def transition_hold_in_transaction(
+        self,
+        *,
+        tx: BookingTransaction,
+        current: SlotHold,
+        to_status: str,
+        actor_type: str | None = None,
+        actor_id: str | None = None,
+        reason_code: str | None = None,
+        session_event_name: str | None = None,
+        payload_json: dict[str, object] | None = None,
+        occurred_at: datetime | None = None,
+    ) -> TransitionResult[SlotHold]:
+        now = occurred_at or datetime.now(timezone.utc)
+        decision = evaluate_slot_hold_transition(current.status, to_status)
+        if not decision.is_allowed:
+            raise InvalidSlotHoldTransitionError(current_status=current.status, requested_status=to_status)
+        if decision.is_noop:
+            return TransitionResult(entity=current, changed=False, decision=decision)
+        updated = SlotHold(**{**asdict(current), "status": to_status})
+        await tx.upsert_slot_hold(updated)
+        if session_event_name:
+            event_payload = dict(payload_json or {})
+            if reason_code is not None:
+                event_payload.setdefault("reason_code", reason_code)
+            await tx.append_session_event(
+                SessionEvent(
+                    session_event_id=f"bse_{uuid4().hex}",
+                    booking_session_id=updated.booking_session_id,
+                    event_name=session_event_name,
+                    payload_json=event_payload or None,
+                    actor_type=actor_type,
+                    actor_id=actor_id,
+                    occurred_at=now,
+                )
+            )
         return TransitionResult(entity=updated, changed=True, decision=decision)
 
 
@@ -172,22 +229,48 @@ class BookingStateService:
         if decision.is_noop:
             return TransitionResult(entity=current, changed=False, decision=decision)
 
-        updated = Booking(**self._build_booking_payload(current=current, to_status=to_status, now=now))
-        history = BookingStatusHistory(
-            booking_status_history_id=f"bsh_{uuid4().hex}",
-            booking_id=current.booking_id,
-            old_status=current.status,
-            new_status=to_status,
-            reason_code=reason_code,
-            actor_type=actor_type,
-            actor_id=actor_id,
-            occurred_at=now,
-        )
-
         async with self.repository.transaction() as tx:
-            await tx.upsert_booking(updated)
-            await tx.append_booking_status_history(history)
+            return await self.transition_booking_in_transaction(
+                tx=tx,
+                current=current,
+                to_status=to_status,
+                reason_code=reason_code,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                occurred_at=now,
+            )
 
+    async def transition_booking_in_transaction(
+        self,
+        *,
+        tx: BookingTransaction,
+        current: Booking,
+        to_status: str,
+        reason_code: str | None = None,
+        actor_type: str | None = None,
+        actor_id: str | None = None,
+        occurred_at: datetime | None = None,
+    ) -> TransitionResult[Booking]:
+        now = occurred_at or datetime.now(timezone.utc)
+        decision = evaluate_booking_transition(current.status, to_status)
+        if not decision.is_allowed:
+            raise InvalidBookingTransitionError(current_status=current.status, requested_status=to_status)
+        if decision.is_noop:
+            return TransitionResult(entity=current, changed=False, decision=decision)
+        updated = Booking(**self._build_booking_payload(current=current, to_status=to_status, now=now))
+        await tx.upsert_booking(updated)
+        await tx.append_booking_status_history(
+            BookingStatusHistory(
+                booking_status_history_id=f"bsh_{uuid4().hex}",
+                booking_id=current.booking_id,
+                old_status=current.status,
+                new_status=to_status,
+                reason_code=reason_code,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                occurred_at=now,
+            )
+        )
         return TransitionResult(entity=updated, changed=True, decision=decision)
 
     def _build_booking_payload(self, *, current: Booking, to_status: str, now: datetime) -> dict[str, object]:
@@ -228,7 +311,23 @@ class WaitlistStateService:
         if decision.is_noop:
             return TransitionResult(entity=current, changed=False, decision=decision)
 
-        updated = WaitlistEntry(**{**asdict(current), "status": to_status, "updated_at": now})
         async with self.repository.transaction() as tx:
-            await tx.upsert_waitlist_entry(updated)
+            return await self.transition_waitlist_entry_in_transaction(tx=tx, current=current, to_status=to_status, occurred_at=now)
+
+    async def transition_waitlist_entry_in_transaction(
+        self,
+        *,
+        tx: BookingTransaction,
+        current: WaitlistEntry,
+        to_status: str,
+        occurred_at: datetime | None = None,
+    ) -> TransitionResult[WaitlistEntry]:
+        now = occurred_at or datetime.now(timezone.utc)
+        decision = evaluate_waitlist_entry_transition(current.status, to_status)
+        if not decision.is_allowed:
+            raise InvalidWaitlistTransitionError(current_status=current.status, requested_status=to_status)
+        if decision.is_noop:
+            return TransitionResult(entity=current, changed=False, decision=decision)
+        updated = WaitlistEntry(**{**asdict(current), "status": to_status, "updated_at": now})
+        await tx.upsert_waitlist_entry(updated)
         return TransitionResult(entity=updated, changed=True, decision=decision)

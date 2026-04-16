@@ -81,6 +81,10 @@ class DbBookingRepository(BookingRepository):
         )
         return BookingSession(**row) if row else None
 
+    async def get_booking_session_for_update(self, booking_session_id: str) -> BookingSession | None:
+        async with self.transaction() as tx:
+            return await tx.get_booking_session_for_update(booking_session_id)
+
     async def _append_session_event_on_conn(self, conn: Any, event: SessionEvent) -> None:
         payload = asdict(event)
         payload["payload_json"] = json.dumps(payload["payload_json"]) if payload["payload_json"] is not None else None
@@ -146,6 +150,10 @@ class DbBookingRepository(BookingRepository):
         )
         return AvailabilitySlot(**row) if row else None
 
+    async def get_availability_slot_for_update(self, slot_id: str) -> AvailabilitySlot | None:
+        async with self.transaction() as tx:
+            return await tx.get_availability_slot_for_update(slot_id)
+
     async def list_availability_slots(self, *, doctor_id: str, start_at: datetime, end_at: datetime) -> list[AvailabilitySlot]:
         rows = await _fetch_all(
             self._db_config,
@@ -193,6 +201,10 @@ class DbBookingRepository(BookingRepository):
             {"slot_hold_id": slot_hold_id},
         )
         return SlotHold(**row) if row else None
+
+    async def get_slot_hold_for_update(self, slot_hold_id: str) -> SlotHold | None:
+        async with self.transaction() as tx:
+            return await tx.get_slot_hold_for_update(slot_hold_id)
 
     async def find_slot_hold(self, *, slot_id: str, booking_session_id: str) -> SlotHold | None:
         row = await _fetch_one(
@@ -267,6 +279,10 @@ class DbBookingRepository(BookingRepository):
             {"booking_id": booking_id},
         )
         return Booking(**row) if row else None
+
+    async def get_booking_for_update(self, booking_id: str) -> Booking | None:
+        async with self.transaction() as tx:
+            return await tx.get_booking_for_update(booking_id)
 
     async def _append_booking_status_history_on_conn(self, conn: Any, item: BookingStatusHistory) -> None:
         payload = asdict(item)
@@ -385,33 +401,45 @@ class DbBookingRepository(BookingRepository):
         )
         return WaitlistEntry(**row) if row else None
 
+    async def get_waitlist_entry_for_update(self, waitlist_entry_id: str) -> WaitlistEntry | None:
+        async with self.transaction() as tx:
+            return await tx.get_waitlist_entry_for_update(waitlist_entry_id)
+
+    async def list_active_holds_for_slot(self, *, slot_id: str) -> list[SlotHold]:
+        rows = await _fetch_all(
+            self._db_config,
+            """
+            SELECT slot_hold_id, clinic_id, slot_id, booking_session_id, telegram_user_id, status, expires_at, created_at
+            FROM booking.slot_holds
+            WHERE slot_id=:slot_id AND status='active'
+            ORDER BY created_at DESC
+            """,
+            {"slot_id": slot_id},
+        )
+        return [SlotHold(**row) for row in rows]
+
+    async def list_live_bookings_for_slot(self, *, slot_id: str) -> list[Booking]:
+        rows = await _fetch_all(
+            self._db_config,
+            """
+            SELECT booking_id, clinic_id, branch_id, patient_id, doctor_id, service_id, slot_id, booking_mode, source_channel,
+                   scheduled_start_at, scheduled_end_at, status, reason_for_visit_short, patient_note, confirmation_required,
+                   confirmed_at, canceled_at, checked_in_at, in_service_at, completed_at, no_show_at, created_at, updated_at
+            FROM booking.bookings
+            WHERE slot_id=:slot_id
+              AND status IN ('pending_confirmation', 'confirmed', 'reschedule_requested', 'checked_in', 'in_service')
+            ORDER BY scheduled_start_at DESC
+            """,
+            {"slot_id": slot_id},
+        )
+        return [Booking(**row) for row in rows]
+
     async def upsert_admin_escalation(self, item: AdminEscalation) -> None:
         payload = asdict(item)
         payload["payload_summary"] = json.dumps(payload["payload_summary"]) if payload["payload_summary"] is not None else None
         engine = self._engine()
         async with engine.begin() as conn:
-            await conn.execute(
-                text(
-                    """
-                    INSERT INTO booking.admin_escalations (
-                      admin_escalation_id, clinic_id, booking_session_id, patient_id, reason_code, priority, status,
-                      assigned_to_actor_id, payload_summary, created_at, updated_at
-                    ) VALUES (
-                      :admin_escalation_id, :clinic_id, :booking_session_id, :patient_id, :reason_code, :priority, :status,
-                      :assigned_to_actor_id, CAST(:payload_summary AS JSONB), :created_at, :updated_at
-                    )
-                    ON CONFLICT (admin_escalation_id) DO UPDATE SET
-                      patient_id=EXCLUDED.patient_id,
-                      reason_code=EXCLUDED.reason_code,
-                      priority=EXCLUDED.priority,
-                      status=EXCLUDED.status,
-                      assigned_to_actor_id=EXCLUDED.assigned_to_actor_id,
-                      payload_summary=EXCLUDED.payload_summary,
-                      updated_at=EXCLUDED.updated_at
-                    """
-                ),
-                payload,
-            )
+            await self._upsert_admin_escalation_on_conn(conn, item)
         await engine.dispose()
 
     async def get_admin_escalation(self, admin_escalation_id: str) -> AdminEscalation | None:
@@ -426,6 +454,32 @@ class DbBookingRepository(BookingRepository):
             {"admin_escalation_id": admin_escalation_id},
         )
         return AdminEscalation(**row) if row else None
+
+    async def _upsert_admin_escalation_on_conn(self, conn: Any, item: AdminEscalation) -> None:
+        payload = asdict(item)
+        payload["payload_summary"] = json.dumps(payload["payload_summary"]) if payload["payload_summary"] is not None else None
+        await conn.execute(
+            text(
+                """
+                INSERT INTO booking.admin_escalations (
+                  admin_escalation_id, clinic_id, booking_session_id, patient_id, reason_code, priority, status,
+                  assigned_to_actor_id, payload_summary, created_at, updated_at
+                ) VALUES (
+                  :admin_escalation_id, :clinic_id, :booking_session_id, :patient_id, :reason_code, :priority, :status,
+                  :assigned_to_actor_id, CAST(:payload_summary AS JSONB), :created_at, :updated_at
+                )
+                ON CONFLICT (admin_escalation_id) DO UPDATE SET
+                  patient_id=EXCLUDED.patient_id,
+                  reason_code=EXCLUDED.reason_code,
+                  priority=EXCLUDED.priority,
+                  status=EXCLUDED.status,
+                  assigned_to_actor_id=EXCLUDED.assigned_to_actor_id,
+                  payload_summary=EXCLUDED.payload_summary,
+                  updated_at=EXCLUDED.updated_at
+                """
+            ),
+            payload,
+        )
 
 
 class DbBookingUnitOfWork:
@@ -473,6 +527,160 @@ class DbBookingUnitOfWork:
     async def upsert_waitlist_entry(self, item: WaitlistEntry) -> None:
         assert self._repo is not None and self._conn is not None
         await self._repo._upsert_waitlist_entry_on_conn(self._conn, item)
+
+    async def upsert_admin_escalation(self, item: AdminEscalation) -> None:
+        assert self._repo is not None and self._conn is not None
+        await self._repo._upsert_admin_escalation_on_conn(self._conn, item)
+
+    async def get_booking_session_for_update(self, booking_session_id: str) -> BookingSession | None:
+        assert self._conn is not None
+        row = (
+            await self._conn.execute(
+                text(
+                    """
+                    SELECT booking_session_id, clinic_id, branch_id, telegram_user_id, resolved_patient_id, status, route_type, service_id,
+                           urgency_type, requested_date_type, requested_date, time_window, doctor_preference_type, doctor_id, doctor_code_raw,
+                           selected_slot_id, selected_hold_id, contact_phone_snapshot, notes, expires_at, created_at, updated_at
+                    FROM booking.booking_sessions
+                    WHERE booking_session_id=:booking_session_id
+                    FOR UPDATE
+                    """
+                ),
+                {"booking_session_id": booking_session_id},
+            )
+        ).mappings().first()
+        return BookingSession(**dict(row)) if row else None
+
+    async def get_slot_hold_for_update(self, slot_hold_id: str) -> SlotHold | None:
+        assert self._conn is not None
+        row = (
+            await self._conn.execute(
+                text(
+                    """
+                    SELECT slot_hold_id, clinic_id, slot_id, booking_session_id, telegram_user_id, status, expires_at, created_at
+                    FROM booking.slot_holds
+                    WHERE slot_hold_id=:slot_hold_id
+                    FOR UPDATE
+                    """
+                ),
+                {"slot_hold_id": slot_hold_id},
+            )
+        ).mappings().first()
+        return SlotHold(**dict(row)) if row else None
+
+    async def find_slot_hold_for_update(self, *, slot_id: str, booking_session_id: str) -> SlotHold | None:
+        assert self._conn is not None
+        row = (
+            await self._conn.execute(
+                text(
+                    """
+                    SELECT slot_hold_id, clinic_id, slot_id, booking_session_id, telegram_user_id, status, expires_at, created_at
+                    FROM booking.slot_holds
+                    WHERE slot_id=:slot_id AND booking_session_id=:booking_session_id
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    FOR UPDATE
+                    """
+                ),
+                {"slot_id": slot_id, "booking_session_id": booking_session_id},
+            )
+        ).mappings().first()
+        return SlotHold(**dict(row)) if row else None
+
+    async def get_booking_for_update(self, booking_id: str) -> Booking | None:
+        assert self._conn is not None
+        row = (
+            await self._conn.execute(
+                text(
+                    """
+                    SELECT booking_id, clinic_id, branch_id, patient_id, doctor_id, service_id, slot_id, booking_mode, source_channel,
+                           scheduled_start_at, scheduled_end_at, status, reason_for_visit_short, patient_note, confirmation_required,
+                           confirmed_at, canceled_at, checked_in_at, in_service_at, completed_at, no_show_at, created_at, updated_at
+                    FROM booking.bookings
+                    WHERE booking_id=:booking_id
+                    FOR UPDATE
+                    """
+                ),
+                {"booking_id": booking_id},
+            )
+        ).mappings().first()
+        return Booking(**dict(row)) if row else None
+
+    async def get_availability_slot_for_update(self, slot_id: str) -> AvailabilitySlot | None:
+        assert self._conn is not None
+        row = (
+            await self._conn.execute(
+                text(
+                    """
+                    SELECT slot_id, clinic_id, branch_id, doctor_id, start_at, end_at, status, visibility_policy, service_scope, source_ref, updated_at
+                    FROM booking.availability_slots
+                    WHERE slot_id=:slot_id
+                    FOR UPDATE
+                    """
+                ),
+                {"slot_id": slot_id},
+            )
+        ).mappings().first()
+        return AvailabilitySlot(**dict(row)) if row else None
+
+    async def get_waitlist_entry_for_update(self, waitlist_entry_id: str) -> WaitlistEntry | None:
+        assert self._conn is not None
+        row = (
+            await self._conn.execute(
+                text(
+                    """
+                    SELECT waitlist_entry_id, clinic_id, branch_id, patient_id, telegram_user_id, service_id, doctor_id, date_window,
+                           time_window, priority, status, source_session_id, notes, created_at, updated_at
+                    FROM booking.waitlist_entries
+                    WHERE waitlist_entry_id=:waitlist_entry_id
+                    FOR UPDATE
+                    """
+                ),
+                {"waitlist_entry_id": waitlist_entry_id},
+            )
+        ).mappings().first()
+        return WaitlistEntry(**dict(row)) if row else None
+
+    async def list_active_holds_for_slot_for_update(self, *, slot_id: str) -> list[SlotHold]:
+        assert self._conn is not None
+        rows = list(
+            (
+                await self._conn.execute(
+                    text(
+                        """
+                        SELECT slot_hold_id, clinic_id, slot_id, booking_session_id, telegram_user_id, status, expires_at, created_at
+                        FROM booking.slot_holds
+                        WHERE slot_id=:slot_id AND status='active'
+                        FOR UPDATE
+                        """
+                    ),
+                    {"slot_id": slot_id},
+                )
+            ).mappings()
+        )
+        return [SlotHold(**dict(row)) for row in rows]
+
+    async def list_live_bookings_for_slot_for_update(self, *, slot_id: str) -> list[Booking]:
+        assert self._conn is not None
+        rows = list(
+            (
+                await self._conn.execute(
+                    text(
+                        """
+                        SELECT booking_id, clinic_id, branch_id, patient_id, doctor_id, service_id, slot_id, booking_mode, source_channel,
+                               scheduled_start_at, scheduled_end_at, status, reason_for_visit_short, patient_note, confirmation_required,
+                               confirmed_at, canceled_at, checked_in_at, in_service_at, completed_at, no_show_at, created_at, updated_at
+                        FROM booking.bookings
+                        WHERE slot_id=:slot_id
+                          AND status IN ('pending_confirmation', 'confirmed', 'reschedule_requested', 'checked_in', 'in_service')
+                        FOR UPDATE
+                        """
+                    ),
+                    {"slot_id": slot_id},
+                )
+            ).mappings()
+        )
+        return [Booking(**dict(row)) for row in rows]
 
 
 async def _fetch_one(db_config, sql: str, params: dict) -> dict | None:
