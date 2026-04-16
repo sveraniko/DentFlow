@@ -60,3 +60,7 @@ def test_stack2_patient_tables_declared() -> None:
     assert "CREATE TABLE IF NOT EXISTS core_patient.patient_photos" in ddl
     assert "CREATE TABLE IF NOT EXISTS core_patient.patient_medical_summaries" in ddl
     assert "CREATE TABLE IF NOT EXISTS core_patient.patient_external_ids" in ddl
+    assert "UNIQUE(patient_id, contact_type, normalized_value)" in ddl
+    assert "patient_id TEXT NOT NULL UNIQUE REFERENCES core_patient.patients(patient_id)" in ddl
+    assert "patient_id TEXT NOT NULL UNIQUE REFERENCES core_patient.patients(patient_id)" in ddl
+    assert "UNIQUE(patient_id, external_system)" in ddl
