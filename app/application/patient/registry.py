@@ -123,6 +123,9 @@ class PatientRegistryService:
         self.repository.preferences[preference.patient_preference_id] = preference
         return preference
 
+    def get_preferences(self, patient_id: str) -> PatientPreference | None:
+        return next((p for p in self.repository.preferences.values() if p.patient_id == patient_id), None)
+
     def add_flag(self, *, patient_id: str, flag_type: str, flag_severity: str, **kwargs) -> PatientFlag:
         flag = PatientFlag(
             patient_flag_id=f"pf_{uuid4().hex}",
@@ -146,9 +149,9 @@ class PatientRegistryService:
 
     def add_photo(self, *, patient_id: str, source_type: str, **kwargs) -> PatientPhoto:
         photo = PatientPhoto(patient_photo_id=f"pho_{uuid4().hex}", patient_id=patient_id, source_type=source_type, **kwargs)
+        self.repository.photos[photo.patient_photo_id] = photo
         if photo.is_primary:
             self.set_primary_photo(photo.patient_photo_id)
-        self.repository.photos[photo.patient_photo_id] = photo
         return photo
 
     def set_primary_photo(self, patient_photo_id: str) -> None:
@@ -159,20 +162,26 @@ class PatientRegistryService:
             if photo.patient_id == target.patient_id:
                 self.repository.photos[photo_id] = PatientPhoto(**{**asdict(photo), "is_primary": photo_id == patient_photo_id})
 
+    def get_primary_photo(self, patient_id: str) -> PatientPhoto | None:
+        return next((p for p in self.repository.photos.values() if p.patient_id == patient_id and p.is_primary), None)
+
     def upsert_medical_summary(self, *, patient_id: str, **changes) -> PatientMedicalSummary:
         now = datetime.now(timezone.utc)
         current = next((m for m in self.repository.medical_summaries.values() if m.patient_id == patient_id), None)
         payload = {
             "patient_medical_summary_id": current.patient_medical_summary_id if current else f"pms_{uuid4().hex}",
             "patient_id": patient_id,
+            **(asdict(current) if current else {"created_at": now}),
+            **changes,
             "created_at": current.created_at if current else now,
             "last_updated_at": now,
-            **(asdict(current) if current else {}),
-            **changes,
         }
         summary = PatientMedicalSummary(**payload)
         self.repository.medical_summaries[summary.patient_medical_summary_id] = summary
         return summary
+
+    def get_medical_summary(self, patient_id: str) -> PatientMedicalSummary | None:
+        return next((m for m in self.repository.medical_summaries.values() if m.patient_id == patient_id), None)
 
     def upsert_external_id(self, *, patient_id: str, external_system: str, external_id: str, **kwargs) -> PatientExternalId:
         current = next(
@@ -187,13 +196,16 @@ class PatientRegistryService:
             "patient_external_id_id": current.patient_external_id_id if current else f"pex_{uuid4().hex}",
             "patient_id": patient_id,
             "external_system": external_system,
-            "external_id": external_id,
             **(asdict(current) if current else {}),
             **kwargs,
+            "external_id": external_id,
         }
         ext = PatientExternalId(**payload)
         self.repository.external_ids[ext.patient_external_id_id] = ext
         return ext
+
+    def list_external_ids(self, patient_id: str) -> list[PatientExternalId]:
+        return [item for item in self.repository.external_ids.values() if item.patient_id == patient_id]
 
     def find_by_external_id(self, *, external_system: str, external_id: str) -> Patient | None:
         for item in self.repository.external_ids.values():

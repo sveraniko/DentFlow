@@ -5,7 +5,14 @@ from dataclasses import asdict
 from sqlalchemy import text
 
 from app.application.patient import InMemoryPatientRegistryRepository, PatientRegistryService, normalize_contact_value
-from app.domain.patient_registry.models import Patient
+from app.domain.patient_registry.models import (
+    Patient,
+    PatientExternalId,
+    PatientFlag,
+    PatientMedicalSummary,
+    PatientPhoto,
+    PatientPreference,
+)
 from app.infrastructure.db.engine import create_engine
 
 
@@ -79,47 +86,9 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
             )
         await engine.dispose()
 
-
-class DbPatientRegistryService(PatientRegistryService):
-    repository: DbPatientRegistryRepository
-
-    async def create_patient_db(self, **kwargs):
-        patient = self.create_patient(**kwargs)
-        await self.repository.persist_patient(patient)
-        return patient
-
-    async def update_patient_db(self, patient_id: str, **changes):
-        patient = self.update_patient(patient_id, **changes)
-        await self.repository.persist_patient(patient)
-        return patient
-
-    async def upsert_contact_db(self, *, patient_id: str, contact_type: str, contact_value: str, **kwargs):
-        contact = self.upsert_contact(patient_id=patient_id, contact_type=contact_type, contact_value=contact_value, **kwargs)
-        await self.repository.persist_contact(contact)
-        return contact
-
-
-async def seed_stack2_patients(db_config, payload: dict) -> dict[str, int]:
-    repo = DbPatientRegistryRepository(db_config)
-    service = DbPatientRegistryService(repo)
-    for patient in payload.get("patients", []):
-        model = service.create_patient(**patient)
-        await repo.persist_patient(model)
-
-    for row in payload.get("patient_contacts", []):
-        await service.upsert_contact_db(
-            patient_id=row["patient_id"],
-            contact_type=row["contact_type"],
-            contact_value=row["contact_value"],
-            is_primary=row.get("is_primary", False),
-            is_verified=row.get("is_verified", False),
-            is_active=row.get("is_active", True),
-            notes=row.get("notes"),
-        )
-
-    engine = create_engine(db_config)
-    async with engine.begin() as conn:
-        for row in payload.get("patient_preferences", []):
+    async def persist_preferences(self, preference: PatientPreference) -> None:
+        engine = create_engine(self._db_config)
+        async with engine.begin() as conn:
             await conn.execute(
                 text(
                     """
@@ -142,24 +111,255 @@ async def seed_stack2_patients(db_config, payload: dict) -> dict[str, int]:
                   updated_at=NOW()
                 """
                 ),
-                row,
+                asdict(preference),
             )
-        simple_tables = {
-            "patient_flags": "patient_flag_id",
-            "patient_photos": "patient_photo_id",
-            "patient_medical_summaries": "patient_medical_summary_id",
-            "patient_external_ids": "patient_external_id_id",
-        }
-        for table, pk in simple_tables.items():
-            for row in payload.get(table, []):
-                cols = ", ".join(row.keys())
-                vals = ", ".join(f":{k}" for k in row.keys())
-                updates = ", ".join(f"{k}=EXCLUDED.{k}" for k in row.keys() if k != pk)
-                await conn.execute(
-                    text(f"INSERT INTO core_patient.{table} ({cols}) VALUES ({vals}) ON CONFLICT ({pk}) DO UPDATE SET {updates}"),
-                    row,
+        await engine.dispose()
+
+    async def persist_flag(self, flag: PatientFlag) -> None:
+        engine = create_engine(self._db_config)
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                INSERT INTO core_patient.patient_flags (
+                  patient_flag_id, patient_id, flag_type, flag_severity, is_active, set_by_actor_id, set_at, expires_at, note
+                ) VALUES (
+                  :patient_flag_id, :patient_id, :flag_type, :flag_severity, :is_active, :set_by_actor_id, :set_at, :expires_at, :note
                 )
-    await engine.dispose()
+                ON CONFLICT (patient_flag_id) DO UPDATE SET
+                  flag_type=EXCLUDED.flag_type,
+                  flag_severity=EXCLUDED.flag_severity,
+                  is_active=EXCLUDED.is_active,
+                  set_by_actor_id=EXCLUDED.set_by_actor_id,
+                  set_at=EXCLUDED.set_at,
+                  expires_at=EXCLUDED.expires_at,
+                  note=EXCLUDED.note
+                """
+                ),
+                asdict(flag),
+            )
+        await engine.dispose()
+
+    async def persist_photo(self, photo: PatientPhoto) -> None:
+        engine = create_engine(self._db_config)
+        async with engine.begin() as conn:
+            if photo.is_primary:
+                await conn.execute(
+                    text("UPDATE core_patient.patient_photos SET is_primary=FALSE WHERE patient_id=:patient_id"),
+                    {"patient_id": photo.patient_id},
+                )
+            await conn.execute(
+                text(
+                    """
+                INSERT INTO core_patient.patient_photos (
+                  patient_photo_id, patient_id, media_asset_id, external_ref, is_primary, captured_at, source_type
+                ) VALUES (
+                  :patient_photo_id, :patient_id, :media_asset_id, :external_ref, :is_primary, :captured_at, :source_type
+                )
+                ON CONFLICT (patient_photo_id) DO UPDATE SET
+                  media_asset_id=EXCLUDED.media_asset_id,
+                  external_ref=EXCLUDED.external_ref,
+                  is_primary=EXCLUDED.is_primary,
+                  captured_at=EXCLUDED.captured_at,
+                  source_type=EXCLUDED.source_type
+                """
+                ),
+                asdict(photo),
+            )
+        await engine.dispose()
+
+    async def persist_medical_summary(self, summary: PatientMedicalSummary) -> None:
+        engine = create_engine(self._db_config)
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                INSERT INTO core_patient.patient_medical_summaries (
+                  patient_medical_summary_id, patient_id, allergy_summary, chronic_conditions_summary, contraindication_summary,
+                  current_primary_dental_issue_summary, important_history_summary, last_updated_by_actor_id, last_updated_at, created_at
+                ) VALUES (
+                  :patient_medical_summary_id, :patient_id, :allergy_summary, :chronic_conditions_summary, :contraindication_summary,
+                  :current_primary_dental_issue_summary, :important_history_summary, :last_updated_by_actor_id, :last_updated_at, :created_at
+                )
+                ON CONFLICT (patient_medical_summary_id) DO UPDATE SET
+                  allergy_summary=EXCLUDED.allergy_summary,
+                  chronic_conditions_summary=EXCLUDED.chronic_conditions_summary,
+                  contraindication_summary=EXCLUDED.contraindication_summary,
+                  current_primary_dental_issue_summary=EXCLUDED.current_primary_dental_issue_summary,
+                  important_history_summary=EXCLUDED.important_history_summary,
+                  last_updated_by_actor_id=EXCLUDED.last_updated_by_actor_id,
+                  last_updated_at=EXCLUDED.last_updated_at,
+                  created_at=EXCLUDED.created_at
+                """
+                ),
+                asdict(summary),
+            )
+        await engine.dispose()
+
+    async def persist_external_id(self, external_id: PatientExternalId) -> None:
+        engine = create_engine(self._db_config)
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                INSERT INTO core_patient.patient_external_ids (
+                  patient_external_id_id, patient_id, external_system, external_id, is_primary, last_synced_at
+                ) VALUES (
+                  :patient_external_id_id, :patient_id, :external_system, :external_id, :is_primary, :last_synced_at
+                )
+                ON CONFLICT (patient_external_id_id) DO UPDATE SET
+                  patient_id=EXCLUDED.patient_id,
+                  external_system=EXCLUDED.external_system,
+                  external_id=EXCLUDED.external_id,
+                  is_primary=EXCLUDED.is_primary,
+                  last_synced_at=EXCLUDED.last_synced_at
+                """
+                ),
+                asdict(external_id),
+            )
+        await engine.dispose()
+
+
+class DbPatientRegistryService(PatientRegistryService):
+    repository: DbPatientRegistryRepository
+
+    async def create_patient_db(self, **kwargs):
+        patient = self.create_patient(**kwargs)
+        await self.repository.persist_patient(patient)
+        return patient
+
+    async def update_patient_db(self, patient_id: str, **changes):
+        patient = self.update_patient(patient_id, **changes)
+        await self.repository.persist_patient(patient)
+        return patient
+
+    async def upsert_contact_db(self, *, patient_id: str, contact_type: str, contact_value: str, **kwargs):
+        contact = self.upsert_contact(patient_id=patient_id, contact_type=contact_type, contact_value=contact_value, **kwargs)
+        await self.repository.persist_contact(contact)
+        return contact
+
+    async def upsert_preferences_db(self, *, patient_id: str, **changes):
+        preference = self.upsert_preferences(patient_id=patient_id, **changes)
+        await self.repository.persist_preferences(preference)
+        return preference
+
+    async def add_flag_db(self, *, patient_id: str, flag_type: str, flag_severity: str, **kwargs):
+        flag = self.add_flag(patient_id=patient_id, flag_type=flag_type, flag_severity=flag_severity, **kwargs)
+        await self.repository.persist_flag(flag)
+        return flag
+
+    async def deactivate_flag_db(self, patient_flag_id: str):
+        flag = self.deactivate_flag(patient_flag_id)
+        await self.repository.persist_flag(flag)
+        return flag
+
+    async def add_photo_db(self, *, patient_id: str, source_type: str, **kwargs):
+        photo = self.add_photo(patient_id=patient_id, source_type=source_type, **kwargs)
+        await self.repository.persist_photo(photo)
+        return photo
+
+    async def set_primary_photo_db(self, patient_photo_id: str):
+        self.set_primary_photo(patient_photo_id)
+        photo = self.repository.photos.get(patient_photo_id)
+        if photo is not None:
+            await self.repository.persist_photo(photo)
+
+    async def upsert_medical_summary_db(self, *, patient_id: str, **changes):
+        summary = self.upsert_medical_summary(patient_id=patient_id, **changes)
+        await self.repository.persist_medical_summary(summary)
+        return summary
+
+    async def upsert_external_id_db(self, *, patient_id: str, external_system: str, external_id: str, **kwargs):
+        ext = self.upsert_external_id(patient_id=patient_id, external_system=external_system, external_id=external_id, **kwargs)
+        await self.repository.persist_external_id(ext)
+        return ext
+
+
+async def seed_stack2_patients(db_config, payload: dict) -> dict[str, int]:
+    repo = DbPatientRegistryRepository(db_config)
+    service = DbPatientRegistryService(repo)
+    for patient in payload.get("patients", []):
+        model = service.create_patient(**patient)
+        await repo.persist_patient(model)
+
+    for row in payload.get("patient_contacts", []):
+        await service.upsert_contact_db(
+            patient_id=row["patient_id"],
+            contact_type=row["contact_type"],
+            contact_value=row["contact_value"],
+            is_primary=row.get("is_primary", False),
+            is_verified=row.get("is_verified", False),
+            is_active=row.get("is_active", True),
+            notes=row.get("notes"),
+        )
+
+    for row in payload.get("patient_preferences", []):
+        await repo.persist_preferences(
+            PatientPreference(
+                patient_preference_id=row["patient_preference_id"],
+                patient_id=row["patient_id"],
+                preferred_language=row.get("preferred_language"),
+                preferred_reminder_channel=row.get("preferred_reminder_channel"),
+                allow_sms=row.get("allow_sms", True),
+                allow_telegram=row.get("allow_telegram", True),
+                allow_call=row.get("allow_call", False),
+                allow_email=row.get("allow_email", False),
+                marketing_opt_in=row.get("marketing_opt_in", False),
+                contact_time_window=row.get("contact_time_window"),
+            )
+        )
+    for row in payload.get("patient_flags", []):
+        await repo.persist_flag(
+            PatientFlag(
+                patient_flag_id=row["patient_flag_id"],
+                patient_id=row["patient_id"],
+                flag_type=row["flag_type"],
+                flag_severity=row["flag_severity"],
+                is_active=row.get("is_active", True),
+                set_by_actor_id=row.get("set_by_actor_id"),
+                set_at=row.get("set_at"),
+                expires_at=row.get("expires_at"),
+                note=row.get("note"),
+            )
+        )
+    for row in payload.get("patient_photos", []):
+        await repo.persist_photo(
+            PatientPhoto(
+                patient_photo_id=row["patient_photo_id"],
+                patient_id=row["patient_id"],
+                source_type=row["source_type"],
+                media_asset_id=row.get("media_asset_id"),
+                external_ref=row.get("external_ref"),
+                is_primary=row.get("is_primary", False),
+                captured_at=row.get("captured_at"),
+            )
+        )
+    for row in payload.get("patient_medical_summaries", []):
+        await repo.persist_medical_summary(
+            PatientMedicalSummary(
+                patient_medical_summary_id=row["patient_medical_summary_id"],
+                patient_id=row["patient_id"],
+                allergy_summary=row.get("allergy_summary"),
+                chronic_conditions_summary=row.get("chronic_conditions_summary"),
+                contraindication_summary=row.get("contraindication_summary"),
+                current_primary_dental_issue_summary=row.get("current_primary_dental_issue_summary"),
+                important_history_summary=row.get("important_history_summary"),
+                last_updated_by_actor_id=row.get("last_updated_by_actor_id"),
+                last_updated_at=row["last_updated_at"],
+                created_at=row["created_at"],
+            )
+        )
+    for row in payload.get("patient_external_ids", []):
+        await repo.persist_external_id(
+            PatientExternalId(
+                patient_external_id_id=row["patient_external_id_id"],
+                patient_id=row["patient_id"],
+                external_system=row["external_system"],
+                external_id=row["external_id"],
+                is_primary=row.get("is_primary", False),
+                last_synced_at=row.get("last_synced_at"),
+            )
+        )
     return {k: len(v) for k, v in payload.items() if isinstance(v, list)}
 
 
