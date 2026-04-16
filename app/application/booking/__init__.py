@@ -4,6 +4,7 @@ from app.application.booking.patient_resolution import (
     PatientResolutionCandidate,
 )
 from app.application.booking.orchestration import BookingOrchestrationService
+from app.application.booking.telegram_flow import BookingPatientFlowService, PatientResolutionFlowResult
 from app.application.booking.orchestration_outcomes import (
     AmbiguousMatchOutcome,
     ConflictOutcome,
@@ -50,4 +51,6 @@ __all__ = [
     "ConflictOutcome",
     "EscalatedOutcome",
     "InvalidStateOutcome",
+    "BookingPatientFlowService",
+    "PatientResolutionFlowResult",
 ]

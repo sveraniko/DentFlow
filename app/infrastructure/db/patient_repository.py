@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import text
 
 from app.application.patient import InMemoryPatientRegistryRepository, PatientRegistryService, normalize_contact_value
+from app.application.booking.telegram_flow import CanonicalPatientCreator
 from app.domain.patient_registry.models import (
     Patient,
     PatientContact,
@@ -439,6 +440,35 @@ class DbPatientRegistryService(PatientRegistryService):
         ext = self.upsert_external_id(patient_id=patient_id, external_system=external_system, external_id=external_id, **kwargs)
         await self.repository.persist_external_id(ext)
         return ext
+
+
+class DbCanonicalPatientCreator(CanonicalPatientCreator):
+    def __init__(self, db_config) -> None:
+        self._db_config = db_config
+
+    async def create_minimal_patient(self, *, clinic_id: str, display_name: str, phone: str) -> str:
+        repository = await DbPatientRegistryRepository.load(self._db_config)
+        service = DbPatientRegistryService(repository)
+        trimmed = (display_name or "").strip() or "Patient"
+        parts = trimmed.split(maxsplit=1)
+        first_name = parts[0]
+        last_name = parts[1] if len(parts) > 1 else "-"
+        patient = await service.create_patient_db(
+            clinic_id=clinic_id,
+            first_name=first_name,
+            last_name=last_name,
+            full_name_legal=trimmed,
+            display_name=trimmed,
+        )
+        await service.upsert_contact_db(
+            patient_id=patient.patient_id,
+            contact_type="phone",
+            contact_value=phone,
+            is_primary=True,
+            is_verified=False,
+            is_active=True,
+        )
+        return patient.patient_id
 
 
 async def seed_stack2_patients(db_config, payload: dict) -> dict[str, int]:

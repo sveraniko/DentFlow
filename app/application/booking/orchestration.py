@@ -232,6 +232,15 @@ class BookingOrchestrationService:
             await tx.upsert_booking_session(updated)
         return OrchestrationSuccess(kind="success", entity=updated)
 
+    async def attach_resolved_patient_to_session(self, *, booking_session_id: str, patient_id: str) -> BookingSessionOutcome:
+        async with self.repository.transaction() as tx:
+            session = await tx.get_booking_session_for_update(booking_session_id)
+            if session is None:
+                return InvalidStateOutcome(kind="invalid_state", reason="booking session not found")
+            updated = BookingSession(**{**asdict(session), "resolved_patient_id": patient_id, "updated_at": datetime.now(timezone.utc)})
+            await tx.upsert_booking_session(updated)
+        return OrchestrationSuccess(kind="success", entity=updated)
+
     async def select_slot_and_activate_hold(self, *, booking_session_id: str, slot_id: str, hold_ttl_minutes: int = 10) -> HoldOutcome:
         now = datetime.now(timezone.utc)
         async with self.repository.transaction() as tx:
