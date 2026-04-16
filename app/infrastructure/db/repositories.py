@@ -19,7 +19,7 @@ from app.domain.access_identity.models import (
     TelegramBinding,
 )
 from app.domain.clinic_reference.models import Branch, Clinic, Doctor, DoctorAccessCode, RecordStatus, Service
-from app.domain.policy_config.models import FeatureFlag, PolicySet, PolicyValue
+from app.domain.policy_config.models import FeatureFlag, PolicySet, PolicyStatus, PolicyValue
 from app.infrastructure.db.engine import create_engine
 
 
@@ -29,7 +29,16 @@ class DbClinicReferenceRepository(InMemoryClinicReferenceRepository):
         repo = cls()
         engine = create_engine(db_config)
         async with engine.connect() as conn:
-            for row in (await conn.execute(text("SELECT * FROM core_reference.clinics"))).mappings():
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT clinic_id, code, display_name, timezone, default_locale, status
+                        FROM core_reference.clinics
+                        """
+                    )
+                )
+            ).mappings():
                 repo.upsert_clinic(
                     Clinic(
                         clinic_id=row["clinic_id"],
@@ -40,16 +49,89 @@ class DbClinicReferenceRepository(InMemoryClinicReferenceRepository):
                         status=RecordStatus(row["status"]),
                     )
                 )
-            for row in (await conn.execute(text("SELECT * FROM core_reference.branches"))).mappings():
-                repo.upsert_branch(Branch(**{**row, "status": RecordStatus(row["status"])}))
-            for row in (await conn.execute(text("SELECT * FROM core_reference.doctors"))).mappings():
-                repo.upsert_doctor(Doctor(**{**row, "status": RecordStatus(row["status"])}))
-            for row in (await conn.execute(text("SELECT * FROM core_reference.services"))).mappings():
-                repo.upsert_service(Service(**{**row, "status": RecordStatus(row["status"])}))
-            for row in (await conn.execute(text("SELECT * FROM core_reference.doctor_access_codes"))).mappings():
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT branch_id, clinic_id, display_name, address_text, timezone, status
+                        FROM core_reference.branches
+                        """
+                    )
+                )
+            ).mappings():
+                repo.upsert_branch(
+                    Branch(
+                        branch_id=row["branch_id"],
+                        clinic_id=row["clinic_id"],
+                        display_name=row["display_name"],
+                        address_text=row["address_text"],
+                        timezone=row["timezone"],
+                        status=RecordStatus(row["status"]),
+                    )
+                )
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT doctor_id, clinic_id, branch_id, display_name, specialty_code, public_booking_enabled, status
+                        FROM core_reference.doctors
+                        """
+                    )
+                )
+            ).mappings():
+                repo.upsert_doctor(
+                    Doctor(
+                        doctor_id=row["doctor_id"],
+                        clinic_id=row["clinic_id"],
+                        branch_id=row["branch_id"],
+                        display_name=row["display_name"],
+                        specialty_code=row["specialty_code"],
+                        public_booking_enabled=row["public_booking_enabled"],
+                        status=RecordStatus(row["status"]),
+                    )
+                )
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT service_id, clinic_id, code, title_key, duration_minutes, specialty_required, status
+                        FROM core_reference.services
+                        """
+                    )
+                )
+            ).mappings():
+                repo.upsert_service(
+                    Service(
+                        service_id=row["service_id"],
+                        clinic_id=row["clinic_id"],
+                        code=row["code"],
+                        title_key=row["title_key"],
+                        duration_minutes=row["duration_minutes"],
+                        specialty_required=row["specialty_required"],
+                        status=RecordStatus(row["status"]),
+                    )
+                )
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT doctor_access_code_id, clinic_id, doctor_id, code, status, expires_at, max_uses, service_scope, branch_scope
+                        FROM core_reference.doctor_access_codes
+                        """
+                    )
+                )
+            ).mappings():
                 repo.upsert_doctor_access_code(
                     DoctorAccessCode(
-                        **{**row, "status": RecordStatus(row["status"]), "service_scope": row["service_scope"], "branch_scope": row["branch_scope"]}
+                        doctor_access_code_id=row["doctor_access_code_id"],
+                        clinic_id=row["clinic_id"],
+                        doctor_id=row["doctor_id"],
+                        code=row["code"],
+                        status=RecordStatus(row["status"]),
+                        expires_at=row["expires_at"],
+                        max_uses=row["max_uses"],
+                        service_scope=row["service_scope"],
+                        branch_scope=row["branch_scope"],
                     )
                 )
         await engine.dispose()
@@ -62,7 +144,16 @@ class DbAccessRepository(InMemoryAccessRepository):
         repo = cls()
         engine = create_engine(db_config)
         async with engine.connect() as conn:
-            for row in (await conn.execute(text("SELECT * FROM access_identity.actor_identities"))).mappings():
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT actor_id, actor_type, display_name, status, locale
+                        FROM access_identity.actor_identities
+                        """
+                    )
+                )
+            ).mappings():
                 repo.upsert_actor_identity(
                     ActorIdentity(
                         actor_id=row["actor_id"],
@@ -72,16 +163,74 @@ class DbAccessRepository(InMemoryAccessRepository):
                         locale=row["locale"],
                     )
                 )
-            for row in (await conn.execute(text("SELECT * FROM access_identity.telegram_bindings"))).mappings():
-                repo.upsert_telegram_binding(TelegramBinding(**row))
-            for row in (await conn.execute(text("SELECT * FROM access_identity.staff_members"))).mappings():
-                repo.upsert_staff_member(
-                    StaffMember(
-                        **{**row, "staff_status": StaffStatus(row["staff_status"])},
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT telegram_binding_id, actor_id, telegram_user_id, telegram_username, first_seen_at, last_seen_at, is_primary, is_active
+                        FROM access_identity.telegram_bindings
+                        """
                     )
                 )
-            for row in (await conn.execute(text("SELECT * FROM access_identity.clinic_role_assignments"))).mappings():
-                repo.upsert_role_assignment(ClinicRoleAssignment(**{**row, "role_code": RoleCode(row["role_code"])}))
+            ).mappings():
+                repo.upsert_telegram_binding(
+                    TelegramBinding(
+                        telegram_binding_id=row["telegram_binding_id"],
+                        actor_id=row["actor_id"],
+                        telegram_user_id=row["telegram_user_id"],
+                        telegram_username=row["telegram_username"],
+                        first_seen_at=row["first_seen_at"],
+                        last_seen_at=row["last_seen_at"],
+                        is_primary=row["is_primary"],
+                        is_active=row["is_active"],
+                    )
+                )
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT staff_id, actor_id, clinic_id, full_name, display_name, staff_status, primary_branch_id
+                        FROM access_identity.staff_members
+                        """
+                    )
+                )
+            ).mappings():
+                repo.upsert_staff_member(
+                    StaffMember(
+                        staff_id=row["staff_id"],
+                        actor_id=row["actor_id"],
+                        clinic_id=row["clinic_id"],
+                        full_name=row["full_name"],
+                        display_name=row["display_name"],
+                        staff_status=StaffStatus(row["staff_status"]),
+                        primary_branch_id=row["primary_branch_id"],
+                    )
+                )
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT role_assignment_id, staff_id, clinic_id, role_code, branch_id, scope_type, scope_ref, granted_by_actor_id, granted_at, revoked_at, is_active
+                        FROM access_identity.clinic_role_assignments
+                        """
+                    )
+                )
+            ).mappings():
+                repo.upsert_role_assignment(
+                    ClinicRoleAssignment(
+                        role_assignment_id=row["role_assignment_id"],
+                        staff_id=row["staff_id"],
+                        clinic_id=row["clinic_id"],
+                        role_code=RoleCode(row["role_code"]),
+                        branch_id=row["branch_id"],
+                        scope_type=row["scope_type"],
+                        scope_ref=row["scope_ref"],
+                        granted_by_actor_id=row["granted_by_actor_id"],
+                        granted_at=row["granted_at"],
+                        revoked_at=row["revoked_at"],
+                        is_active=row["is_active"],
+                    )
+                )
         await engine.dispose()
         return repo
 
@@ -92,12 +241,66 @@ class DbPolicyRepository(InMemoryPolicyRepository):
         repo = cls()
         engine = create_engine(db_config)
         async with engine.connect() as conn:
-            for row in (await conn.execute(text("SELECT * FROM policy_config.policy_sets"))).mappings():
-                repo.upsert_policy_set(PolicySet(**row))
-            for row in (await conn.execute(text("SELECT * FROM policy_config.policy_values"))).mappings():
-                repo.add_policy_value(PolicyValue(**row))
-            for row in (await conn.execute(text("SELECT * FROM policy_config.feature_flags"))).mappings():
-                repo.add_feature_flag(FeatureFlag(**row))
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT policy_set_id, policy_family, scope_type, scope_ref, status, version
+                        FROM policy_config.policy_sets
+                        """
+                    )
+                )
+            ).mappings():
+                repo.upsert_policy_set(
+                    PolicySet(
+                        policy_set_id=row["policy_set_id"],
+                        policy_family=row["policy_family"],
+                        scope_type=row["scope_type"],
+                        scope_ref=row["scope_ref"],
+                        status=PolicyStatus(row["status"]),
+                        version=row["version"],
+                    )
+                )
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT policy_value_id, policy_set_id, policy_key, value_type, value_json, is_override
+                        FROM policy_config.policy_values
+                        """
+                    )
+                )
+            ).mappings():
+                repo.add_policy_value(
+                    PolicyValue(
+                        policy_value_id=row["policy_value_id"],
+                        policy_set_id=row["policy_set_id"],
+                        policy_key=row["policy_key"],
+                        value_type=row["value_type"],
+                        value_json=row["value_json"],
+                        is_override=row["is_override"],
+                    )
+                )
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT feature_flag_id, scope_type, scope_ref, flag_key, enabled, reason
+                        FROM policy_config.feature_flags
+                        """
+                    )
+                )
+            ).mappings():
+                repo.add_feature_flag(
+                    FeatureFlag(
+                        feature_flag_id=row["feature_flag_id"],
+                        scope_type=row["scope_type"],
+                        scope_ref=row["scope_ref"],
+                        flag_key=row["flag_key"],
+                        enabled=row["enabled"],
+                        reason=row["reason"],
+                    )
+                )
         await engine.dispose()
         return repo
 
