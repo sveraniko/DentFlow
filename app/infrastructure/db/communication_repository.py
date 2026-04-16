@@ -55,7 +55,6 @@ class DbReminderJobRepository:
                     SET status='canceled', canceled_at=:canceled_at, cancel_reason_code=:reason_code, updated_at=:canceled_at
                     WHERE booking_id=:booking_id
                       AND status='scheduled'
-                      AND scheduled_for > :canceled_at
                     """
                 ),
                 {"booking_id": booking_id, "canceled_at": canceled_at, "reason_code": reason_code},

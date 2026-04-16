@@ -29,6 +29,7 @@ from app.application.booking.state_services import (
 from app.application.communication import BookingReminderService
 from app.application.policy import PolicyResolver
 from app.domain.booking import AdminEscalation, Booking, BookingSession, BookingStatusHistory, SlotHold, WaitlistEntry
+from app.domain.communication import ReminderJob
 from app.domain.booking.errors import InvalidBookingTransitionError, InvalidSessionTransitionError, InvalidSlotHoldTransitionError
 
 LIVE_SLOT_BOOKING_STATUSES: tuple[str, ...] = (
@@ -57,6 +58,10 @@ class BookingOrchestrationTransaction(Protocol):
     async def list_active_holds_for_slot_for_update(self, *, slot_id: str) -> list[SlotHold]: ...
     async def list_active_holds_for_session_for_update(self, *, booking_session_id: str) -> list[SlotHold]: ...
     async def list_live_bookings_for_slot_for_update(self, *, slot_id: str) -> list[Booking]: ...
+    async def create_reminder_job_in_transaction(self, item: ReminderJob) -> None: ...
+    async def cancel_scheduled_reminders_for_booking_in_transaction(
+        self, *, booking_id: str, canceled_at: datetime, reason_code: str
+    ) -> int: ...
 
 
 class BookingOrchestrationRepository(Protocol):
@@ -409,7 +414,6 @@ class BookingOrchestrationService:
 
     async def finalize_booking_from_session(self, *, booking_session_id: str) -> BookingOutcome:
         now = datetime.now(timezone.utc)
-        booking: Booking | None = None
         async with self.repository.transaction() as tx:
             session = await tx.get_booking_session_for_update(booking_session_id)
             if session is None:
@@ -487,9 +491,13 @@ class BookingOrchestrationService:
                 to_status="completed",
                 payload_json={"booking_id": booking.booking_id},
             )
-        assert booking is not None
-        await self._replace_reminder_plan_for_booking(booking=booking, reason_code="booking_finalized")
-        return OrchestrationSuccess(kind="success", entity=booking)
+            await self._replace_reminder_plan_for_booking_in_transaction(
+                tx=tx,
+                booking=booking,
+                reason_code="booking_finalized",
+                now=now,
+            )
+            return OrchestrationSuccess(kind="success", entity=booking)
 
     async def cancel_session(self, *, booking_session_id: str) -> BookingSessionOutcome:
         async with self.repository.transaction() as tx:
@@ -570,7 +578,6 @@ class BookingOrchestrationService:
         return OrchestrationSuccess(kind="success", entity=transitioned.entity)
 
     async def request_booking_reschedule(self, *, booking_id: str, reason_code: str | None = None) -> BookingOutcome:
-        transitioned_booking: Booking | None = None
         async with self.repository.transaction() as tx:
             booking = await tx.get_booking_for_update(booking_id)
             if booking is None:
@@ -582,12 +589,14 @@ class BookingOrchestrationService:
             except InvalidBookingTransitionError:
                 return InvalidStateOutcome(kind="invalid_state", reason="booking cannot transition to reschedule_requested")
             transitioned_booking = transitioned.entity
-        assert transitioned_booking is not None
-        await self._cancel_reminders_for_booking(booking_id=booking_id, reason_code="booking_reschedule_requested")
-        return OrchestrationSuccess(kind="success", entity=transitioned_booking)
+            await self._cancel_reminders_for_booking_in_transaction(
+                tx=tx,
+                booking_id=booking_id,
+                reason_code="booking_reschedule_requested",
+            )
+            return OrchestrationSuccess(kind="success", entity=transitioned_booking)
 
     async def cancel_booking(self, *, booking_id: str, reason_code: str | None = None) -> BookingOutcome:
-        transitioned_booking: Booking | None = None
         async with self.repository.transaction() as tx:
             booking = await tx.get_booking_for_update(booking_id)
             if booking is None:
@@ -599,9 +608,12 @@ class BookingOrchestrationService:
             except InvalidBookingTransitionError:
                 return InvalidStateOutcome(kind="invalid_state", reason="booking cannot transition to canceled")
             transitioned_booking = transitioned.entity
-        assert transitioned_booking is not None
-        await self._cancel_reminders_for_booking(booking_id=booking_id, reason_code="booking_canceled")
-        return OrchestrationSuccess(kind="success", entity=transitioned_booking)
+            await self._cancel_reminders_for_booking_in_transaction(
+                tx=tx,
+                booking_id=booking_id,
+                reason_code="booking_canceled",
+            )
+            return OrchestrationSuccess(kind="success", entity=transitioned_booking)
 
     async def reschedule_booking(
         self,
@@ -612,7 +624,6 @@ class BookingOrchestrationService:
         reason_code: str | None = "booking_rescheduled",
     ) -> BookingOutcome:
         now = datetime.now(timezone.utc)
-        updated_booking: Booking | None = None
         async with self.repository.transaction() as tx:
             current = await tx.get_booking_for_update(booking_id)
             if current is None:
@@ -640,9 +651,13 @@ class BookingOrchestrationService:
                     occurred_at=now,
                 )
             )
-        assert updated_booking is not None
-        await self._replace_reminder_plan_for_booking(booking=updated_booking, reason_code="booking_rescheduled")
-        return OrchestrationSuccess(kind="success", entity=updated_booking)
+            await self._replace_reminder_plan_for_booking_in_transaction(
+                tx=tx,
+                booking=updated_booking,
+                reason_code="booking_rescheduled",
+                now=now,
+            )
+            return OrchestrationSuccess(kind="success", entity=updated_booking)
 
     async def complete_booking(self, *, booking_id: str, reason_code: str | None = None) -> BookingOutcome:
         return await self._transition_booking_and_cancel_reminders(booking_id=booking_id, to_status="completed", reason_code=reason_code or "booking_completed")
@@ -651,7 +666,6 @@ class BookingOrchestrationService:
         return await self._transition_booking_and_cancel_reminders(booking_id=booking_id, to_status="no_show", reason_code=reason_code or "booking_no_show")
 
     async def _transition_booking_and_cancel_reminders(self, *, booking_id: str, to_status: str, reason_code: str) -> BookingOutcome:
-        transitioned_booking: Booking | None = None
         async with self.repository.transaction() as tx:
             booking = await tx.get_booking_for_update(booking_id)
             if booking is None:
@@ -663,16 +677,37 @@ class BookingOrchestrationService:
             except InvalidBookingTransitionError:
                 return InvalidStateOutcome(kind="invalid_state", reason=f"booking cannot transition to {to_status}")
             transitioned_booking = transitioned.entity
-        assert transitioned_booking is not None
-        await self._cancel_reminders_for_booking(booking_id=booking_id, reason_code=reason_code)
-        return OrchestrationSuccess(kind="success", entity=transitioned_booking)
+            await self._cancel_reminders_for_booking_in_transaction(tx=tx, booking_id=booking_id, reason_code=reason_code)
+            return OrchestrationSuccess(kind="success", entity=transitioned_booking)
 
-    async def _replace_reminder_plan_for_booking(self, *, booking: Booking, reason_code: str) -> None:
+    async def _replace_reminder_plan_for_booking_in_transaction(
+        self,
+        *,
+        tx: BookingOrchestrationTransaction,
+        booking: Booking,
+        reason_code: str,
+        now: datetime,
+    ) -> None:
         if self.reminder_service is None:
             return
-        await self.reminder_service.replace_booking_reminder_plan(booking=booking, reason_code=reason_code)
+        await self.reminder_service.replace_booking_reminder_plan_in_transaction(
+            tx=tx,
+            booking=booking,
+            reason_code=reason_code,
+            now=now,
+        )
 
-    async def _cancel_reminders_for_booking(self, *, booking_id: str, reason_code: str) -> None:
+    async def _cancel_reminders_for_booking_in_transaction(
+        self,
+        *,
+        tx: BookingOrchestrationTransaction,
+        booking_id: str,
+        reason_code: str,
+    ) -> None:
         if self.reminder_service is None:
             return
-        await self.reminder_service.cancel_booking_reminder_plan(booking_id=booking_id, reason_code=reason_code)
+        await self.reminder_service.cancel_booking_reminder_plan_in_transaction(
+            tx=tx,
+            booking_id=booking_id,
+            reason_code=reason_code,
+        )
