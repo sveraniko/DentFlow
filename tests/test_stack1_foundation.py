@@ -1,9 +1,12 @@
+import pytest
+
+pytest.importorskip("sqlalchemy")
+
 from pathlib import Path
 
 from app.application.access import AccessResolver, InMemoryAccessRepository
 from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
 from app.application.policy import InMemoryPolicyRepository, PolicyResolver
-from app.bootstrap.seed import SeedBootstrap
 from app.domain.access_identity.models import (
     ActorIdentity,
     ActorType,
@@ -12,21 +15,58 @@ from app.domain.access_identity.models import (
     StaffMember,
     TelegramBinding,
 )
+from app.domain.clinic_reference.models import Clinic
 from app.domain.policy_config.models import PolicySet, PolicyValue
+from app.infrastructure.db import repositories as stack_repositories
+
+
+class _DummyConn:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict | None]] = []
+
+    async def execute(self, stmt, params=None):
+        self.calls.append((str(stmt), params))
+        return None
+
+
+class _DummyBegin:
+    def __init__(self, conn: _DummyConn):
+        self.conn = conn
+
+    async def __aenter__(self):
+        return self.conn
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _DummyEngine:
+    def __init__(self) -> None:
+        self.conn = _DummyConn()
+
+    def begin(self):
+        return _DummyBegin(self.conn)
+
+    async def dispose(self):
+        return None
 
 
 def test_reference_entities_create_and_load() -> None:
     clinic_repo = InMemoryClinicReferenceRepository()
-    access_repo = InMemoryAccessRepository()
-    policy_repo = InMemoryPolicyRepository()
-    SeedBootstrap(clinic_repo, access_repo, policy_repo).load_from_file(Path("seeds/stack1_seed.json"))
+    clinic_repo.upsert_clinic(
+        Clinic(
+            clinic_id="clinic_main",
+            code="dentflow-main",
+            display_name="DentFlow Demo Clinic",
+            timezone="Europe/Moscow",
+            default_locale="ru",
+        )
+    )
 
     service = ClinicReferenceService(clinic_repo)
     clinic = service.get_clinic("clinic_main")
     assert clinic is not None
     assert clinic.code == "dentflow-main"
-    assert len(service.list_doctors("clinic_main")) >= 1
-    assert len(service.list_services("clinic_main")) >= 1
 
 
 def test_access_resolution_and_role_denial() -> None:
@@ -81,15 +121,14 @@ def test_policy_resolution_precedence() -> None:
     assert resolver.resolve_policy("booking.enabled", clinic_id="clinic_main", branch_id="branch_central") is True
 
 
-def test_seed_bootstrap_loads_stack1_contexts() -> None:
-    clinic_repo = InMemoryClinicReferenceRepository()
-    access_repo = InMemoryAccessRepository()
-    policy_repo = InMemoryPolicyRepository()
+@pytest.mark.asyncio
+async def test_seed_stack1_writes_to_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = _DummyEngine()
+    monkeypatch.setattr(stack_repositories, "create_engine", lambda _: engine)
 
-    SeedBootstrap(clinic_repo, access_repo, policy_repo).load_from_file(Path("seeds/stack1_seed.json"))
+    counts = await stack_repositories.seed_stack_data(object(), Path("seeds/stack1_seed.json"))
 
-    assert clinic_repo.clinics
-    assert access_repo.actor_identities
-    assert access_repo.telegram_bindings
-    assert policy_repo.policy_sets
-    assert policy_repo.policy_values
+    assert counts["clinics"] == 1
+    assert any("INSERT INTO core_reference.clinics" in sql for sql, _ in engine.conn.calls)
+    assert any("INSERT INTO access_identity.actor_identities" in sql for sql, _ in engine.conn.calls)
+    assert any("INSERT INTO policy_config.policy_sets" in sql for sql, _ in engine.conn.calls)

@@ -206,6 +206,109 @@ STACK1_TABLES: tuple[str, ...] = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS core_patient.patients (
+      patient_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      patient_number TEXT NULL,
+      full_name_legal TEXT NOT NULL,
+      first_name TEXT NOT NULL,
+      last_name TEXT NOT NULL,
+      middle_name TEXT NULL,
+      display_name TEXT NOT NULL,
+      birth_date DATE NULL,
+      sex_marker TEXT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      first_seen_at TIMESTAMPTZ NULL,
+      last_seen_at TIMESTAMPTZ NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(clinic_id, patient_number)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS core_patient.patient_contacts (
+      patient_contact_id TEXT PRIMARY KEY,
+      patient_id TEXT NOT NULL REFERENCES core_patient.patients(patient_id),
+      contact_type TEXT NOT NULL,
+      contact_value TEXT NOT NULL,
+      normalized_value TEXT NOT NULL,
+      is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+      is_verified BOOLEAN NOT NULL DEFAULT FALSE,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      notes TEXT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS core_patient.patient_preferences (
+      patient_preference_id TEXT PRIMARY KEY,
+      patient_id TEXT NOT NULL UNIQUE REFERENCES core_patient.patients(patient_id),
+      preferred_language TEXT NULL,
+      preferred_reminder_channel TEXT NULL,
+      allow_sms BOOLEAN NOT NULL DEFAULT TRUE,
+      allow_telegram BOOLEAN NOT NULL DEFAULT TRUE,
+      allow_call BOOLEAN NOT NULL DEFAULT FALSE,
+      allow_email BOOLEAN NOT NULL DEFAULT FALSE,
+      marketing_opt_in BOOLEAN NOT NULL DEFAULT FALSE,
+      contact_time_window JSONB NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS core_patient.patient_flags (
+      patient_flag_id TEXT PRIMARY KEY,
+      patient_id TEXT NOT NULL REFERENCES core_patient.patients(patient_id),
+      flag_type TEXT NOT NULL,
+      flag_severity TEXT NOT NULL,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      set_by_actor_id TEXT NULL REFERENCES access_identity.actor_identities(actor_id),
+      set_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NULL,
+      note TEXT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS core_patient.patient_photos (
+      patient_photo_id TEXT PRIMARY KEY,
+      patient_id TEXT NOT NULL REFERENCES core_patient.patients(patient_id),
+      media_asset_id TEXT NULL,
+      external_ref TEXT NULL,
+      is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+      captured_at TIMESTAMPTZ NULL,
+      source_type TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS core_patient.patient_medical_summaries (
+      patient_medical_summary_id TEXT PRIMARY KEY,
+      patient_id TEXT NOT NULL UNIQUE REFERENCES core_patient.patients(patient_id),
+      allergy_summary TEXT NULL,
+      chronic_conditions_summary TEXT NULL,
+      contraindication_summary TEXT NULL,
+      current_primary_dental_issue_summary TEXT NULL,
+      important_history_summary TEXT NULL,
+      last_updated_by_actor_id TEXT NULL REFERENCES access_identity.actor_identities(actor_id),
+      last_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS core_patient.patient_external_ids (
+      patient_external_id_id TEXT PRIMARY KEY,
+      patient_id TEXT NOT NULL REFERENCES core_patient.patients(patient_id),
+      external_system TEXT NOT NULL,
+      external_id TEXT NOT NULL,
+      is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+      last_synced_at TIMESTAMPTZ NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(external_system, external_id),
+      UNIQUE(patient_id, external_system, external_id)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS policy_config.feature_flags (
       feature_flag_id TEXT PRIMARY KEY,
       scope_type TEXT NOT NULL,

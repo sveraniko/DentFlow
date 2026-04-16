@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from aiogram import Router
 from aiogram.filters import CommandStart
 from aiogram.types import Message
 
-from app.application.access import AccessResolver
 from app.common.i18n import I18nService
 from app.common.panels import Panel, PanelRenderer
+from app.application.access import ActorContext, AccessResolver
 from app.domain.access_identity.models import RoleCode
 
 
@@ -15,11 +17,17 @@ async def resolve_locale(
     *,
     access_resolver: AccessResolver | None,
     fallback_locale: str,
+    clinic_locale_getter: Callable[[ActorContext], str | None] | None = None,
 ) -> str:
+    actor_context: ActorContext | None = None
     if access_resolver and message.from_user:
         actor_context = access_resolver.resolve_actor_context(message.from_user.id)
         if actor_context and actor_context.locale:
             return actor_context.locale
+    if clinic_locale_getter and actor_context:
+        clinic_locale = clinic_locale_getter(actor_context)
+        if clinic_locale:
+            return clinic_locale
     return fallback_locale
 
 
@@ -46,7 +54,7 @@ def build_role_router(
     *,
     role_key: str,
     i18n: I18nService,
-    locale: str = "ru",
+    locale: str,
     access_resolver: AccessResolver | None = None,
     required_role: RoleCode | None = None,
 ) -> Router:

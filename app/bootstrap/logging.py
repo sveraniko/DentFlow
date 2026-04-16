@@ -23,5 +23,5 @@ def configure_logging(config: LoggingConfig) -> None:
     root.setLevel(config.level.upper())
 
     handler = logging.StreamHandler()
-    handler.setFormatter(JsonFormatter() if config.json else logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    handler.setFormatter(JsonFormatter() if config.json_logs else logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root.addHandler(handler)

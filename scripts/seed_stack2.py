@@ -4,17 +4,19 @@ import sys
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import asyncio
+import json
 
 from app.bootstrap.logging import configure_logging
 from app.config.settings import get_settings
-from app.infrastructure.db.repositories import seed_stack_data
+from app.infrastructure.db.patient_repository import seed_stack2_patients
 
 
 async def _run() -> None:
     settings = get_settings()
     configure_logging(settings.logging)
-    counts = await seed_stack_data(settings.db, Path("seeds/stack1_seed.json"))
-    print("Stack 1 seed loaded into DB")
+    payload = json.loads(Path("seeds/stack2_patients.json").read_text(encoding="utf-8"))
+    counts = await seed_stack2_patients(settings.db, payload)
+    print("Stack 2 patient seed loaded into DB")
     print(" ".join(f"{k}={v}" for k, v in sorted(counts.items())))
 
 

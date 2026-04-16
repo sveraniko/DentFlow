@@ -1,4 +1,4 @@
-.PHONY: test db-bootstrap run-app run-worker seed-stack1
+.PHONY: test db-bootstrap run-app run-worker seed-stack1 seed-stack2
 
 test:
 	pytest -q
@@ -14,3 +14,6 @@ run-app:
 
 run-worker:
 	python -m app.worker
+
+seed-stack2:
+	python scripts/seed_stack2.py
