@@ -617,3 +617,137 @@ def test_existing_booking_action_integrity_rejects_stale_and_foreign_booking() -
     assert isinstance(foreign, InvalidStateOutcome)
     assert isinstance(stale, InvalidStateOutcome)
     assert isinstance(waitlist, InvalidStateOutcome)
+
+
+def test_existing_booking_exact_then_no_match_resets_identity_and_invalidates_old_actions() -> None:
+    flow, repo, _ = _build_flow(finder_rows=[{"patient_id": "pat_owner", "clinic_id": "clinic_main", "display_name": "Owner"}])
+    now = datetime(2026, 4, 16, 11, 0, tzinfo=timezone.utc)
+    repo.bookings["b_owner"] = Booking(
+        booking_id="b_owner",
+        clinic_id="clinic_main",
+        branch_id="branch_1",
+        patient_id="pat_owner",
+        doctor_id="doctor_1",
+        service_id="service_consult",
+        slot_id="slot_1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=now + timedelta(days=1),
+        scheduled_end_at=now + timedelta(days=1, minutes=30),
+        status="confirmed",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=None,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    exact = asyncio.run(
+        flow.resolve_existing_booking_by_contact(
+            clinic_id="clinic_main",
+            telegram_user_id=6011,
+            phone="+15550001111",
+        )
+    )
+    assert exact.kind == "exact_match"
+    assert exact.booking_session is not None
+    old_session_id = exact.booking_session.booking_session_id
+    assert exact.booking_session.resolved_patient_id == "pat_owner"
+
+    flow.orchestration.patient_resolution_service = BookingPatientResolutionService(_Finder([]))  # type: ignore[attr-defined]
+    no_match = asyncio.run(
+        flow.resolve_existing_booking_by_contact(
+            clinic_id="clinic_main",
+            telegram_user_id=6011,
+            phone="+15550002222",
+        )
+    )
+    assert no_match.kind == "no_match"
+    assert no_match.booking_session is not None
+    assert no_match.booking_session.resolved_patient_id is None
+    assert no_match.booking_session.booking_session_id != old_session_id
+
+    stale = asyncio.run(
+        flow.request_reschedule(
+            clinic_id="clinic_main",
+            telegram_user_id=6011,
+            callback_session_id=old_session_id,
+            booking_id="b_owner",
+        )
+    )
+    assert isinstance(stale, InvalidStateOutcome)
+
+
+def test_existing_booking_exact_then_ambiguous_resets_identity_and_invalidates_old_actions() -> None:
+    flow, repo, _ = _build_flow(finder_rows=[{"patient_id": "pat_owner", "clinic_id": "clinic_main", "display_name": "Owner"}])
+    now = datetime(2026, 4, 16, 11, 0, tzinfo=timezone.utc)
+    repo.bookings["b_owner"] = Booking(
+        booking_id="b_owner",
+        clinic_id="clinic_main",
+        branch_id="branch_1",
+        patient_id="pat_owner",
+        doctor_id="doctor_1",
+        service_id="service_consult",
+        slot_id="slot_1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=now + timedelta(days=1),
+        scheduled_end_at=now + timedelta(days=1, minutes=30),
+        status="confirmed",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=None,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    exact = asyncio.run(
+        flow.resolve_existing_booking_by_contact(
+            clinic_id="clinic_main",
+            telegram_user_id=6012,
+            phone="+15550003333",
+        )
+    )
+    assert exact.kind == "exact_match"
+    assert exact.booking_session is not None
+    old_session_id = exact.booking_session.booking_session_id
+
+    flow.orchestration.patient_resolution_service = BookingPatientResolutionService(  # type: ignore[attr-defined]
+        _Finder(
+            [
+                {"patient_id": "pat_a", "clinic_id": "clinic_main", "display_name": "A"},
+                {"patient_id": "pat_b", "clinic_id": "clinic_main", "display_name": "B"},
+            ]
+        )
+    )
+    ambiguous = asyncio.run(
+        flow.resolve_existing_booking_by_contact(
+            clinic_id="clinic_main",
+            telegram_user_id=6012,
+            phone="+15550004444",
+        )
+    )
+    assert ambiguous.kind == "ambiguous_escalated"
+    assert ambiguous.booking_session is not None
+    assert ambiguous.booking_session.resolved_patient_id is None
+    assert ambiguous.booking_session.booking_session_id != old_session_id
+
+    stale = asyncio.run(
+        flow.cancel_booking(
+            clinic_id="clinic_main",
+            telegram_user_id=6012,
+            callback_session_id=old_session_id,
+            booking_id="b_owner",
+        )
+    )
+    assert isinstance(stale, InvalidStateOutcome)
