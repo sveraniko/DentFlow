@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import datetime, timezone
 
 from sqlalchemy import text
 
 from app.application.patient import InMemoryPatientRegistryRepository, PatientRegistryService, normalize_contact_value
 from app.domain.patient_registry.models import (
     Patient,
+    PatientContact,
     PatientExternalId,
     PatientFlag,
     PatientMedicalSummary,
@@ -15,11 +17,174 @@ from app.domain.patient_registry.models import (
 )
 from app.infrastructure.db.engine import create_engine
 
+DEFAULT_SEED_TIMESTAMP = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
 
 class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
     def __init__(self, db_config) -> None:
         super().__init__()
         self._db_config = db_config
+
+    @classmethod
+    async def load(cls, db_config) -> "DbPatientRegistryRepository":
+        repo = cls(db_config)
+        engine = create_engine(db_config)
+        async with engine.connect() as conn:
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT patient_id, clinic_id, patient_number, full_name_legal, first_name, last_name, middle_name,
+                               display_name, birth_date, sex_marker, status, first_seen_at, last_seen_at
+                        FROM core_patient.patients
+                        """
+                    )
+                )
+            ).mappings():
+                repo.patients[row["patient_id"]] = Patient(
+                    patient_id=row["patient_id"],
+                    clinic_id=row["clinic_id"],
+                    patient_number=row["patient_number"],
+                    full_name_legal=row["full_name_legal"],
+                    first_name=row["first_name"],
+                    last_name=row["last_name"],
+                    middle_name=row["middle_name"],
+                    display_name=row["display_name"],
+                    birth_date=row["birth_date"],
+                    sex_marker=row["sex_marker"],
+                    status=row["status"],
+                    first_seen_at=row["first_seen_at"],
+                    last_seen_at=row["last_seen_at"],
+                )
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT patient_contact_id, patient_id, contact_type, contact_value, normalized_value,
+                               is_primary, is_verified, is_active, notes
+                        FROM core_patient.patient_contacts
+                        """
+                    )
+                )
+            ).mappings():
+                repo.contacts[row["patient_contact_id"]] = PatientContact(
+                    patient_contact_id=row["patient_contact_id"],
+                    patient_id=row["patient_id"],
+                    contact_type=row["contact_type"],
+                    contact_value=row["contact_value"],
+                    normalized_value=row["normalized_value"],
+                    is_primary=row["is_primary"],
+                    is_verified=row["is_verified"],
+                    is_active=row["is_active"],
+                    notes=row["notes"],
+                )
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT patient_preference_id, patient_id, preferred_language, preferred_reminder_channel,
+                               allow_sms, allow_telegram, allow_call, allow_email, marketing_opt_in, contact_time_window
+                        FROM core_patient.patient_preferences
+                        """
+                    )
+                )
+            ).mappings():
+                repo.preferences[row["patient_preference_id"]] = PatientPreference(
+                    patient_preference_id=row["patient_preference_id"],
+                    patient_id=row["patient_id"],
+                    preferred_language=row["preferred_language"],
+                    preferred_reminder_channel=row["preferred_reminder_channel"],
+                    allow_sms=row["allow_sms"],
+                    allow_telegram=row["allow_telegram"],
+                    allow_call=row["allow_call"],
+                    allow_email=row["allow_email"],
+                    marketing_opt_in=row["marketing_opt_in"],
+                    contact_time_window=row["contact_time_window"],
+                )
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT patient_flag_id, patient_id, flag_type, flag_severity, is_active, set_by_actor_id, set_at, expires_at, note
+                        FROM core_patient.patient_flags
+                        """
+                    )
+                )
+            ).mappings():
+                repo.flags[row["patient_flag_id"]] = PatientFlag(
+                    patient_flag_id=row["patient_flag_id"],
+                    patient_id=row["patient_id"],
+                    flag_type=row["flag_type"],
+                    flag_severity=row["flag_severity"],
+                    is_active=row["is_active"],
+                    set_by_actor_id=row["set_by_actor_id"],
+                    set_at=row["set_at"],
+                    expires_at=row["expires_at"],
+                    note=row["note"],
+                )
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT patient_photo_id, patient_id, media_asset_id, external_ref, is_primary, captured_at, source_type
+                        FROM core_patient.patient_photos
+                        """
+                    )
+                )
+            ).mappings():
+                repo.photos[row["patient_photo_id"]] = PatientPhoto(
+                    patient_photo_id=row["patient_photo_id"],
+                    patient_id=row["patient_id"],
+                    media_asset_id=row["media_asset_id"],
+                    external_ref=row["external_ref"],
+                    is_primary=row["is_primary"],
+                    captured_at=row["captured_at"],
+                    source_type=row["source_type"],
+                )
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT patient_medical_summary_id, patient_id, allergy_summary, chronic_conditions_summary,
+                               contraindication_summary, current_primary_dental_issue_summary, important_history_summary,
+                               last_updated_by_actor_id, last_updated_at, created_at
+                        FROM core_patient.patient_medical_summaries
+                        """
+                    )
+                )
+            ).mappings():
+                repo.medical_summaries[row["patient_medical_summary_id"]] = PatientMedicalSummary(
+                    patient_medical_summary_id=row["patient_medical_summary_id"],
+                    patient_id=row["patient_id"],
+                    allergy_summary=row["allergy_summary"],
+                    chronic_conditions_summary=row["chronic_conditions_summary"],
+                    contraindication_summary=row["contraindication_summary"],
+                    current_primary_dental_issue_summary=row["current_primary_dental_issue_summary"],
+                    important_history_summary=row["important_history_summary"],
+                    last_updated_by_actor_id=row["last_updated_by_actor_id"],
+                    last_updated_at=row["last_updated_at"],
+                    created_at=row["created_at"],
+                )
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT patient_external_id_id, patient_id, external_system, external_id, is_primary, last_synced_at
+                        FROM core_patient.patient_external_ids
+                        """
+                    )
+                )
+            ).mappings():
+                repo.external_ids[row["patient_external_id_id"]] = PatientExternalId(
+                    patient_external_id_id=row["patient_external_id_id"],
+                    patient_id=row["patient_id"],
+                    external_system=row["external_system"],
+                    external_id=row["external_id"],
+                    is_primary=row["is_primary"],
+                    last_synced_at=row["last_synced_at"],
+                )
+        await engine.dispose()
+        return repo
 
     async def persist_patient(self, patient: Patient) -> None:
         engine = create_engine(self._db_config)
@@ -72,9 +237,9 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
                   :patient_contact_id, :patient_id, :contact_type, :contact_value, :normalized_value,
                   :is_primary, :is_verified, :is_active, :notes
                 )
-                ON CONFLICT (patient_contact_id) DO UPDATE SET
+                ON CONFLICT (patient_id, contact_type, normalized_value) DO UPDATE SET
+                  patient_contact_id=EXCLUDED.patient_contact_id,
                   contact_value=EXCLUDED.contact_value,
-                  normalized_value=EXCLUDED.normalized_value,
                   is_primary=EXCLUDED.is_primary,
                   is_verified=EXCLUDED.is_verified,
                   is_active=EXCLUDED.is_active,
@@ -99,7 +264,8 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
                   :patient_preference_id, :patient_id, :preferred_language, :preferred_reminder_channel,
                   :allow_sms, :allow_telegram, :allow_call, :allow_email, :marketing_opt_in, :contact_time_window
                 )
-                ON CONFLICT (patient_preference_id) DO UPDATE SET
+                ON CONFLICT (patient_id) DO UPDATE SET
+                  patient_preference_id=EXCLUDED.patient_preference_id,
                   preferred_language=EXCLUDED.preferred_language,
                   preferred_reminder_channel=EXCLUDED.preferred_reminder_channel,
                   allow_sms=EXCLUDED.allow_sms,
@@ -181,7 +347,8 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
                   :patient_medical_summary_id, :patient_id, :allergy_summary, :chronic_conditions_summary, :contraindication_summary,
                   :current_primary_dental_issue_summary, :important_history_summary, :last_updated_by_actor_id, :last_updated_at, :created_at
                 )
-                ON CONFLICT (patient_medical_summary_id) DO UPDATE SET
+                ON CONFLICT (patient_id) DO UPDATE SET
+                  patient_medical_summary_id=EXCLUDED.patient_medical_summary_id,
                   allergy_summary=EXCLUDED.allergy_summary,
                   chronic_conditions_summary=EXCLUDED.chronic_conditions_summary,
                   contraindication_summary=EXCLUDED.contraindication_summary,
@@ -189,7 +356,7 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
                   important_history_summary=EXCLUDED.important_history_summary,
                   last_updated_by_actor_id=EXCLUDED.last_updated_by_actor_id,
                   last_updated_at=EXCLUDED.last_updated_at,
-                  created_at=EXCLUDED.created_at
+                  created_at=core_patient.patient_medical_summaries.created_at
                 """
                 ),
                 asdict(summary),
@@ -207,9 +374,8 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
                 ) VALUES (
                   :patient_external_id_id, :patient_id, :external_system, :external_id, :is_primary, :last_synced_at
                 )
-                ON CONFLICT (patient_external_id_id) DO UPDATE SET
-                  patient_id=EXCLUDED.patient_id,
-                  external_system=EXCLUDED.external_system,
+                ON CONFLICT (patient_id, external_system) DO UPDATE SET
+                  patient_external_id_id=EXCLUDED.patient_external_id_id,
                   external_id=EXCLUDED.external_id,
                   is_primary=EXCLUDED.is_primary,
                   last_synced_at=EXCLUDED.last_synced_at
@@ -317,7 +483,7 @@ async def seed_stack2_patients(db_config, payload: dict) -> dict[str, int]:
                 flag_severity=row["flag_severity"],
                 is_active=row.get("is_active", True),
                 set_by_actor_id=row.get("set_by_actor_id"),
-                set_at=row.get("set_at"),
+                set_at=row.get("set_at", DEFAULT_SEED_TIMESTAMP),
                 expires_at=row.get("expires_at"),
                 note=row.get("note"),
             )
@@ -345,8 +511,8 @@ async def seed_stack2_patients(db_config, payload: dict) -> dict[str, int]:
                 current_primary_dental_issue_summary=row.get("current_primary_dental_issue_summary"),
                 important_history_summary=row.get("important_history_summary"),
                 last_updated_by_actor_id=row.get("last_updated_by_actor_id"),
-                last_updated_at=row["last_updated_at"],
-                created_at=row["created_at"],
+                last_updated_at=row.get("last_updated_at", row.get("created_at", DEFAULT_SEED_TIMESTAMP)),
+                created_at=row.get("created_at", DEFAULT_SEED_TIMESTAMP),
             )
         )
     for row in payload.get("patient_external_ids", []):

@@ -237,7 +237,8 @@ STACK1_TABLES: tuple[str, ...] = (
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
       notes TEXT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(patient_id, contact_type, normalized_value)
     )
     """,
     """
@@ -305,7 +306,7 @@ STACK1_TABLES: tuple[str, ...] = (
       last_synced_at TIMESTAMPTZ NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE(external_system, external_id),
-      UNIQUE(patient_id, external_system, external_id)
+      UNIQUE(patient_id, external_system)
     )
     """,
     """
