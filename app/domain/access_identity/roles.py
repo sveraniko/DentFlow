@@ -1,9 +1,3 @@
-from enum import StrEnum
+from app.domain.access_identity.models import RoleCode
 
-
-class Role(StrEnum):
-    PATIENT = "patient"
-    CLINIC_ADMIN = "clinic_admin"
-    DOCTOR = "doctor"
-    OWNER = "owner"
-    SERVICE = "service"
+Role = RoleCode

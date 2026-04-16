@@ -5,5 +5,13 @@
   "role.admin.home": "Администратор: домашняя панель",
   "role.doctor.home": "Врач: рабочая панель",
   "role.owner.home": "Владелец: домашняя панель",
-  "common.language.current": "Текущий язык: Русский"
+  "common.language.current": "Текущий язык: Русский",
+  "access.denied.unbound": "Доступ запрещён: аккаунт не привязан к сотруднику.",
+  "access.denied.role": "Доступ запрещён: недостаточно прав для этого раздела.",
+  "access.allowed": "Доступ разрешён",
+  "admin.reference.empty": "Справочные данные клиники пока не загружены.",
+  "admin.reference.clinic": "Клиника: {name}\nКод: {code}\nЧасовой пояс: {timezone}\nСтатус: {status}",
+  "admin.reference.branches": "Филиалы",
+  "admin.reference.doctors": "Врачи",
+  "admin.reference.services": "Услуги"
 }

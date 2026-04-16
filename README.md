@@ -375,7 +375,7 @@ The implementation must stay disciplined.
 
 ---
 
-## 10. Stack 0 bootstrap commands
+## 10. Stack 0/1 bootstrap commands
 
 ```bash
 cp .env.example .env
@@ -383,9 +383,10 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e .
 make db-bootstrap
+make seed-stack1
 make test
 make run-app
 make run-worker
 ```
 
-This repository now includes Stack 0 foundation skeletons for config, runtime, i18n, DB bootstrap, worker bootstrap, and smoke tests.
+This repository now includes Stack 0 foundation skeletons plus Stack 1 canonical clinic reference, access/identity, policy/config seed fixtures, role guards, and related tests.

@@ -1,0 +1,187 @@
+{
+  "clinics": [
+    {
+      "clinic_id": "clinic_main",
+      "code": "dentflow-main",
+      "display_name": "DentFlow Demo Clinic",
+      "timezone": "Europe/Moscow",
+      "default_locale": "ru",
+      "status": "active"
+    }
+  ],
+  "branches": [
+    {
+      "branch_id": "branch_central",
+      "clinic_id": "clinic_main",
+      "display_name": "Central Branch",
+      "address_text": "Main street 10",
+      "timezone": "Europe/Moscow",
+      "status": "active"
+    }
+  ],
+  "doctors": [
+    {
+      "doctor_id": "doctor_anna",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "display_name": "Dr. Anna",
+      "specialty_code": "general_dentistry",
+      "public_booking_enabled": true,
+      "status": "active"
+    }
+  ],
+  "services": [
+    {
+      "service_id": "service_consult",
+      "clinic_id": "clinic_main",
+      "code": "consult",
+      "title_key": "service.consult",
+      "duration_minutes": 30,
+      "specialty_required": "general_dentistry",
+      "status": "active"
+    }
+  ],
+  "doctor_access_codes": [
+    {
+      "doctor_access_code_id": "dac_anna_main",
+      "clinic_id": "clinic_main",
+      "doctor_id": "doctor_anna",
+      "code": "ANNA-001",
+      "status": "active",
+      "max_uses": 100,
+      "service_scope": ["service_consult"],
+      "branch_scope": ["branch_central"]
+    }
+  ],
+  "actor_identities": [
+    {
+      "actor_id": "actor_admin",
+      "actor_type": "staff",
+      "display_name": "Admin User",
+      "locale": "ru"
+    },
+    {
+      "actor_id": "actor_doctor",
+      "actor_type": "staff",
+      "display_name": "Doctor User",
+      "locale": "ru"
+    },
+    {
+      "actor_id": "actor_owner",
+      "actor_type": "staff",
+      "display_name": "Owner User",
+      "locale": "en"
+    }
+  ],
+  "telegram_bindings": [
+    {
+      "telegram_binding_id": "tb_admin",
+      "actor_id": "actor_admin",
+      "telegram_user_id": 1001,
+      "telegram_username": "admin_demo"
+    },
+    {
+      "telegram_binding_id": "tb_doctor",
+      "actor_id": "actor_doctor",
+      "telegram_user_id": 1002,
+      "telegram_username": "doctor_demo"
+    },
+    {
+      "telegram_binding_id": "tb_owner",
+      "actor_id": "actor_owner",
+      "telegram_user_id": 1003,
+      "telegram_username": "owner_demo"
+    }
+  ],
+  "staff_members": [
+    {
+      "staff_id": "staff_admin",
+      "actor_id": "actor_admin",
+      "clinic_id": "clinic_main",
+      "full_name": "Admin User",
+      "display_name": "Admin"
+    },
+    {
+      "staff_id": "staff_doctor",
+      "actor_id": "actor_doctor",
+      "clinic_id": "clinic_main",
+      "full_name": "Doctor User",
+      "display_name": "Doctor"
+    },
+    {
+      "staff_id": "staff_owner",
+      "actor_id": "actor_owner",
+      "clinic_id": "clinic_main",
+      "full_name": "Owner User",
+      "display_name": "Owner"
+    }
+  ],
+  "clinic_role_assignments": [
+    {
+      "role_assignment_id": "ra_admin",
+      "staff_id": "staff_admin",
+      "clinic_id": "clinic_main",
+      "role_code": "admin"
+    },
+    {
+      "role_assignment_id": "ra_doctor",
+      "staff_id": "staff_doctor",
+      "clinic_id": "clinic_main",
+      "role_code": "doctor"
+    },
+    {
+      "role_assignment_id": "ra_owner",
+      "staff_id": "staff_owner",
+      "clinic_id": "clinic_main",
+      "role_code": "owner"
+    }
+  ],
+  "policy_sets": [
+    {
+      "policy_set_id": "ps_clinic_main",
+      "policy_family": "clinic_policy",
+      "scope_type": "clinic",
+      "scope_ref": "clinic_main"
+    },
+    {
+      "policy_set_id": "ps_branch_central",
+      "policy_family": "clinic_policy",
+      "scope_type": "branch",
+      "scope_ref": "branch_central"
+    }
+  ],
+  "policy_values": [
+    {
+      "policy_value_id": "pv_locale",
+      "policy_set_id": "ps_clinic_main",
+      "policy_key": "clinic.default_locale",
+      "value_type": "string",
+      "value_json": "ru"
+    },
+    {
+      "policy_value_id": "pv_booking_enabled",
+      "policy_set_id": "ps_clinic_main",
+      "policy_key": "booking.enabled",
+      "value_type": "bool",
+      "value_json": true
+    },
+    {
+      "policy_value_id": "pv_branch_confirm",
+      "policy_set_id": "ps_branch_central",
+      "policy_key": "booking.confirmation_required",
+      "value_type": "bool",
+      "value_json": false,
+      "is_override": true
+    }
+  ],
+  "feature_flags": [
+    {
+      "feature_flag_id": "ff_reference_panel",
+      "scope_type": "clinic",
+      "scope_ref": "clinic_main",
+      "flag_key": "admin.reference_panel",
+      "enabled": true,
+      "reason": "Stack 1 baseline"
+    }
+  ]
+}
