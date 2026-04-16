@@ -530,41 +530,51 @@ async def seed_stack2_patients(db_config, payload: dict) -> dict[str, int]:
 
 
 async def find_patient_by_exact_contact(db_config, *, contact_type: str, contact_value: str) -> dict | None:
-    normalized = normalize_contact_value(contact_type, contact_value)
-    engine = create_engine(db_config)
-    async with engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text(
-                    """
-                SELECT p.* FROM core_patient.patient_contacts c
-                JOIN core_patient.patients p ON p.patient_id=c.patient_id
-                WHERE c.contact_type=:contact_type AND c.normalized_value=:normalized AND c.is_active=TRUE
-                LIMIT 1
-                """
-                ),
-                {"contact_type": contact_type, "normalized": normalized},
-            )
-        ).mappings().first()
-    await engine.dispose()
-    return dict(row) if row else None
+    rows = await find_patients_by_exact_contact(db_config, contact_type=contact_type, contact_value=contact_value)
+    return rows[0] if rows else None
 
 
 async def find_patient_by_external_id(db_config, *, external_system: str, external_id: str) -> dict | None:
+    rows = await find_patients_by_external_id(db_config, external_system=external_system, external_id=external_id)
+    return rows[0] if rows else None
+
+
+async def find_patients_by_exact_contact(db_config, *, contact_type: str, contact_value: str) -> list[dict]:
+    normalized = normalize_contact_value(contact_type, contact_value)
     engine = create_engine(db_config)
     async with engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text(
-                    """
-                SELECT p.* FROM core_patient.patient_external_ids x
-                JOIN core_patient.patients p ON p.patient_id=x.patient_id
-                WHERE x.external_system=:external_system AND x.external_id=:external_id
-                LIMIT 1
+        result = await conn.execute(
+            text(
                 """
-                ),
-                {"external_system": external_system, "external_id": external_id},
-            )
-        ).mappings().first()
+            SELECT p.patient_id, p.clinic_id, p.display_name, c.normalized_value AS normalized_lookup_value
+            FROM core_patient.patient_contacts c
+            JOIN core_patient.patients p ON p.patient_id=c.patient_id
+            WHERE c.contact_type=:contact_type AND c.normalized_value=:normalized AND c.is_active=TRUE
+            ORDER BY c.is_primary DESC, p.patient_id ASC
+            """
+            ),
+            {"contact_type": contact_type, "normalized": normalized},
+        )
+        rows = list(result.mappings())
     await engine.dispose()
-    return dict(row) if row else None
+    return [dict(row) for row in rows]
+
+
+async def find_patients_by_external_id(db_config, *, external_system: str, external_id: str) -> list[dict]:
+    engine = create_engine(db_config)
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            text(
+                """
+            SELECT p.patient_id, p.clinic_id, p.display_name
+            FROM core_patient.patient_external_ids x
+            JOIN core_patient.patients p ON p.patient_id=x.patient_id
+            WHERE x.external_system=:external_system AND x.external_id=:external_id
+            ORDER BY p.patient_id ASC
+            """
+            ),
+            {"external_system": external_system, "external_id": external_id},
+        )
+        rows = list(result.mappings())
+    await engine.dispose()
+    return [dict(row) for row in rows]

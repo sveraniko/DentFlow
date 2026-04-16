@@ -310,6 +310,182 @@ STACK1_TABLES: tuple[str, ...] = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS booking.booking_sessions (
+      booking_session_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      branch_id TEXT NULL REFERENCES core_reference.branches(branch_id),
+      telegram_user_id BIGINT NOT NULL,
+      resolved_patient_id TEXT NULL REFERENCES core_patient.patients(patient_id),
+      status TEXT NOT NULL,
+      route_type TEXT NOT NULL,
+      service_id TEXT NULL REFERENCES core_reference.services(service_id),
+      urgency_type TEXT NULL,
+      requested_date_type TEXT NULL,
+      requested_date DATE NULL,
+      time_window TEXT NULL,
+      doctor_preference_type TEXT NULL,
+      doctor_id TEXT NULL REFERENCES core_reference.doctors(doctor_id),
+      doctor_code_raw TEXT NULL,
+      selected_slot_id TEXT NULL,
+      selected_hold_id TEXT NULL,
+      contact_phone_snapshot TEXT NULL,
+      notes TEXT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_booking_sessions_telegram
+    ON booking.booking_sessions (clinic_id, telegram_user_id, updated_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_booking_sessions_status_expires
+    ON booking.booking_sessions (status, expires_at)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS booking.session_events (
+      session_event_id TEXT PRIMARY KEY,
+      booking_session_id TEXT NOT NULL REFERENCES booking.booking_sessions(booking_session_id) ON DELETE CASCADE,
+      event_name TEXT NOT NULL,
+      payload_json JSONB NULL,
+      actor_type TEXT NULL,
+      actor_id TEXT NULL,
+      occurred_at TIMESTAMPTZ NOT NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_session_events_session
+    ON booking.session_events (booking_session_id, occurred_at DESC)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS booking.availability_slots (
+      slot_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      branch_id TEXT NULL REFERENCES core_reference.branches(branch_id),
+      doctor_id TEXT NOT NULL REFERENCES core_reference.doctors(doctor_id),
+      start_at TIMESTAMPTZ NOT NULL,
+      end_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL,
+      visibility_policy TEXT NOT NULL,
+      service_scope JSONB NULL,
+      source_ref TEXT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CHECK (end_at > start_at)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_availability_slots_doctor_start
+    ON booking.availability_slots (clinic_id, doctor_id, start_at)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS booking.slot_holds (
+      slot_hold_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      slot_id TEXT NOT NULL REFERENCES booking.availability_slots(slot_id) ON DELETE CASCADE,
+      booking_session_id TEXT NOT NULL REFERENCES booking.booking_sessions(booking_session_id) ON DELETE CASCADE,
+      telegram_user_id BIGINT NOT NULL,
+      status TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_slot_holds_slot_status
+    ON booking.slot_holds (slot_id, status)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS booking.bookings (
+      booking_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      branch_id TEXT NULL REFERENCES core_reference.branches(branch_id),
+      patient_id TEXT NOT NULL REFERENCES core_patient.patients(patient_id),
+      doctor_id TEXT NOT NULL REFERENCES core_reference.doctors(doctor_id),
+      service_id TEXT NOT NULL REFERENCES core_reference.services(service_id),
+      slot_id TEXT NULL REFERENCES booking.availability_slots(slot_id),
+      booking_mode TEXT NOT NULL,
+      source_channel TEXT NOT NULL,
+      scheduled_start_at TIMESTAMPTZ NOT NULL,
+      scheduled_end_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL,
+      reason_for_visit_short TEXT NULL,
+      patient_note TEXT NULL,
+      confirmation_required BOOLEAN NOT NULL DEFAULT TRUE,
+      confirmed_at TIMESTAMPTZ NULL,
+      canceled_at TIMESTAMPTZ NULL,
+      checked_in_at TIMESTAMPTZ NULL,
+      in_service_at TIMESTAMPTZ NULL,
+      completed_at TIMESTAMPTZ NULL,
+      no_show_at TIMESTAMPTZ NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CHECK (scheduled_end_at > scheduled_start_at),
+      CHECK (status IN ('pending_confirmation', 'confirmed', 'reschedule_requested', 'canceled', 'checked_in', 'in_service', 'completed', 'no_show'))
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_bookings_patient_start
+    ON booking.bookings (clinic_id, patient_id, scheduled_start_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_bookings_doctor_start
+    ON booking.bookings (clinic_id, doctor_id, scheduled_start_at)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_bookings_status_start
+    ON booking.bookings (clinic_id, status, scheduled_start_at)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS booking.booking_status_history (
+      booking_status_history_id TEXT PRIMARY KEY,
+      booking_id TEXT NOT NULL REFERENCES booking.bookings(booking_id) ON DELETE CASCADE,
+      old_status TEXT NULL,
+      new_status TEXT NOT NULL,
+      reason_code TEXT NULL,
+      actor_type TEXT NULL,
+      actor_id TEXT NULL,
+      occurred_at TIMESTAMPTZ NOT NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_booking_status_history_booking
+    ON booking.booking_status_history (booking_id, occurred_at DESC)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS booking.waitlist_entries (
+      waitlist_entry_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      branch_id TEXT NULL REFERENCES core_reference.branches(branch_id),
+      patient_id TEXT NULL REFERENCES core_patient.patients(patient_id),
+      telegram_user_id BIGINT NULL,
+      service_id TEXT NOT NULL REFERENCES core_reference.services(service_id),
+      doctor_id TEXT NULL REFERENCES core_reference.doctors(doctor_id),
+      date_window JSONB NULL,
+      time_window TEXT NULL,
+      priority INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL,
+      source_session_id TEXT NULL REFERENCES booking.booking_sessions(booking_session_id),
+      notes TEXT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS booking.admin_escalations (
+      admin_escalation_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      booking_session_id TEXT NOT NULL REFERENCES booking.booking_sessions(booking_session_id),
+      patient_id TEXT NULL REFERENCES core_patient.patients(patient_id),
+      reason_code TEXT NOT NULL,
+      priority TEXT NOT NULL,
+      status TEXT NOT NULL,
+      assigned_to_actor_id TEXT NULL REFERENCES access_identity.actor_identities(actor_id),
+      payload_summary JSONB NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS policy_config.feature_flags (
       feature_flag_id TEXT PRIMARY KEY,
       scope_type TEXT NOT NULL,

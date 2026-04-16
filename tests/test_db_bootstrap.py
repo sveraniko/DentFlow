@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 pytest.importorskip("sqlalchemy")
@@ -35,12 +37,11 @@ class _Engine:
         return None
 
 
-@pytest.mark.asyncio
-async def test_db_bootstrap_creates_all_schemas_and_stack1_stack2_tables(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_db_bootstrap_creates_all_schemas_and_stack1_stack2_stack3a_tables(monkeypatch: pytest.MonkeyPatch) -> None:
     engine = _Engine()
     monkeypatch.setattr(db_bootstrap, "create_engine", lambda config: engine)
 
-    await db_bootstrap.bootstrap_database(object())
+    asyncio.run(db_bootstrap.bootstrap_database(object()))
 
     executed = "\n".join(engine.conn.executed)
     assert len(engine.conn.executed) == len(db_bootstrap.SCHEMAS) + len(db_bootstrap.STACK1_TABLES)
@@ -64,3 +65,19 @@ def test_stack2_patient_tables_declared() -> None:
     assert "patient_id TEXT NOT NULL UNIQUE REFERENCES core_patient.patients(patient_id)" in ddl
     assert "patient_id TEXT NOT NULL UNIQUE REFERENCES core_patient.patients(patient_id)" in ddl
     assert "UNIQUE(patient_id, external_system)" in ddl
+
+
+def test_stack3a_booking_tables_declared() -> None:
+    ddl = "\n".join(db_bootstrap.STACK1_TABLES)
+    assert "CREATE TABLE IF NOT EXISTS booking.booking_sessions" in ddl
+    assert "CREATE TABLE IF NOT EXISTS booking.session_events" in ddl
+    assert "CREATE TABLE IF NOT EXISTS booking.availability_slots" in ddl
+    assert "CREATE TABLE IF NOT EXISTS booking.slot_holds" in ddl
+    assert "CREATE TABLE IF NOT EXISTS booking.bookings" in ddl
+    assert "CREATE TABLE IF NOT EXISTS booking.booking_status_history" in ddl
+    assert "CREATE TABLE IF NOT EXISTS booking.waitlist_entries" in ddl
+    assert "CREATE TABLE IF NOT EXISTS booking.admin_escalations" in ddl
+    assert "CHECK (status IN ('pending_confirmation', 'confirmed', 'reschedule_requested', 'canceled', 'checked_in', 'in_service', 'completed', 'no_show'))" in ddl
+    assert "REFERENCES core_patient.patients(patient_id)" in ddl
+    assert "CREATE TABLE IF NOT EXISTS booking.booking_patients" not in ddl
+    assert "CREATE TABLE IF NOT EXISTS booking.patient_profiles" not in ddl

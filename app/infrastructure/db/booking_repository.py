@@ -1,0 +1,557 @@
+from __future__ import annotations
+
+import json
+from dataclasses import asdict
+from datetime import datetime
+from pathlib import Path
+
+from sqlalchemy import text
+
+from app.application.booking.services import BookingRepository
+from app.domain.booking import AdminEscalation, AvailabilitySlot, Booking, BookingSession, BookingStatusHistory, SessionEvent, SlotHold, WaitlistEntry
+from app.infrastructure.db.engine import create_engine
+
+
+class DbBookingRepository(BookingRepository):
+    def __init__(self, db_config) -> None:
+        self._db_config = db_config
+
+    def _engine(self):
+        return create_engine(self._db_config)
+
+    async def upsert_booking_session(self, item: BookingSession) -> None:
+        payload = asdict(item)
+        engine = self._engine()
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO booking.booking_sessions (
+                      booking_session_id, clinic_id, branch_id, telegram_user_id, resolved_patient_id, status, route_type, service_id,
+                      urgency_type, requested_date_type, requested_date, time_window, doctor_preference_type, doctor_id, doctor_code_raw,
+                      selected_slot_id, selected_hold_id, contact_phone_snapshot, notes, expires_at, created_at, updated_at
+                    ) VALUES (
+                      :booking_session_id, :clinic_id, :branch_id, :telegram_user_id, :resolved_patient_id, :status, :route_type, :service_id,
+                      :urgency_type, :requested_date_type, :requested_date, :time_window, :doctor_preference_type, :doctor_id, :doctor_code_raw,
+                      :selected_slot_id, :selected_hold_id, :contact_phone_snapshot, :notes, :expires_at, :created_at, :updated_at
+                    )
+                    ON CONFLICT (booking_session_id) DO UPDATE SET
+                      branch_id=EXCLUDED.branch_id,
+                      resolved_patient_id=EXCLUDED.resolved_patient_id,
+                      status=EXCLUDED.status,
+                      route_type=EXCLUDED.route_type,
+                      service_id=EXCLUDED.service_id,
+                      urgency_type=EXCLUDED.urgency_type,
+                      requested_date_type=EXCLUDED.requested_date_type,
+                      requested_date=EXCLUDED.requested_date,
+                      time_window=EXCLUDED.time_window,
+                      doctor_preference_type=EXCLUDED.doctor_preference_type,
+                      doctor_id=EXCLUDED.doctor_id,
+                      doctor_code_raw=EXCLUDED.doctor_code_raw,
+                      selected_slot_id=EXCLUDED.selected_slot_id,
+                      selected_hold_id=EXCLUDED.selected_hold_id,
+                      contact_phone_snapshot=EXCLUDED.contact_phone_snapshot,
+                      notes=EXCLUDED.notes,
+                      expires_at=EXCLUDED.expires_at,
+                      updated_at=EXCLUDED.updated_at
+                    """
+                ),
+                payload,
+            )
+        await engine.dispose()
+
+    async def get_booking_session(self, booking_session_id: str) -> BookingSession | None:
+        row = await _fetch_one(
+            self._db_config,
+            """
+            SELECT booking_session_id, clinic_id, branch_id, telegram_user_id, resolved_patient_id, status, route_type, service_id,
+                   urgency_type, requested_date_type, requested_date, time_window, doctor_preference_type, doctor_id, doctor_code_raw,
+                   selected_slot_id, selected_hold_id, contact_phone_snapshot, notes, expires_at, created_at, updated_at
+            FROM booking.booking_sessions
+            WHERE booking_session_id=:booking_session_id
+            """,
+            {"booking_session_id": booking_session_id},
+        )
+        return BookingSession(**row) if row else None
+
+    async def append_session_event(self, event: SessionEvent) -> None:
+        payload = asdict(event)
+        engine = self._engine()
+        async with engine.begin() as conn:
+            payload["payload_json"] = json.dumps(payload["payload_json"]) if payload["payload_json"] is not None else None
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO booking.session_events (
+                      session_event_id, booking_session_id, event_name, payload_json, actor_type, actor_id, occurred_at
+                    ) VALUES (
+                      :session_event_id, :booking_session_id, :event_name, CAST(:payload_json AS JSONB), :actor_type, :actor_id, :occurred_at
+                    )
+                    ON CONFLICT (session_event_id) DO NOTHING
+                    """
+                ),
+                payload,
+            )
+        await engine.dispose()
+
+    async def upsert_availability_slot(self, item: AvailabilitySlot) -> None:
+        payload = asdict(item)
+        engine = self._engine()
+        async with engine.begin() as conn:
+            payload["service_scope"] = json.dumps(payload["service_scope"]) if payload["service_scope"] is not None else None
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO booking.availability_slots (
+                      slot_id, clinic_id, branch_id, doctor_id, start_at, end_at, status, visibility_policy, service_scope, source_ref, updated_at
+                    ) VALUES (
+                      :slot_id, :clinic_id, :branch_id, :doctor_id, :start_at, :end_at, :status, :visibility_policy,
+                      CAST(:service_scope AS JSONB), :source_ref, :updated_at
+                    )
+                    ON CONFLICT (slot_id) DO UPDATE SET
+                      branch_id=EXCLUDED.branch_id,
+                      doctor_id=EXCLUDED.doctor_id,
+                      start_at=EXCLUDED.start_at,
+                      end_at=EXCLUDED.end_at,
+                      status=EXCLUDED.status,
+                      visibility_policy=EXCLUDED.visibility_policy,
+                      service_scope=EXCLUDED.service_scope,
+                      source_ref=EXCLUDED.source_ref,
+                      updated_at=EXCLUDED.updated_at
+                    """
+                ),
+                payload,
+            )
+        await engine.dispose()
+
+    async def get_availability_slot(self, slot_id: str) -> AvailabilitySlot | None:
+        row = await _fetch_one(
+            self._db_config,
+            """
+            SELECT slot_id, clinic_id, branch_id, doctor_id, start_at, end_at, status, visibility_policy, service_scope, source_ref, updated_at
+            FROM booking.availability_slots
+            WHERE slot_id=:slot_id
+            """,
+            {"slot_id": slot_id},
+        )
+        return AvailabilitySlot(**row) if row else None
+
+    async def list_availability_slots(self, *, doctor_id: str, start_at: datetime, end_at: datetime) -> list[AvailabilitySlot]:
+        rows = await _fetch_all(
+            self._db_config,
+            """
+            SELECT slot_id, clinic_id, branch_id, doctor_id, start_at, end_at, status, visibility_policy, service_scope, source_ref, updated_at
+            FROM booking.availability_slots
+            WHERE doctor_id=:doctor_id AND start_at >= :start_at AND start_at < :end_at
+            ORDER BY start_at ASC
+            """,
+            {"doctor_id": doctor_id, "start_at": start_at, "end_at": end_at},
+        )
+        return [AvailabilitySlot(**row) for row in rows]
+
+    async def upsert_slot_hold(self, item: SlotHold) -> None:
+        payload = asdict(item)
+        engine = self._engine()
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO booking.slot_holds (
+                      slot_hold_id, clinic_id, slot_id, booking_session_id, telegram_user_id, status, expires_at, created_at
+                    ) VALUES (
+                      :slot_hold_id, :clinic_id, :slot_id, :booking_session_id, :telegram_user_id, :status, :expires_at, :created_at
+                    )
+                    ON CONFLICT (slot_hold_id) DO UPDATE SET
+                      status=EXCLUDED.status,
+                      expires_at=EXCLUDED.expires_at
+                    """
+                ),
+                payload,
+            )
+        await engine.dispose()
+
+    async def get_slot_hold(self, slot_hold_id: str) -> SlotHold | None:
+        row = await _fetch_one(
+            self._db_config,
+            """
+            SELECT slot_hold_id, clinic_id, slot_id, booking_session_id, telegram_user_id, status, expires_at, created_at
+            FROM booking.slot_holds WHERE slot_hold_id=:slot_hold_id
+            """,
+            {"slot_hold_id": slot_hold_id},
+        )
+        return SlotHold(**row) if row else None
+
+    async def find_slot_hold(self, *, slot_id: str, booking_session_id: str) -> SlotHold | None:
+        row = await _fetch_one(
+            self._db_config,
+            """
+            SELECT slot_hold_id, clinic_id, slot_id, booking_session_id, telegram_user_id, status, expires_at, created_at
+            FROM booking.slot_holds
+            WHERE slot_id=:slot_id AND booking_session_id=:booking_session_id
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            {"slot_id": slot_id, "booking_session_id": booking_session_id},
+        )
+        return SlotHold(**row) if row else None
+
+    async def upsert_booking(self, item: Booking) -> None:
+        payload = asdict(item)
+        engine = self._engine()
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO booking.bookings (
+                      booking_id, clinic_id, branch_id, patient_id, doctor_id, service_id, slot_id, booking_mode, source_channel,
+                      scheduled_start_at, scheduled_end_at, status, reason_for_visit_short, patient_note, confirmation_required,
+                      confirmed_at, canceled_at, checked_in_at, in_service_at, completed_at, no_show_at, created_at, updated_at
+                    ) VALUES (
+                      :booking_id, :clinic_id, :branch_id, :patient_id, :doctor_id, :service_id, :slot_id, :booking_mode, :source_channel,
+                      :scheduled_start_at, :scheduled_end_at, :status, :reason_for_visit_short, :patient_note, :confirmation_required,
+                      :confirmed_at, :canceled_at, :checked_in_at, :in_service_at, :completed_at, :no_show_at, :created_at, :updated_at
+                    )
+                    ON CONFLICT (booking_id) DO UPDATE SET
+                      branch_id=EXCLUDED.branch_id,
+                      patient_id=EXCLUDED.patient_id,
+                      doctor_id=EXCLUDED.doctor_id,
+                      service_id=EXCLUDED.service_id,
+                      slot_id=EXCLUDED.slot_id,
+                      booking_mode=EXCLUDED.booking_mode,
+                      source_channel=EXCLUDED.source_channel,
+                      scheduled_start_at=EXCLUDED.scheduled_start_at,
+                      scheduled_end_at=EXCLUDED.scheduled_end_at,
+                      status=EXCLUDED.status,
+                      reason_for_visit_short=EXCLUDED.reason_for_visit_short,
+                      patient_note=EXCLUDED.patient_note,
+                      confirmation_required=EXCLUDED.confirmation_required,
+                      confirmed_at=EXCLUDED.confirmed_at,
+                      canceled_at=EXCLUDED.canceled_at,
+                      checked_in_at=EXCLUDED.checked_in_at,
+                      in_service_at=EXCLUDED.in_service_at,
+                      completed_at=EXCLUDED.completed_at,
+                      no_show_at=EXCLUDED.no_show_at,
+                      updated_at=EXCLUDED.updated_at
+                    """
+                ),
+                payload,
+            )
+        await engine.dispose()
+
+    async def get_booking(self, booking_id: str) -> Booking | None:
+        row = await _fetch_one(
+            self._db_config,
+            """
+            SELECT booking_id, clinic_id, branch_id, patient_id, doctor_id, service_id, slot_id, booking_mode, source_channel,
+                   scheduled_start_at, scheduled_end_at, status, reason_for_visit_short, patient_note, confirmation_required,
+                   confirmed_at, canceled_at, checked_in_at, in_service_at, completed_at, no_show_at, created_at, updated_at
+            FROM booking.bookings
+            WHERE booking_id=:booking_id
+            """,
+            {"booking_id": booking_id},
+        )
+        return Booking(**row) if row else None
+
+    async def append_booking_status_history(self, item: BookingStatusHistory) -> None:
+        payload = asdict(item)
+        engine = self._engine()
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO booking.booking_status_history (
+                      booking_status_history_id, booking_id, old_status, new_status, reason_code, actor_type, actor_id, occurred_at
+                    ) VALUES (
+                      :booking_status_history_id, :booking_id, :old_status, :new_status, :reason_code, :actor_type, :actor_id, :occurred_at
+                    )
+                    ON CONFLICT (booking_status_history_id) DO NOTHING
+                    """
+                ),
+                payload,
+            )
+        await engine.dispose()
+
+    async def list_bookings_by_patient(self, *, patient_id: str) -> list[Booking]:
+        rows = await _fetch_all(
+            self._db_config,
+            """
+            SELECT booking_id, clinic_id, branch_id, patient_id, doctor_id, service_id, slot_id, booking_mode, source_channel,
+                   scheduled_start_at, scheduled_end_at, status, reason_for_visit_short, patient_note, confirmation_required,
+                   confirmed_at, canceled_at, checked_in_at, in_service_at, completed_at, no_show_at, created_at, updated_at
+            FROM booking.bookings
+            WHERE patient_id=:patient_id
+            ORDER BY scheduled_start_at DESC
+            """,
+            {"patient_id": patient_id},
+        )
+        return [Booking(**row) for row in rows]
+
+    async def list_bookings_by_doctor_time_window(self, *, doctor_id: str, start_at: datetime, end_at: datetime) -> list[Booking]:
+        rows = await _fetch_all(
+            self._db_config,
+            """
+            SELECT booking_id, clinic_id, branch_id, patient_id, doctor_id, service_id, slot_id, booking_mode, source_channel,
+                   scheduled_start_at, scheduled_end_at, status, reason_for_visit_short, patient_note, confirmation_required,
+                   confirmed_at, canceled_at, checked_in_at, in_service_at, completed_at, no_show_at, created_at, updated_at
+            FROM booking.bookings
+            WHERE doctor_id=:doctor_id AND scheduled_start_at >= :start_at AND scheduled_start_at < :end_at
+            ORDER BY scheduled_start_at ASC
+            """,
+            {"doctor_id": doctor_id, "start_at": start_at, "end_at": end_at},
+        )
+        return [Booking(**row) for row in rows]
+
+    async def list_bookings_by_status_time_window(self, *, status: str, start_at: datetime, end_at: datetime) -> list[Booking]:
+        rows = await _fetch_all(
+            self._db_config,
+            """
+            SELECT booking_id, clinic_id, branch_id, patient_id, doctor_id, service_id, slot_id, booking_mode, source_channel,
+                   scheduled_start_at, scheduled_end_at, status, reason_for_visit_short, patient_note, confirmation_required,
+                   confirmed_at, canceled_at, checked_in_at, in_service_at, completed_at, no_show_at, created_at, updated_at
+            FROM booking.bookings
+            WHERE status=:status AND scheduled_start_at >= :start_at AND scheduled_start_at < :end_at
+            ORDER BY scheduled_start_at ASC
+            """,
+            {"status": status, "start_at": start_at, "end_at": end_at},
+        )
+        return [Booking(**row) for row in rows]
+
+    async def upsert_waitlist_entry(self, item: WaitlistEntry) -> None:
+        payload = asdict(item)
+        payload["date_window"] = json.dumps(payload["date_window"]) if payload["date_window"] is not None else None
+        engine = self._engine()
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO booking.waitlist_entries (
+                      waitlist_entry_id, clinic_id, branch_id, patient_id, telegram_user_id, service_id, doctor_id, date_window,
+                      time_window, priority, status, source_session_id, notes, created_at, updated_at
+                    ) VALUES (
+                      :waitlist_entry_id, :clinic_id, :branch_id, :patient_id, :telegram_user_id, :service_id, :doctor_id,
+                      CAST(:date_window AS JSONB), :time_window, :priority, :status, :source_session_id, :notes, :created_at, :updated_at
+                    )
+                    ON CONFLICT (waitlist_entry_id) DO UPDATE SET
+                      branch_id=EXCLUDED.branch_id,
+                      patient_id=EXCLUDED.patient_id,
+                      telegram_user_id=EXCLUDED.telegram_user_id,
+                      service_id=EXCLUDED.service_id,
+                      doctor_id=EXCLUDED.doctor_id,
+                      date_window=EXCLUDED.date_window,
+                      time_window=EXCLUDED.time_window,
+                      priority=EXCLUDED.priority,
+                      status=EXCLUDED.status,
+                      source_session_id=EXCLUDED.source_session_id,
+                      notes=EXCLUDED.notes,
+                      updated_at=EXCLUDED.updated_at
+                    """
+                ),
+                payload,
+            )
+        await engine.dispose()
+
+    async def get_waitlist_entry(self, waitlist_entry_id: str) -> WaitlistEntry | None:
+        row = await _fetch_one(
+            self._db_config,
+            """
+            SELECT waitlist_entry_id, clinic_id, branch_id, patient_id, telegram_user_id, service_id, doctor_id, date_window,
+                   time_window, priority, status, source_session_id, notes, created_at, updated_at
+            FROM booking.waitlist_entries
+            WHERE waitlist_entry_id=:waitlist_entry_id
+            """,
+            {"waitlist_entry_id": waitlist_entry_id},
+        )
+        return WaitlistEntry(**row) if row else None
+
+    async def upsert_admin_escalation(self, item: AdminEscalation) -> None:
+        payload = asdict(item)
+        payload["payload_summary"] = json.dumps(payload["payload_summary"]) if payload["payload_summary"] is not None else None
+        engine = self._engine()
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO booking.admin_escalations (
+                      admin_escalation_id, clinic_id, booking_session_id, patient_id, reason_code, priority, status,
+                      assigned_to_actor_id, payload_summary, created_at, updated_at
+                    ) VALUES (
+                      :admin_escalation_id, :clinic_id, :booking_session_id, :patient_id, :reason_code, :priority, :status,
+                      :assigned_to_actor_id, CAST(:payload_summary AS JSONB), :created_at, :updated_at
+                    )
+                    ON CONFLICT (admin_escalation_id) DO UPDATE SET
+                      patient_id=EXCLUDED.patient_id,
+                      reason_code=EXCLUDED.reason_code,
+                      priority=EXCLUDED.priority,
+                      status=EXCLUDED.status,
+                      assigned_to_actor_id=EXCLUDED.assigned_to_actor_id,
+                      payload_summary=EXCLUDED.payload_summary,
+                      updated_at=EXCLUDED.updated_at
+                    """
+                ),
+                payload,
+            )
+        await engine.dispose()
+
+    async def get_admin_escalation(self, admin_escalation_id: str) -> AdminEscalation | None:
+        row = await _fetch_one(
+            self._db_config,
+            """
+            SELECT admin_escalation_id, clinic_id, booking_session_id, patient_id, reason_code, priority, status,
+                   assigned_to_actor_id, payload_summary, created_at, updated_at
+            FROM booking.admin_escalations
+            WHERE admin_escalation_id=:admin_escalation_id
+            """,
+            {"admin_escalation_id": admin_escalation_id},
+        )
+        return AdminEscalation(**row) if row else None
+
+
+async def _fetch_one(db_config, sql: str, params: dict) -> dict | None:
+    engine = create_engine(db_config)
+    async with engine.connect() as conn:
+        row = (await conn.execute(text(sql), params)).mappings().first()
+    await engine.dispose()
+    return dict(row) if row else None
+
+
+async def _fetch_all(db_config, sql: str, params: dict) -> list[dict]:
+    engine = create_engine(db_config)
+    async with engine.connect() as conn:
+        rows = list((await conn.execute(text(sql), params)).mappings())
+    await engine.dispose()
+    return [dict(row) for row in rows]
+
+
+async def seed_stack3_booking(db_config, path: Path) -> dict[str, int]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    engine = create_engine(db_config)
+    async with engine.begin() as conn:
+        await _seed_rows(conn, payload)
+    await engine.dispose()
+    return {key: len(payload.get(key, [])) for key in payload}
+
+
+async def _seed_rows(conn, payload: dict) -> None:
+    statements = {
+        "booking_sessions": (
+            "booking.booking_sessions",
+            [
+                "booking_session_id",
+                "clinic_id",
+                "branch_id",
+                "telegram_user_id",
+                "resolved_patient_id",
+                "status",
+                "route_type",
+                "service_id",
+                "urgency_type",
+                "requested_date_type",
+                "requested_date",
+                "time_window",
+                "doctor_preference_type",
+                "doctor_id",
+                "doctor_code_raw",
+                "selected_slot_id",
+                "selected_hold_id",
+                "contact_phone_snapshot",
+                "notes",
+                "expires_at",
+                "created_at",
+                "updated_at",
+            ],
+        ),
+        "session_events": (
+            "booking.session_events",
+            ["session_event_id", "booking_session_id", "event_name", "payload_json", "actor_type", "actor_id", "occurred_at"],
+        ),
+        "availability_slots": (
+            "booking.availability_slots",
+            ["slot_id", "clinic_id", "branch_id", "doctor_id", "start_at", "end_at", "status", "visibility_policy", "service_scope", "source_ref", "updated_at"],
+        ),
+        "slot_holds": (
+            "booking.slot_holds",
+            ["slot_hold_id", "clinic_id", "slot_id", "booking_session_id", "telegram_user_id", "status", "expires_at", "created_at"],
+        ),
+        "bookings": (
+            "booking.bookings",
+            [
+                "booking_id",
+                "clinic_id",
+                "branch_id",
+                "patient_id",
+                "doctor_id",
+                "service_id",
+                "slot_id",
+                "booking_mode",
+                "source_channel",
+                "scheduled_start_at",
+                "scheduled_end_at",
+                "status",
+                "reason_for_visit_short",
+                "patient_note",
+                "confirmation_required",
+                "confirmed_at",
+                "canceled_at",
+                "checked_in_at",
+                "in_service_at",
+                "completed_at",
+                "no_show_at",
+                "created_at",
+                "updated_at",
+            ],
+        ),
+        "booking_status_history": (
+            "booking.booking_status_history",
+            ["booking_status_history_id", "booking_id", "old_status", "new_status", "reason_code", "actor_type", "actor_id", "occurred_at"],
+        ),
+        "waitlist_entries": (
+            "booking.waitlist_entries",
+            [
+                "waitlist_entry_id",
+                "clinic_id",
+                "branch_id",
+                "patient_id",
+                "telegram_user_id",
+                "service_id",
+                "doctor_id",
+                "date_window",
+                "time_window",
+                "priority",
+                "status",
+                "source_session_id",
+                "notes",
+                "created_at",
+                "updated_at",
+            ],
+        ),
+        "admin_escalations": (
+            "booking.admin_escalations",
+            [
+                "admin_escalation_id",
+                "clinic_id",
+                "booking_session_id",
+                "patient_id",
+                "reason_code",
+                "priority",
+                "status",
+                "assigned_to_actor_id",
+                "payload_summary",
+                "created_at",
+                "updated_at",
+            ],
+        ),
+    }
+
+    for key, (table, columns) in statements.items():
+        for row in payload.get(key, []):
+            serialized = {name: row.get(name) for name in columns}
+            for json_key in ("payload_json", "service_scope", "date_window", "payload_summary"):
+                if json_key in serialized and serialized[json_key] is not None:
+                    serialized[json_key] = json.dumps(serialized[json_key])
+            col_csv = ", ".join(columns)
+            values = ", ".join(f":{name}" for name in columns)
+            updates = ", ".join(f"{name}=EXCLUDED.{name}" for name in columns if name != columns[0])
+            await conn.execute(
+                text(f"INSERT INTO {table} ({col_csv}) VALUES ({values}) ON CONFLICT ({columns[0]}) DO UPDATE SET {updates}"),
+                serialized,
+            )

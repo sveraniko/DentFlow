@@ -1,0 +1,139 @@
+{
+  "booking_sessions": [
+    {
+      "booking_session_id": "bks_001",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "telegram_user_id": 3001,
+      "resolved_patient_id": "patient_sergey_ivanov",
+      "status": "active",
+      "route_type": "service_first",
+      "service_id": "service_consult",
+      "urgency_type": "planned",
+      "requested_date_type": "specific_date",
+      "requested_date": "2026-04-20",
+      "time_window": "morning",
+      "doctor_preference_type": "specific_doctor",
+      "doctor_id": "doctor_anna",
+      "doctor_code_raw": "ANNA-001",
+      "selected_slot_id": "slot_anna_20260420_1000",
+      "selected_hold_id": "hold_001",
+      "contact_phone_snapshot": "+7 999 123 45 67",
+      "notes": "Seed booking session",
+      "expires_at": "2026-04-20T09:30:00Z",
+      "created_at": "2026-04-20T09:00:00Z",
+      "updated_at": "2026-04-20T09:10:00Z"
+    }
+  ],
+  "session_events": [
+    {
+      "session_event_id": "bse_001",
+      "booking_session_id": "bks_001",
+      "event_name": "session_started",
+      "payload_json": {"surface": "telegram"},
+      "actor_type": "patient",
+      "actor_id": "telegram:3001",
+      "occurred_at": "2026-04-20T09:00:00Z"
+    }
+  ],
+  "availability_slots": [
+    {
+      "slot_id": "slot_anna_20260420_1000",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "doctor_id": "doctor_anna",
+      "start_at": "2026-04-20T10:00:00Z",
+      "end_at": "2026-04-20T10:30:00Z",
+      "status": "open",
+      "visibility_policy": "public",
+      "service_scope": {"service_ids": ["service_consult"]},
+      "source_ref": "seed",
+      "updated_at": "2026-04-20T08:00:00Z"
+    }
+  ],
+  "slot_holds": [
+    {
+      "slot_hold_id": "hold_001",
+      "clinic_id": "clinic_main",
+      "slot_id": "slot_anna_20260420_1000",
+      "booking_session_id": "bks_001",
+      "telegram_user_id": 3001,
+      "status": "active",
+      "expires_at": "2026-04-20T09:20:00Z",
+      "created_at": "2026-04-20T09:05:00Z"
+    }
+  ],
+  "bookings": [
+    {
+      "booking_id": "bkg_001",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "patient_id": "patient_sergey_ivanov",
+      "doctor_id": "doctor_anna",
+      "service_id": "service_consult",
+      "slot_id": "slot_anna_20260420_1000",
+      "booking_mode": "patient_bot",
+      "source_channel": "telegram",
+      "scheduled_start_at": "2026-04-20T10:00:00Z",
+      "scheduled_end_at": "2026-04-20T10:30:00Z",
+      "status": "pending_confirmation",
+      "reason_for_visit_short": "tooth pain",
+      "patient_note": "Sensitive to cold drinks",
+      "confirmation_required": true,
+      "confirmed_at": null,
+      "canceled_at": null,
+      "checked_in_at": null,
+      "in_service_at": null,
+      "completed_at": null,
+      "no_show_at": null,
+      "created_at": "2026-04-20T09:11:00Z",
+      "updated_at": "2026-04-20T09:11:00Z"
+    }
+  ],
+  "booking_status_history": [
+    {
+      "booking_status_history_id": "bsh_001",
+      "booking_id": "bkg_001",
+      "old_status": null,
+      "new_status": "pending_confirmation",
+      "reason_code": "created",
+      "actor_type": "system",
+      "actor_id": "seed",
+      "occurred_at": "2026-04-20T09:11:00Z"
+    }
+  ],
+  "waitlist_entries": [
+    {
+      "waitlist_entry_id": "wle_001",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "patient_id": "patient_elena_ivanova",
+      "telegram_user_id": 3002,
+      "service_id": "service_consult",
+      "doctor_id": "doctor_anna",
+      "date_window": {"from": "2026-04-21", "to": "2026-04-23"},
+      "time_window": "afternoon",
+      "priority": 1,
+      "status": "active",
+      "source_session_id": "bks_001",
+      "notes": "Can come on short notice",
+      "created_at": "2026-04-20T09:00:00Z",
+      "updated_at": "2026-04-20T09:00:00Z"
+    }
+  ],
+  "admin_escalations": [
+    {
+      "admin_escalation_id": "aes_001",
+      "clinic_id": "clinic_main",
+      "booking_session_id": "bks_001",
+      "patient_id": "patient_sergey_ivanov",
+      "reason_code": "manual_verification_needed",
+      "priority": "normal",
+      "status": "open",
+      "assigned_to_actor_id": "actor_admin",
+      "payload_summary": {"note": "Verify previous no-show"},
+      "created_at": "2026-04-20T09:12:00Z",
+      "updated_at": "2026-04-20T09:12:00Z"
+    }
+  ]
+}
