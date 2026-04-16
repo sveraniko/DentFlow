@@ -54,6 +54,7 @@ class BookingOrchestrationTransaction(Protocol):
     async def get_waitlist_entry_for_update(self, waitlist_entry_id: str) -> WaitlistEntry | None: ...
     async def find_slot_hold_for_update(self, *, slot_id: str, booking_session_id: str) -> SlotHold | None: ...
     async def list_active_holds_for_slot_for_update(self, *, slot_id: str) -> list[SlotHold]: ...
+    async def list_active_holds_for_session_for_update(self, *, booking_session_id: str) -> list[SlotHold]: ...
     async def list_live_bookings_for_slot_for_update(self, *, slot_id: str) -> list[Booking]: ...
 
 
@@ -245,12 +246,30 @@ class BookingOrchestrationService:
             if await tx.list_live_bookings_for_slot_for_update(slot_id=slot_id):
                 return SlotUnavailableOutcome(kind="slot_unavailable", reason="slot already occupied by live booking")
 
-            active_holds = await tx.list_active_holds_for_slot_for_update(slot_id=slot_id)
-            owned_hold = next((h for h in active_holds if h.booking_session_id == booking_session_id), None)
-            if active_holds and owned_hold is None:
+            slot_active_holds = await tx.list_active_holds_for_slot_for_update(slot_id=slot_id)
+            if any(hold.booking_session_id != booking_session_id for hold in slot_active_holds):
                 return ConflictOutcome(kind="conflict", reason="slot already has an active hold")
 
-            hold = owned_hold or await tx.find_slot_hold_for_update(slot_id=slot_id, booking_session_id=booking_session_id)
+            session_active_holds = await tx.list_active_holds_for_session_for_update(booking_session_id=booking_session_id)
+            hold = next((h for h in session_active_holds if h.slot_id == slot_id), None)
+
+            for stale_hold in session_active_holds:
+                if hold is not None and stale_hold.slot_hold_id == hold.slot_hold_id:
+                    continue
+                try:
+                    await self.slot_hold_state_service.transition_hold_in_transaction(
+                        tx=tx,
+                        current=stale_hold,
+                        to_status="released",
+                        session_event_name="slot_hold.released",
+                        payload_json={"replaced_by_slot_id": slot_id},
+                        occurred_at=now,
+                    )
+                except InvalidSlotHoldTransitionError:
+                    return InvalidStateOutcome(kind="invalid_state", reason="active hold cannot be released for slot reselection")
+
+            if hold is None:
+                hold = await tx.find_slot_hold_for_update(slot_id=slot_id, booking_session_id=booking_session_id)
             if hold is not None and hold.status in TERMINAL_HOLD_STATUSES:
                 hold = None
             if hold is None:
@@ -266,17 +285,21 @@ class BookingOrchestrationService:
                 )
                 await tx.upsert_slot_hold(hold)
 
-            try:
-                hold_transition = await self.slot_hold_state_service.transition_hold_in_transaction(
-                    tx=tx,
-                    current=hold,
-                    to_status="active",
-                    session_event_name="slot_hold.activated",
-                    payload_json={"slot_id": slot_id},
-                    occurred_at=now,
-                )
-            except InvalidSlotHoldTransitionError:
-                return ConflictOutcome(kind="conflict", reason="hold cannot be activated from current status")
+            if hold.status == "active":
+                active_hold = hold
+            else:
+                try:
+                    hold_transition = await self.slot_hold_state_service.transition_hold_in_transaction(
+                        tx=tx,
+                        current=hold,
+                        to_status="active",
+                        session_event_name="slot_hold.activated",
+                        payload_json={"slot_id": slot_id},
+                        occurred_at=now,
+                    )
+                except InvalidSlotHoldTransitionError:
+                    return ConflictOutcome(kind="conflict", reason="hold cannot be activated from current status")
+                active_hold = hold_transition.entity
 
             progressed_session = await self._advance_session_for_slot_selection(
                 tx=tx,
@@ -290,12 +313,12 @@ class BookingOrchestrationService:
                 **{
                     **asdict(progressed_session),
                     "selected_slot_id": slot_id,
-                    "selected_hold_id": hold_transition.entity.slot_hold_id,
+                    "selected_hold_id": active_hold.slot_hold_id,
                     "updated_at": now,
                 }
             )
             await tx.upsert_booking_session(updated_session)
-            return OrchestrationSuccess(kind="success", entity=hold_transition.entity)
+            return OrchestrationSuccess(kind="success", entity=active_hold)
 
     async def release_or_expire_hold_for_session(self, *, booking_session_id: str, action: str = "released") -> HoldOutcome:
         if action not in {"released", "expired"}:
@@ -345,6 +368,13 @@ class BookingOrchestrationService:
                 return InvalidStateOutcome(kind="invalid_state", reason="booking session not found")
             if not session.selected_slot_id or not session.selected_hold_id:
                 return InvalidStateOutcome(kind="invalid_state", reason="session requires selected slot and active hold")
+            selected_hold = await tx.get_slot_hold_for_update(session.selected_hold_id)
+            if selected_hold is None or selected_hold.booking_session_id != session.booking_session_id:
+                return InvalidStateOutcome(kind="invalid_state", reason="selected hold is missing for this session")
+            if selected_hold.status != "active":
+                return InvalidStateOutcome(kind="invalid_state", reason="session requires selected active hold")
+            if selected_hold.slot_id != session.selected_slot_id:
+                return InvalidStateOutcome(kind="invalid_state", reason="selected hold does not match selected slot")
             if session.resolved_patient_id is None:
                 return InvalidStateOutcome(kind="invalid_state", reason="session requires resolved patient")
             contact_required = bool(
@@ -452,10 +482,9 @@ class BookingOrchestrationService:
             session = await tx.get_booking_session_for_update(booking_session_id)
             if session is None:
                 return InvalidStateOutcome(kind="invalid_state", reason="booking session not found")
-            if session.selected_hold_id:
-                hold = await tx.get_slot_hold_for_update(session.selected_hold_id)
-                if hold and hold.status == "active":
-                    await self.slot_hold_state_service.transition_hold_in_transaction(tx=tx, current=hold, to_status="released")
+            active_holds = await tx.list_active_holds_for_session_for_update(booking_session_id=booking_session_id)
+            for hold in active_holds:
+                await self.slot_hold_state_service.transition_hold_in_transaction(tx=tx, current=hold, to_status="released")
             transitioned = await self.booking_session_state_service.transition_session_in_transaction(tx=tx, current=session, to_status="canceled")
             return OrchestrationSuccess(kind="success", entity=transitioned.entity)
 
@@ -464,10 +493,9 @@ class BookingOrchestrationService:
             session = await tx.get_booking_session_for_update(booking_session_id)
             if session is None:
                 return InvalidStateOutcome(kind="invalid_state", reason="booking session not found")
-            if session.selected_hold_id:
-                hold = await tx.get_slot_hold_for_update(session.selected_hold_id)
-                if hold and hold.status == "active":
-                    await self.slot_hold_state_service.transition_hold_in_transaction(tx=tx, current=hold, to_status="expired")
+            active_holds = await tx.list_active_holds_for_session_for_update(booking_session_id=booking_session_id)
+            for hold in active_holds:
+                await self.slot_hold_state_service.transition_hold_in_transaction(tx=tx, current=hold, to_status="expired")
             transitioned = await self.booking_session_state_service.transition_session_in_transaction(tx=tx, current=session, to_status="expired")
             return OrchestrationSuccess(kind="success", entity=transitioned.entity)
 

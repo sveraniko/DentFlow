@@ -400,6 +400,11 @@ STACK1_TABLES: tuple[str, ...] = (
     WHERE status = 'active'
     """,
     """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_slot_holds_active_session
+    ON booking.slot_holds (booking_session_id)
+    WHERE status = 'active'
+    """,
+    """
     CREATE TABLE IF NOT EXISTS booking.bookings (
       booking_id TEXT PRIMARY KEY,
       clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
