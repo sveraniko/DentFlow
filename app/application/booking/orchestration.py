@@ -37,6 +37,7 @@ LIVE_SLOT_BOOKING_STATUSES: tuple[str, ...] = (
     "checked_in",
     "in_service",
 )
+TERMINAL_HOLD_STATUSES: tuple[str, ...] = ("released", "expired", "canceled", "consumed")
 
 
 class BookingOrchestrationTransaction(Protocol):
@@ -69,6 +70,76 @@ class BookingOrchestrationService:
     waitlist_state_service: WaitlistStateService
     patient_resolution_service: BookingPatientResolutionService
     policy_resolver: PolicyResolver
+
+    async def _transition_session_within_transaction(
+        self,
+        *,
+        tx: BookingOrchestrationTransaction,
+        current: BookingSession,
+        to_status: str,
+        occurred_at: datetime,
+        payload_json: dict[str, object] | None = None,
+    ) -> BookingSession | None:
+        try:
+            transitioned = await self.booking_session_state_service.transition_session_in_transaction(
+                tx=tx,
+                current=current,
+                to_status=to_status,
+                payload_json=payload_json,
+                occurred_at=occurred_at,
+            )
+        except InvalidSessionTransitionError:
+            return None
+        return transitioned.entity
+
+    async def _advance_session_for_slot_selection(
+        self,
+        *,
+        tx: BookingOrchestrationTransaction,
+        session: BookingSession,
+        contact_phone_snapshot: str | None,
+        occurred_at: datetime,
+    ) -> BookingSession | None:
+        target = "awaiting_contact_confirmation" if contact_phone_snapshot is None else "in_progress"
+        if session.status == target:
+            return session
+
+        current = session
+        if target == "awaiting_contact_confirmation" and current.status != "awaiting_slot_selection":
+            if current.status == "initiated":
+                transitioned = await self._transition_session_within_transaction(
+                    tx=tx, current=current, to_status="in_progress", occurred_at=occurred_at
+                )
+                if transitioned is None:
+                    return None
+                current = transitioned
+            if current.status != "awaiting_slot_selection":
+                transitioned = await self._transition_session_within_transaction(
+                    tx=tx, current=current, to_status="awaiting_slot_selection", occurred_at=occurred_at
+                )
+                if transitioned is None:
+                    return None
+                current = transitioned
+            transitioned = await self._transition_session_within_transaction(
+                tx=tx, current=current, to_status="awaiting_contact_confirmation", occurred_at=occurred_at
+            )
+            return transitioned
+
+        if target == "in_progress" and current.status == "review_ready":
+            to_contact = await self._transition_session_within_transaction(
+                tx=tx,
+                current=current,
+                to_status="awaiting_contact_confirmation",
+                occurred_at=occurred_at,
+            )
+            if to_contact is None:
+                return None
+            current = to_contact
+
+        transitioned = await self._transition_session_within_transaction(
+            tx=tx, current=current, to_status=target, occurred_at=occurred_at
+        )
+        return transitioned
 
     async def start_booking_session(
         self, *, clinic_id: str, telegram_user_id: int, route_type: str, branch_id: str | None = None, expires_at: datetime | None = None
@@ -180,6 +251,8 @@ class BookingOrchestrationService:
                 return ConflictOutcome(kind="conflict", reason="slot already has an active hold")
 
             hold = owned_hold or await tx.find_slot_hold_for_update(slot_id=slot_id, booking_session_id=booking_session_id)
+            if hold is not None and hold.status in TERMINAL_HOLD_STATUSES:
+                hold = None
             if hold is None:
                 hold = SlotHold(
                     slot_hold_id=f"bsh_{uuid4().hex}",
@@ -205,12 +278,19 @@ class BookingOrchestrationService:
             except InvalidSlotHoldTransitionError:
                 return ConflictOutcome(kind="conflict", reason="hold cannot be activated from current status")
 
+            progressed_session = await self._advance_session_for_slot_selection(
+                tx=tx,
+                session=session,
+                contact_phone_snapshot=session.contact_phone_snapshot,
+                occurred_at=now,
+            )
+            if progressed_session is None:
+                return InvalidStateOutcome(kind="invalid_state", reason="session cannot progress to slot-selection state canonically")
             updated_session = BookingSession(
                 **{
-                    **asdict(session),
+                    **asdict(progressed_session),
                     "selected_slot_id": slot_id,
                     "selected_hold_id": hold_transition.entity.slot_hold_id,
-                    "status": "awaiting_contact_confirmation" if session.contact_phone_snapshot is None else "in_progress",
                     "updated_at": now,
                 }
             )
@@ -237,12 +317,21 @@ class BookingOrchestrationService:
             except InvalidSlotHoldTransitionError:
                 return InvalidStateOutcome(kind="invalid_state", reason=f"hold cannot transition to {action}")
 
+            transitioned_session = await self._transition_session_within_transaction(
+                tx=tx,
+                current=session,
+                to_status="awaiting_slot_selection",
+                occurred_at=datetime.now(timezone.utc),
+                payload_json={"hold_action": action},
+            )
+            if transitioned_session is None:
+                return InvalidStateOutcome(kind="invalid_state", reason="session cannot transition to awaiting_slot_selection")
+
             updated_session = BookingSession(
                 **{
-                    **asdict(session),
+                    **asdict(transitioned_session),
                     "selected_hold_id": None,
                     "selected_slot_id": None,
-                    "status": "awaiting_slot_selection",
                     "updated_at": datetime.now(timezone.utc),
                 }
             )
@@ -287,6 +376,8 @@ class BookingOrchestrationService:
                 return InvalidStateOutcome(kind="invalid_state", reason="session is not review_ready")
             if session.resolved_patient_id is None:
                 return InvalidStateOutcome(kind="invalid_state", reason="cannot finalize booking without resolved patient")
+            if session.service_id is None:
+                return InvalidStateOutcome(kind="invalid_state", reason="cannot finalize booking without selected service")
             if not session.selected_slot_id or not session.selected_hold_id:
                 return InvalidStateOutcome(kind="invalid_state", reason="cannot finalize without selected slot and hold")
 
@@ -315,7 +406,7 @@ class BookingOrchestrationService:
                 branch_id=session.branch_id,
                 patient_id=session.resolved_patient_id,
                 doctor_id=slot.doctor_id,
-                service_id=session.service_id or "service_unknown",
+                service_id=session.service_id,
                 slot_id=slot.slot_id,
                 booking_mode="patient_bot",
                 source_channel="telegram",
