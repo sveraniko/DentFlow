@@ -15,6 +15,7 @@ from app.application.booking import (
     BookingStateService,
     SlotHoldService,
     SlotHoldStateService,
+    BookingPatientFlowService,
     WaitlistStateService,
     WaitlistService,
 )
@@ -23,7 +24,7 @@ from app.application.policy import PolicyResolver
 from app.common.i18n import I18nService
 from app.config.settings import Settings
 from app.infrastructure.db.booking_repository import DbBookingRepository
-from app.infrastructure.db.patient_repository import find_patients_by_exact_contact, find_patients_by_external_id
+from app.infrastructure.db.patient_repository import DbCanonicalPatientCreator, find_patients_by_exact_contact, find_patients_by_external_id
 from app.infrastructure.db.repositories import DbAccessRepository, DbClinicReferenceRepository, DbPolicyRepository
 from app.interfaces.bots.admin.router import make_router as make_admin_router
 from app.interfaces.bots.doctor.router import make_router as make_doctor_router
@@ -64,15 +65,29 @@ class RuntimeRegistry:
             patient_resolution_service=self.booking_patient_resolution_service,
             policy_resolver=self.policy_resolver,
         )
+        self.booking_patient_flow_service = BookingPatientFlowService(
+            orchestration=self.booking_orchestration_service,
+            reads=self.booking_repository,
+            reference=self.reference_service,
+            patient_creator=DbCanonicalPatientCreator(settings.db),
+        )
 
     def build_dispatcher(self) -> Dispatcher:
         dispatcher = Dispatcher()
-        dispatcher.include_router(make_patient_router(self.i18n, default_locale=self.settings.app.default_locale))
+        dispatcher.include_router(
+            make_patient_router(
+                self.i18n,
+                self.booking_patient_flow_service,
+                self.reference_service,
+                default_locale=self.settings.app.default_locale,
+            )
+        )
         dispatcher.include_router(
             make_admin_router(
                 self.i18n,
                 self.access_resolver,
                 self.reference_service,
+                self.booking_patient_flow_service,
                 default_locale=self.settings.app.default_locale,
             )
         )

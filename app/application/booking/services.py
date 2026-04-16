@@ -42,6 +42,19 @@ class BookingRepository(Protocol):
 
     async def upsert_admin_escalation(self, item: AdminEscalation) -> None: ...
     async def get_admin_escalation(self, admin_escalation_id: str) -> AdminEscalation | None: ...
+    async def list_active_sessions_for_telegram_user(self, *, clinic_id: str, telegram_user_id: int) -> list[BookingSession]: ...
+    async def list_open_slots(
+        self,
+        *,
+        clinic_id: str,
+        start_at: datetime,
+        end_at: datetime,
+        doctor_id: str | None,
+        branch_id: str | None,
+        limit: int,
+    ) -> list[AvailabilitySlot]: ...
+    async def list_open_admin_escalations(self, *, clinic_id: str, limit: int) -> list[AdminEscalation]: ...
+    async def list_recent_bookings_by_statuses(self, *, clinic_id: str, statuses: tuple[str, ...], limit: int) -> list[Booking]: ...
 
 
 @dataclass(slots=True)

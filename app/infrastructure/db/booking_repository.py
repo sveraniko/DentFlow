@@ -81,6 +81,23 @@ class DbBookingRepository(BookingRepository):
         )
         return BookingSession(**row) if row else None
 
+    async def list_active_sessions_for_telegram_user(self, *, clinic_id: str, telegram_user_id: int) -> list[BookingSession]:
+        rows = await _fetch_all(
+            self._db_config,
+            """
+            SELECT booking_session_id, clinic_id, branch_id, telegram_user_id, resolved_patient_id, status, route_type, service_id,
+                   urgency_type, requested_date_type, requested_date, time_window, doctor_preference_type, doctor_id, doctor_code_raw,
+                   selected_slot_id, selected_hold_id, contact_phone_snapshot, notes, expires_at, created_at, updated_at
+            FROM booking.booking_sessions
+            WHERE clinic_id=:clinic_id
+              AND telegram_user_id=:telegram_user_id
+              AND status IN ('initiated', 'in_progress', 'awaiting_slot_selection', 'awaiting_contact_confirmation', 'review_ready')
+            ORDER BY updated_at DESC
+            """,
+            {"clinic_id": clinic_id, "telegram_user_id": telegram_user_id},
+        )
+        return [BookingSession(**row) for row in rows]
+
     async def get_booking_session_for_update(self, booking_session_id: str) -> BookingSession | None:
         async with self.transaction() as tx:
             return await tx.get_booking_session_for_update(booking_session_id)
@@ -164,6 +181,41 @@ class DbBookingRepository(BookingRepository):
             ORDER BY start_at ASC
             """,
             {"doctor_id": doctor_id, "start_at": start_at, "end_at": end_at},
+        )
+        return [AvailabilitySlot(**row) for row in rows]
+
+    async def list_open_slots(
+        self,
+        *,
+        clinic_id: str,
+        start_at: datetime,
+        end_at: datetime,
+        doctor_id: str | None,
+        branch_id: str | None,
+        limit: int,
+    ) -> list[AvailabilitySlot]:
+        rows = await _fetch_all(
+            self._db_config,
+            """
+            SELECT slot_id, clinic_id, branch_id, doctor_id, start_at, end_at, status, visibility_policy, service_scope, source_ref, updated_at
+            FROM booking.availability_slots
+            WHERE clinic_id=:clinic_id
+              AND status='open'
+              AND start_at >= :start_at
+              AND start_at < :end_at
+              AND (:doctor_id IS NULL OR doctor_id=:doctor_id)
+              AND (:branch_id IS NULL OR branch_id=:branch_id)
+            ORDER BY start_at ASC, slot_id ASC
+            LIMIT :limit
+            """,
+            {
+                "clinic_id": clinic_id,
+                "start_at": start_at,
+                "end_at": end_at,
+                "doctor_id": doctor_id,
+                "branch_id": branch_id,
+                "limit": limit,
+            },
         )
         return [AvailabilitySlot(**row) for row in rows]
 
@@ -454,6 +506,38 @@ class DbBookingRepository(BookingRepository):
             {"admin_escalation_id": admin_escalation_id},
         )
         return AdminEscalation(**row) if row else None
+
+    async def list_open_admin_escalations(self, *, clinic_id: str, limit: int) -> list[AdminEscalation]:
+        rows = await _fetch_all(
+            self._db_config,
+            """
+            SELECT admin_escalation_id, clinic_id, booking_session_id, patient_id, reason_code, priority, status,
+                   assigned_to_actor_id, payload_summary, created_at, updated_at
+            FROM booking.admin_escalations
+            WHERE clinic_id=:clinic_id AND status='open'
+            ORDER BY created_at DESC
+            LIMIT :limit
+            """,
+            {"clinic_id": clinic_id, "limit": limit},
+        )
+        return [AdminEscalation(**row) for row in rows]
+
+    async def list_recent_bookings_by_statuses(self, *, clinic_id: str, statuses: tuple[str, ...], limit: int) -> list[Booking]:
+        rows = await _fetch_all(
+            self._db_config,
+            """
+            SELECT booking_id, clinic_id, branch_id, patient_id, doctor_id, service_id, slot_id, booking_mode, source_channel,
+                   scheduled_start_at, scheduled_end_at, status, reason_for_visit_short, patient_note, confirmation_required,
+                   confirmed_at, canceled_at, checked_in_at, in_service_at, completed_at, no_show_at, created_at, updated_at
+            FROM booking.bookings
+            WHERE clinic_id=:clinic_id
+              AND status = ANY(:statuses)
+            ORDER BY created_at DESC
+            LIMIT :limit
+            """,
+            {"clinic_id": clinic_id, "statuses": list(statuses), "limit": limit},
+        )
+        return [Booking(**row) for row in rows]
 
     async def _upsert_admin_escalation_on_conn(self, conn: Any, item: AdminEscalation) -> None:
         payload = asdict(item)
