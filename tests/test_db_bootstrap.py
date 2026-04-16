@@ -36,12 +36,15 @@ class _Engine:
 
 
 @pytest.mark.asyncio
-async def test_db_bootstrap_creates_all_schemas(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_db_bootstrap_creates_all_schemas_and_stack1_tables(monkeypatch: pytest.MonkeyPatch) -> None:
     engine = _Engine()
     monkeypatch.setattr(db_bootstrap, "create_engine", lambda config: engine)
 
     await db_bootstrap.bootstrap_database(object())
 
-    assert len(engine.conn.executed) == len(db_bootstrap.SCHEMAS)
-    assert "core_patient" in " ".join(engine.conn.executed)
-    assert "owner_views" in " ".join(engine.conn.executed)
+    executed = "\n".join(engine.conn.executed)
+    assert len(engine.conn.executed) == len(db_bootstrap.SCHEMAS) + len(db_bootstrap.STACK1_TABLES)
+    assert "CREATE SCHEMA IF NOT EXISTS \"core_reference\"" in executed
+    assert "CREATE TABLE IF NOT EXISTS core_reference.clinics" in executed
+    assert "CREATE TABLE IF NOT EXISTS access_identity.actor_identities" in executed
+    assert "CREATE TABLE IF NOT EXISTS policy_config.policy_sets" in executed

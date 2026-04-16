@@ -5,5 +5,13 @@
   "role.admin.home": "Admin: home panel",
   "role.doctor.home": "Doctor: operational panel",
   "role.owner.home": "Owner: home panel",
-  "common.language.current": "Current language: English"
+  "common.language.current": "Current language: English",
+  "access.denied.unbound": "Access denied: account is not bound to a staff actor.",
+  "access.denied.role": "Access denied: your role cannot open this surface.",
+  "access.allowed": "Access allowed",
+  "admin.reference.empty": "Clinic reference data has not been loaded yet.",
+  "admin.reference.clinic": "Clinic: {name}\nCode: {code}\nTimezone: {timezone}\nStatus: {status}",
+  "admin.reference.branches": "Branches",
+  "admin.reference.doctors": "Doctors",
+  "admin.reference.services": "Services"
 }

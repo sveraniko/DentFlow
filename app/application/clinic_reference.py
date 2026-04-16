@@ -1,0 +1,49 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from app.domain.clinic_reference.models import Branch, Clinic, Doctor, DoctorAccessCode, Service
+
+
+class InMemoryClinicReferenceRepository:
+    def __init__(self) -> None:
+        self.clinics: dict[str, Clinic] = {}
+        self.branches: dict[str, Branch] = {}
+        self.doctors: dict[str, Doctor] = {}
+        self.services: dict[str, Service] = {}
+        self.doctor_access_codes: dict[str, DoctorAccessCode] = {}
+
+    def upsert_clinic(self, clinic: Clinic) -> None:
+        self.clinics[clinic.clinic_id] = clinic
+
+    def upsert_branch(self, branch: Branch) -> None:
+        self.branches[branch.branch_id] = branch
+
+    def upsert_doctor(self, doctor: Doctor) -> None:
+        self.doctors[doctor.doctor_id] = doctor
+
+    def upsert_service(self, service: Service) -> None:
+        self.services[service.service_id] = service
+
+    def upsert_doctor_access_code(self, access_code: DoctorAccessCode) -> None:
+        self.doctor_access_codes[access_code.doctor_access_code_id] = access_code
+
+
+@dataclass(slots=True)
+class ClinicReferenceService:
+    repository: InMemoryClinicReferenceRepository
+
+    def get_clinic(self, clinic_id: str) -> Clinic | None:
+        return self.repository.clinics.get(clinic_id)
+
+    def list_branches(self, clinic_id: str) -> list[Branch]:
+        return [b for b in self.repository.branches.values() if b.clinic_id == clinic_id]
+
+    def list_doctors(self, clinic_id: str, branch_id: str | None = None) -> list[Doctor]:
+        doctors = [d for d in self.repository.doctors.values() if d.clinic_id == clinic_id]
+        if branch_id is not None:
+            doctors = [d for d in doctors if d.branch_id in (None, branch_id)]
+        return doctors
+
+    def list_services(self, clinic_id: str) -> list[Service]:
+        return [s for s in self.repository.services.values() if s.clinic_id == clinic_id]
