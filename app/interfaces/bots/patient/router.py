@@ -338,7 +338,7 @@ def make_router(
             if not clinic_id:
                 return
             result = await booking_flow.resolve_existing_booking_by_contact(clinic_id=clinic_id, telegram_user_id=actor_id, phone=phone)
-            await _show_existing_booking_result(message, actor_id=actor_id, session_id=session_id, result=result)
+            await _show_existing_booking_result(message, actor_id=actor_id, result=result)
             return
         await booking_flow.set_contact_phone(booking_session_id=session_id, phone=phone)
         display_name = (message.from_user.full_name or "").strip() or i18n.t("patient.booking.contact.default_name", locale)
@@ -439,30 +439,33 @@ def make_router(
             next_step=i18n.t(card.next_step_key, locale),
         )
 
-    async def _show_existing_booking_result(message: Message, *, actor_id: int, session_id: str, result: BookingControlResolutionResult) -> None:
+    async def _show_existing_booking_result(message: Message, *, actor_id: int, result: BookingControlResolutionResult) -> None:
         locale = _locale()
+        effective_session_id = result.booking_session.booking_session_id if result.booking_session else session_by_user.get(actor_id, "")
+        if effective_session_id:
+            session_by_user[actor_id] = effective_session_id
         if result.kind == "ambiguous_escalated":
-            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=session_id, text=i18n.t("patient.booking.escalated", locale))
+            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=effective_session_id, text=i18n.t("patient.booking.escalated", locale))
             return
         if result.kind == "no_match":
-            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=session_id, text=i18n.t("patient.booking.my.no_match", locale))
+            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=effective_session_id, text=i18n.t("patient.booking.my.no_match", locale))
             return
         if result.kind != "exact_match" or not result.bookings:
-            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=session_id, text=i18n.t("patient.booking.finalize.invalid_state", locale))
+            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=effective_session_id, text=i18n.t("patient.booking.finalize.invalid_state", locale))
             return
         booking = result.bookings[0]
         card = booking_flow.build_booking_card(booking=booking)
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text=i18n.t("patient.booking.my.reschedule", locale), callback_data=f"mybk:reschedule:{session_id}:{booking.booking_id}")],
-                [InlineKeyboardButton(text=i18n.t("patient.booking.my.earlier_slot", locale), callback_data=f"mybk:waitlist:{session_id}:{booking.booking_id}")],
-                [InlineKeyboardButton(text=i18n.t("patient.booking.my.cancel", locale), callback_data=f"mybk:cancel_prompt:{session_id}:{booking.booking_id}")],
+                [InlineKeyboardButton(text=i18n.t("patient.booking.my.reschedule", locale), callback_data=f"mybk:reschedule:{effective_session_id}:{booking.booking_id}")],
+                [InlineKeyboardButton(text=i18n.t("patient.booking.my.earlier_slot", locale), callback_data=f"mybk:waitlist:{effective_session_id}:{booking.booking_id}")],
+                [InlineKeyboardButton(text=i18n.t("patient.booking.my.cancel", locale), callback_data=f"mybk:cancel_prompt:{effective_session_id}:{booking.booking_id}")],
             ]
         )
         await _send_or_edit_panel(
             actor_id=actor_id,
             message=message,
-            session_id=session_id,
+            session_id=effective_session_id,
             text=_render_booking_card_text(card, locale=locale),
             keyboard=keyboard,
         )

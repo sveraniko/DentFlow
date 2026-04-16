@@ -118,6 +118,14 @@ class BookingPatientFlowService:
         )
         return started.entity
 
+    async def start_new_existing_booking_session(self, *, clinic_id: str, telegram_user_id: int) -> BookingSession:
+        started = await self.orchestration.start_booking_session(
+            clinic_id=clinic_id,
+            telegram_user_id=telegram_user_id,
+            route_type="existing_booking_control",
+        )
+        return started.entity
+
     async def determine_resume_panel(self, *, booking_session_id: str) -> BookingResumePanel | None:
         session = await self.reads.get_booking_session(booking_session_id)
         if session is None:
@@ -296,7 +304,7 @@ class BookingPatientFlowService:
         telegram_user_id: int,
         phone: str,
     ) -> BookingControlResolutionResult:
-        session = await self.start_or_resume_existing_booking_session(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
+        session = await self.start_new_existing_booking_session(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
         resolution = await self.resolve_patient_for_existing_booking_contact(
             booking_session_id=session.booking_session_id,
             phone=phone,
@@ -304,7 +312,11 @@ class BookingPatientFlowService:
         if resolution.kind == "no_match":
             return BookingControlResolutionResult(kind="no_match", booking_session=resolution.booking_session or session)
         if resolution.kind == "ambiguous_escalated":
-            return BookingControlResolutionResult(kind="ambiguous_escalated", booking_session=session)
+            guard_session = await self.start_new_existing_booking_session(
+                clinic_id=clinic_id,
+                telegram_user_id=telegram_user_id,
+            )
+            return BookingControlResolutionResult(kind="ambiguous_escalated", booking_session=guard_session)
         if resolution.kind == "invalid_state":
             return BookingControlResolutionResult(kind="invalid_state", booking_session=session)
         resolved_session = resolution.booking_session
