@@ -372,3 +372,20 @@ It must be built from already-proven patterns:
 The product may be ambitious.
 
 The implementation must stay disciplined.
+
+---
+
+## 10. Stack 0 bootstrap commands
+
+```bash
+cp .env.example .env
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+make db-bootstrap
+make test
+make run-app
+make run-worker
+```
+
+This repository now includes Stack 0 foundation skeletons for config, runtime, i18n, DB bootstrap, worker bootstrap, and smoke tests.

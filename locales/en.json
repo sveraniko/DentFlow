@@ -1,0 +1,9 @@
+{
+  "common.start": "DentFlow started",
+  "common.placeholder": "Operational flow will be added in next stacks.",
+  "role.patient.home": "Patient: home panel",
+  "role.admin.home": "Admin: home panel",
+  "role.doctor.home": "Doctor: operational panel",
+  "role.owner.home": "Owner: home panel",
+  "common.language.current": "Current language: English"
+}

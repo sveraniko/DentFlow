@@ -1,0 +1,9 @@
+{
+  "common.start": "Запуск DentFlow",
+  "common.placeholder": "Скоро здесь появится рабочий поток.",
+  "role.patient.home": "Пациент: домашняя панель",
+  "role.admin.home": "Администратор: домашняя панель",
+  "role.doctor.home": "Врач: рабочая панель",
+  "role.owner.home": "Владелец: домашняя панель",
+  "common.language.current": "Текущий язык: Русский"
+}
