@@ -660,6 +660,25 @@ class DbBookingUnitOfWork:
         )
         return [SlotHold(**dict(row)) for row in rows]
 
+    async def list_active_holds_for_session_for_update(self, *, booking_session_id: str) -> list[SlotHold]:
+        assert self._conn is not None
+        rows = list(
+            (
+                await self._conn.execute(
+                    text(
+                        """
+                        SELECT slot_hold_id, clinic_id, slot_id, booking_session_id, telegram_user_id, status, expires_at, created_at
+                        FROM booking.slot_holds
+                        WHERE booking_session_id=:booking_session_id AND status='active'
+                        FOR UPDATE
+                        """
+                    ),
+                    {"booking_session_id": booking_session_id},
+                )
+            ).mappings()
+        )
+        return [SlotHold(**dict(row)) for row in rows]
+
     async def list_live_bookings_for_slot_for_update(self, *, slot_id: str) -> list[Booking]:
         assert self._conn is not None
         rows = list(

@@ -62,6 +62,12 @@ class _Tx(AbstractAsyncContextManager):
             for hold in self.repo.holds.values():
                 if hold.slot_id == item.slot_id and hold.slot_hold_id != item.slot_hold_id and hold.status == "active":
                     raise ValueError("uq_slot_holds_active_slot")
+                if (
+                    hold.booking_session_id == item.booking_session_id
+                    and hold.slot_hold_id != item.slot_hold_id
+                    and hold.status == "active"
+                ):
+                    raise ValueError("uq_slot_holds_active_session")
         self.repo.holds[item.slot_hold_id] = item
 
     async def upsert_booking(self, item: Booking) -> None:
@@ -111,6 +117,9 @@ class _Tx(AbstractAsyncContextManager):
 
     async def list_active_holds_for_slot_for_update(self, *, slot_id: str) -> list[SlotHold]:
         return [h for h in self.repo.holds.values() if h.slot_id == slot_id and h.status == "active"]
+
+    async def list_active_holds_for_session_for_update(self, *, booking_session_id: str) -> list[SlotHold]:
+        return [h for h in self.repo.holds.values() if h.booking_session_id == booking_session_id and h.status == "active"]
 
     async def list_live_bookings_for_slot_for_update(self, *, slot_id: str) -> list[Booking]:
         return [
@@ -389,6 +398,67 @@ def test_same_session_same_slot_terminal_hold_gets_fresh_hold(terminal_status: s
     assert isinstance(second, OrchestrationSuccess)
     assert second.entity.status == "active"
     assert second.entity.slot_hold_id != old_hold_id
+
+
+def test_same_session_reselect_different_slot_releases_previous_active_hold() -> None:
+    repo = _Repo()
+    slot2 = AvailabilitySlot(**{**asdict(repo.slots["slot1"]), "slot_id": "slot2"})
+    repo.slots["slot2"] = slot2
+    orchestrator = _build_orchestrator(repo, [{"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"}])
+
+    first = asyncio.run(orchestrator.select_slot_and_activate_hold(booking_session_id="s1", slot_id="slot1"))
+    assert isinstance(first, OrchestrationSuccess)
+    second = asyncio.run(orchestrator.select_slot_and_activate_hold(booking_session_id="s1", slot_id="slot2"))
+    assert isinstance(second, OrchestrationSuccess)
+
+    old_hold = repo.holds[first.entity.slot_hold_id]
+    new_hold = repo.holds[second.entity.slot_hold_id]
+    assert old_hold.status == "released"
+    assert new_hold.status == "active"
+    assert repo.sessions["s1"].selected_slot_id == "slot2"
+    assert repo.sessions["s1"].selected_hold_id == second.entity.slot_hold_id
+
+
+def test_same_session_never_keeps_two_active_holds_after_slot_switch() -> None:
+    repo = _Repo()
+    slot2 = AvailabilitySlot(**{**asdict(repo.slots["slot1"]), "slot_id": "slot2"})
+    repo.slots["slot2"] = slot2
+    orchestrator = _build_orchestrator(repo, [{"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"}])
+
+    first = asyncio.run(orchestrator.select_slot_and_activate_hold(booking_session_id="s1", slot_id="slot1"))
+    assert isinstance(first, OrchestrationSuccess)
+    second = asyncio.run(orchestrator.select_slot_and_activate_hold(booking_session_id="s1", slot_id="slot2"))
+    assert isinstance(second, OrchestrationSuccess)
+
+    active = [hold for hold in repo.holds.values() if hold.booking_session_id == "s1" and hold.status == "active"]
+    assert len(active) == 1
+    assert active[0].slot_id == "slot2"
+
+
+def test_same_session_same_slot_with_active_hold_reuses_existing_hold() -> None:
+    repo = _Repo()
+    orchestrator = _build_orchestrator(repo, [{"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"}])
+
+    first = asyncio.run(orchestrator.select_slot_and_activate_hold(booking_session_id="s1", slot_id="slot1"))
+    assert isinstance(first, OrchestrationSuccess)
+    second = asyncio.run(orchestrator.select_slot_and_activate_hold(booking_session_id="s1", slot_id="slot1"))
+    assert isinstance(second, OrchestrationSuccess)
+    assert second.entity.slot_hold_id == first.entity.slot_hold_id
+    assert len(repo.holds) == 1
+
+
+def test_review_ready_requires_selected_hold_to_be_active() -> None:
+    repo = _Repo()
+    orchestrator = _build_orchestrator(repo, [{"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"}])
+    repo.sessions["s1"] = BookingSession(**{**asdict(repo.sessions["s1"]), "resolved_patient_id": "pat_1"})
+
+    hold = asyncio.run(orchestrator.select_slot_and_activate_hold(booking_session_id="s1", slot_id="slot1"))
+    assert isinstance(hold, OrchestrationSuccess)
+    repo.holds[hold.entity.slot_hold_id] = SlotHold(**{**asdict(repo.holds[hold.entity.slot_hold_id]), "status": "released"})
+
+    result = asyncio.run(orchestrator.mark_session_review_ready(booking_session_id="s1"))
+    assert isinstance(result, InvalidStateOutcome)
+    assert "selected active hold" in result.reason
 
 
 def test_cancel_expire_escalate_waitlist_and_booking_lifecycle() -> None:
