@@ -751,3 +751,34 @@ def test_existing_booking_exact_then_ambiguous_resets_identity_and_invalidates_o
         )
     )
     assert isinstance(stale, InvalidStateOutcome)
+
+
+def test_route_isolation_existing_then_book_uses_service_first_session() -> None:
+    flow, _, _ = _build_flow(finder_rows=[])
+    existing = asyncio.run(flow.start_or_resume_existing_booking_session(clinic_id="clinic_main", telegram_user_id=7101))
+    assert existing.route_type == "existing_booking_control"
+
+    booking = asyncio.run(flow.start_or_resume_session(clinic_id="clinic_main", telegram_user_id=7101))
+    assert booking.route_type == "service_first"
+    assert booking.booking_session_id != existing.booking_session_id
+
+
+def test_route_isolation_book_then_existing_uses_existing_control_session() -> None:
+    flow, _, _ = _build_flow(finder_rows=[])
+    booking = asyncio.run(flow.start_or_resume_session(clinic_id="clinic_main", telegram_user_id=7102))
+    assert booking.route_type == "service_first"
+
+    existing = asyncio.run(flow.start_or_resume_existing_booking_session(clinic_id="clinic_main", telegram_user_id=7102))
+    assert existing.route_type == "existing_booking_control"
+    assert existing.booking_session_id != booking.booking_session_id
+
+
+def test_route_isolation_coexistence_resumes_only_matching_route_family() -> None:
+    flow, _, _ = _build_flow(finder_rows=[])
+    booking = asyncio.run(flow.start_or_resume_session(clinic_id="clinic_main", telegram_user_id=7103))
+    existing = asyncio.run(flow.start_or_resume_existing_booking_session(clinic_id="clinic_main", telegram_user_id=7103))
+
+    resumed_booking = asyncio.run(flow.start_or_resume_session(clinic_id="clinic_main", telegram_user_id=7103))
+    resumed_existing = asyncio.run(flow.start_or_resume_existing_booking_session(clinic_id="clinic_main", telegram_user_id=7103))
+    assert resumed_booking.booking_session_id == booking.booking_session_id
+    assert resumed_existing.booking_session_id == existing.booking_session_id
