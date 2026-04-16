@@ -11,6 +11,13 @@ from app.domain.communication import ReminderJob
 from app.domain.patient_registry.models import PatientPreference
 
 
+class ReminderPlanningTransaction(Protocol):
+    async def create_reminder_job_in_transaction(self, item: ReminderJob) -> None: ...
+    async def cancel_scheduled_reminders_for_booking_in_transaction(
+        self, *, booking_id: str, canceled_at: datetime, reason_code: str
+    ) -> int: ...
+
+
 class ReminderJobRepository(Protocol):
     async def create_reminder_job(self, item: ReminderJob) -> None: ...
     async def list_reminder_jobs_for_booking(self, *, booking_id: str) -> list[ReminderJob]: ...
@@ -96,10 +103,70 @@ class BookingReminderService:
             created.append(job)
         return created
 
+    async def replace_booking_reminder_plan_in_transaction(
+        self,
+        *,
+        tx: ReminderPlanningTransaction,
+        booking: Booking,
+        reason_code: str = "booking_plan_replaced",
+        now: datetime | None = None,
+    ) -> list[ReminderJob]:
+        planned_at = now or datetime.now(timezone.utc)
+        await tx.cancel_scheduled_reminders_for_booking_in_transaction(
+            booking_id=booking.booking_id,
+            canceled_at=planned_at,
+            reason_code=reason_code,
+        )
+
+        plan_items = self.planner.build_plan(booking=booking, now=planned_at)
+        if not plan_items:
+            return []
+
+        planning_group = f"booking:{booking.booking_id}:plan:{planned_at.strftime('%Y%m%dT%H%M%SZ')}"
+        channel, locale = await self._resolve_channel_locale(booking)
+        created: list[ReminderJob] = []
+        for item in plan_items:
+            job = ReminderJob(
+                reminder_id=f"rem_{uuid4().hex}",
+                clinic_id=booking.clinic_id,
+                patient_id=booking.patient_id,
+                booking_id=booking.booking_id,
+                care_order_id=None,
+                recommendation_id=None,
+                reminder_type=item.reminder_type,
+                channel=channel,
+                status="scheduled",
+                scheduled_for=item.scheduled_for,
+                payload_key=item.payload_key,
+                locale_at_send_time=locale,
+                planning_group=planning_group,
+                supersedes_reminder_id=None,
+                created_at=planned_at,
+                updated_at=planned_at,
+            )
+            await tx.create_reminder_job_in_transaction(job)
+            created.append(job)
+        return created
+
     async def cancel_booking_reminder_plan(self, *, booking_id: str, reason_code: str) -> int:
         return await self.repository.cancel_scheduled_reminders_for_booking(
             booking_id=booking_id,
             canceled_at=datetime.now(timezone.utc),
+            reason_code=reason_code,
+        )
+
+    async def cancel_booking_reminder_plan_in_transaction(
+        self,
+        *,
+        tx: ReminderPlanningTransaction,
+        booking_id: str,
+        reason_code: str,
+        now: datetime | None = None,
+    ) -> int:
+        canceled_at = now or datetime.now(timezone.utc)
+        return await tx.cancel_scheduled_reminders_for_booking_in_transaction(
+            booking_id=booking_id,
+            canceled_at=canceled_at,
             reason_code=reason_code,
         )
 

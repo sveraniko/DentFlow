@@ -10,6 +10,7 @@ from sqlalchemy import text
 
 from app.application.booking.services import BookingRepository
 from app.domain.booking import AdminEscalation, AvailabilitySlot, Booking, BookingSession, BookingStatusHistory, SessionEvent, SlotHold, WaitlistEntry
+from app.domain.communication import ReminderJob
 from app.infrastructure.db.engine import create_engine
 
 
@@ -784,6 +785,58 @@ class DbBookingUnitOfWork:
             ).mappings()
         )
         return [Booking(**dict(row)) for row in rows]
+
+    async def create_reminder_job_in_transaction(self, item: ReminderJob) -> None:
+        assert self._conn is not None
+        payload = asdict(item)
+        await self._conn.execute(
+            text(
+                """
+                INSERT INTO communication.reminder_jobs (
+                  reminder_id, clinic_id, patient_id, booking_id, care_order_id, recommendation_id,
+                  reminder_type, channel, status, scheduled_for, payload_key, locale_at_send_time,
+                  planning_group, supersedes_reminder_id, created_at, updated_at, sent_at, acknowledged_at,
+                  canceled_at, cancel_reason_code
+                ) VALUES (
+                  :reminder_id, :clinic_id, :patient_id, :booking_id, :care_order_id, :recommendation_id,
+                  :reminder_type, :channel, :status, :scheduled_for, :payload_key, :locale_at_send_time,
+                  :planning_group, :supersedes_reminder_id, :created_at, :updated_at, :sent_at, :acknowledged_at,
+                  :canceled_at, :cancel_reason_code
+                )
+                ON CONFLICT (reminder_id) DO UPDATE SET
+                  status=EXCLUDED.status,
+                  channel=EXCLUDED.channel,
+                  scheduled_for=EXCLUDED.scheduled_for,
+                  payload_key=EXCLUDED.payload_key,
+                  locale_at_send_time=EXCLUDED.locale_at_send_time,
+                  planning_group=EXCLUDED.planning_group,
+                  supersedes_reminder_id=EXCLUDED.supersedes_reminder_id,
+                  updated_at=EXCLUDED.updated_at,
+                  sent_at=EXCLUDED.sent_at,
+                  acknowledged_at=EXCLUDED.acknowledged_at,
+                  canceled_at=EXCLUDED.canceled_at,
+                  cancel_reason_code=EXCLUDED.cancel_reason_code
+                """
+            ),
+            payload,
+        )
+
+    async def cancel_scheduled_reminders_for_booking_in_transaction(
+        self, *, booking_id: str, canceled_at: datetime, reason_code: str
+    ) -> int:
+        assert self._conn is not None
+        result = await self._conn.execute(
+            text(
+                """
+                UPDATE communication.reminder_jobs
+                SET status='canceled', canceled_at=:canceled_at, cancel_reason_code=:reason_code, updated_at=:canceled_at
+                WHERE booking_id=:booking_id
+                  AND status='scheduled'
+                """
+            ),
+            {"booking_id": booking_id, "canceled_at": canceled_at, "reason_code": reason_code},
+        )
+        return int(result.rowcount or 0)
 
 
 async def _fetch_one(db_config, sql: str, params: dict) -> dict | None:

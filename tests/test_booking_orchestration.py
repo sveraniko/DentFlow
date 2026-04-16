@@ -131,6 +131,26 @@ class _Tx(AbstractAsyncContextManager):
             if b.slot_id == slot_id and b.status in {"pending_confirmation", "confirmed", "reschedule_requested", "checked_in", "in_service"}
         ]
 
+    async def create_reminder_job_in_transaction(self, item: ReminderJob) -> None:
+        if self.repo.fail_reminder_planning:
+            raise RuntimeError("reminder planning failed")
+        self.repo.reminder_jobs[item.reminder_id] = item
+
+    async def cancel_scheduled_reminders_for_booking_in_transaction(
+        self, *, booking_id: str, canceled_at: datetime, reason_code: str
+    ) -> int:
+        if self.repo.fail_reminder_planning:
+            raise RuntimeError("reminder planning failed")
+        affected = 0
+        for reminder_id, job in list(self.repo.reminder_jobs.items()):
+            if job.booking_id != booking_id or job.status != "scheduled":
+                continue
+            self.repo.reminder_jobs[reminder_id] = ReminderJob(
+                **{**asdict(job), "status": "canceled", "updated_at": canceled_at, "canceled_at": canceled_at, "cancel_reason_code": reason_code}
+            )
+            affected += 1
+        return affected
+
 
 class _Repo:
     def __init__(self) -> None:
@@ -182,7 +202,9 @@ class _Repo:
         self.session_events: list[SessionEvent] = []
         self.waitlist: dict[str, WaitlistEntry] = {}
         self.escalations: dict[str, AdminEscalation] = {}
+        self.reminder_jobs: dict[str, ReminderJob] = {}
         self.fail_history = False
+        self.fail_reminder_planning = False
 
     def transaction(self):
         return _Tx(self)
@@ -208,6 +230,7 @@ class _Repo:
             "events": list(self.session_events),
             "waitlist": dict(self.waitlist),
             "escalations": dict(self.escalations),
+            "reminder_jobs": dict(self.reminder_jobs),
         }
 
     def restore(self, snap):
@@ -218,6 +241,7 @@ class _Repo:
         self.session_events = snap["events"]
         self.waitlist = snap["waitlist"]
         self.escalations = snap["escalations"]
+        self.reminder_jobs = snap["reminder_jobs"]
 
 
 class _Finder:
@@ -244,7 +268,7 @@ class _ReminderRepo:
     async def cancel_scheduled_reminders_for_booking(self, *, booking_id: str, canceled_at: datetime, reason_code: str) -> int:
         affected = 0
         for reminder_id, job in list(self.jobs.items()):
-            if job.booking_id != booking_id or job.status != "scheduled" or job.scheduled_for <= canceled_at:
+            if job.booking_id != booking_id or job.status != "scheduled":
                 continue
             self.jobs[reminder_id] = ReminderJob(
                 **{**asdict(job), "status": "canceled", "updated_at": canceled_at, "canceled_at": canceled_at, "cancel_reason_code": reason_code}
@@ -267,6 +291,8 @@ def _build_orchestrator(
     *,
     reminder_service: BookingReminderService | None = None,
 ) -> BookingOrchestrationService:
+    if reminder_service is not None and hasattr(reminder_service.repository, "jobs"):
+        repo.reminder_jobs = reminder_service.repository.jobs  # type: ignore[assignment]
     patient_resolution = BookingPatientResolutionService(_Finder(finder_rows))
     policy = PolicyResolver(InMemoryPolicyRepository())
     return BookingOrchestrationService(
@@ -361,6 +387,33 @@ def test_finalize_invalid_and_atomic_rollback() -> None:
 
     assert repo.bookings == {}
     assert repo.history == []
+    assert next(iter(repo.holds.values())).status == "active"
+
+
+def test_finalize_with_reminder_planning_failure_rolls_back_booking_mutation() -> None:
+    repo = _Repo()
+    reminder_service = BookingReminderService(
+        repository=_ReminderRepo(),
+        planner=BookingReminderPlanner(PolicyResolver(InMemoryPolicyRepository())),
+        policy_resolver=PolicyResolver(InMemoryPolicyRepository()),
+    )
+    orchestrator = _build_orchestrator(
+        repo,
+        [{"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"}],
+        reminder_service=reminder_service,
+    )
+    repo.fail_reminder_planning = True
+    repo.sessions["s1"] = BookingSession(**{**asdict(repo.sessions["s1"]), "resolved_patient_id": "pat_1", "status": "review_ready"})
+    held = asyncio.run(orchestrator.select_slot_and_activate_hold(booking_session_id="s1", slot_id="slot1"))
+    assert isinstance(held, OrchestrationSuccess)
+    repo.sessions["s1"] = BookingSession(**{**asdict(repo.sessions["s1"]), "status": "review_ready"})
+
+    with pytest.raises(RuntimeError, match="reminder planning failed"):
+        asyncio.run(orchestrator.finalize_booking_from_session(booking_session_id="s1"))
+
+    assert repo.bookings == {}
+    assert repo.history == []
+    assert repo.sessions["s1"].status == "review_ready"
     assert next(iter(repo.holds.values())).status == "active"
 
 
@@ -647,7 +700,86 @@ def test_reminder_replacement_on_reschedule_and_cancel_on_cancel() -> None:
     canceled = asyncio.run(orchestrator.cancel_booking(booking_id=booking.booking_id))
     assert isinstance(canceled, OrchestrationSuccess)
     done = asyncio.run(reminder_service.list_booking_reminders(booking_id=booking.booking_id))
-    assert not any(item.status == "scheduled" for item in done if item.scheduled_for > datetime.now(timezone.utc))
+    assert not any(item.status == "scheduled" for item in done)
+
+
+def test_booking_lifecycle_cancels_all_unsent_scheduled_reminders_even_if_past_due() -> None:
+    repo = _Repo()
+    reminder_repo = _ReminderRepo()
+    service = BookingReminderService(
+        repository=reminder_repo,
+        planner=BookingReminderPlanner(PolicyResolver(InMemoryPolicyRepository())),
+        policy_resolver=PolicyResolver(InMemoryPolicyRepository()),
+    )
+    orchestrator = _build_orchestrator(repo, [{"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"}], reminder_service=service)
+    now = datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc)
+    booking = Booking(
+        booking_id="b_cleanup",
+        clinic_id="clinic_main",
+        branch_id="branch_central",
+        patient_id="pat_1",
+        doctor_id="doctor_anna",
+        service_id="service_consult",
+        slot_id="slot1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=now.replace(day=22, hour=10),
+        scheduled_end_at=now.replace(day=22, hour=10, minute=30),
+        status="confirmed",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=now,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    repo.bookings[booking.booking_id] = booking
+    old_due = ReminderJob(
+        reminder_id="rem_old_due",
+        clinic_id=booking.clinic_id,
+        patient_id=booking.patient_id,
+        booking_id=booking.booking_id,
+        care_order_id=None,
+        recommendation_id=None,
+        reminder_type="booking_previsit",
+        channel="telegram",
+        status="scheduled",
+        scheduled_for=now.replace(day=19, hour=8),
+        payload_key="booking.reminder.24h",
+        locale_at_send_time="ru",
+        planning_group="legacy",
+        supersedes_reminder_id=None,
+        created_at=now.replace(day=19, hour=7),
+        updated_at=now.replace(day=19, hour=7),
+    )
+    reminder_repo.jobs[old_due.reminder_id] = old_due
+
+    canceled = asyncio.run(orchestrator.cancel_booking(booking_id=booking.booking_id))
+    assert isinstance(canceled, OrchestrationSuccess)
+    after_cancel = asyncio.run(service.list_booking_reminders(booking_id=booking.booking_id))
+    assert all(job.status == "canceled" for job in after_cancel)
+
+    booking_resched = Booking(**{**asdict(booking), "booking_id": "b_cleanup_reschedule", "status": "confirmed"})
+    repo.bookings[booking_resched.booking_id] = booking_resched
+    reminder_repo.jobs["rem_old_due_reschedule"] = ReminderJob(
+        **{**asdict(old_due), "reminder_id": "rem_old_due_reschedule", "booking_id": booking_resched.booking_id}
+    )
+    rescheduled = asyncio.run(
+        orchestrator.reschedule_booking(
+            booking_id=booking_resched.booking_id,
+            scheduled_start_at=now.replace(day=23, hour=13),
+            scheduled_end_at=now.replace(day=23, hour=13, minute=30),
+        )
+    )
+    assert isinstance(rescheduled, OrchestrationSuccess)
+    after_reschedule = asyncio.run(service.list_booking_reminders(booking_id=booking_resched.booking_id))
+    assert any(job.status == "canceled" and job.reminder_id == "rem_old_due_reschedule" for job in after_reschedule)
+    assert any(job.status == "scheduled" for job in after_reschedule)
 
 
 def test_reminder_policy_uses_patient_preferences_then_clinic_fallback() -> None:
@@ -752,7 +884,7 @@ def test_reminder_cancel_on_completed_and_no_show() -> None:
     completed = asyncio.run(orchestrator.complete_booking(booking_id=booking.booking_id))
     assert isinstance(completed, OrchestrationSuccess)
     completed_jobs = asyncio.run(service.list_booking_reminders(booking_id=booking.booking_id))
-    assert all(job.status == "canceled" for job in completed_jobs if job.scheduled_for > datetime.now(timezone.utc))
+    assert all(job.status == "canceled" for job in completed_jobs)
 
     booking2 = Booking(**{**asdict(booking), "booking_id": "b_noshow", "status": "confirmed", "in_service_at": None})
     repo.bookings[booking2.booking_id] = booking2
@@ -760,4 +892,4 @@ def test_reminder_cancel_on_completed_and_no_show() -> None:
     no_show = asyncio.run(orchestrator.mark_booking_no_show(booking_id=booking2.booking_id))
     assert isinstance(no_show, OrchestrationSuccess)
     no_show_jobs = asyncio.run(service.list_booking_reminders(booking_id=booking2.booking_id))
-    assert all(job.status == "canceled" for job in no_show_jobs if job.scheduled_for > datetime.now(timezone.utc))
+    assert all(job.status == "canceled" for job in no_show_jobs)
