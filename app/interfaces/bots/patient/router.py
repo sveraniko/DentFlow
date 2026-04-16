@@ -241,8 +241,16 @@ def make_router(
     async def request_reschedule(callback: CallbackQuery) -> None:
         if not callback.from_user:
             return
-        booking_id = callback.data.split(":")[-1]
-        result = await booking_flow.request_reschedule(booking_id=booking_id)
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            return
+        _, _, callback_session_id, booking_id = callback.data.split(":", 3)
+        result = await booking_flow.request_reschedule(
+            clinic_id=clinic_id,
+            telegram_user_id=callback.from_user.id,
+            callback_session_id=callback_session_id,
+            booking_id=booking_id,
+        )
         if isinstance(result, OrchestrationSuccess):
             card = booking_flow.build_booking_card(booking=result.entity)
             await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_by_user.get(callback.from_user.id, ""), text=_render_booking_card_text(card, locale=_locale()))
@@ -253,8 +261,16 @@ def make_router(
     async def join_waitlist(callback: CallbackQuery) -> None:
         if not callback.from_user:
             return
-        booking_id = callback.data.split(":")[-1]
-        created = await booking_flow.join_earlier_slot_waitlist(booking_id=booking_id, telegram_user_id=callback.from_user.id)
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            return
+        _, _, callback_session_id, booking_id = callback.data.split(":", 3)
+        created = await booking_flow.join_earlier_slot_waitlist(
+            clinic_id=clinic_id,
+            telegram_user_id=callback.from_user.id,
+            callback_session_id=callback_session_id,
+            booking_id=booking_id,
+        )
         if isinstance(created, OrchestrationSuccess):
             await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_by_user.get(callback.from_user.id, ""), text=i18n.t("patient.booking.waitlist.created", _locale()))
             return
@@ -264,11 +280,11 @@ def make_router(
     async def cancel_prompt(callback: CallbackQuery) -> None:
         if not callback.from_user:
             return
-        booking_id = callback.data.split(":")[-1]
+        _, _, callback_session_id, booking_id = callback.data.split(":", 3)
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text=i18n.t("common.yes", _locale()), callback_data=f"mybk:cancel_confirm:{booking_id}")],
-                [InlineKeyboardButton(text=i18n.t("common.no", _locale()), callback_data=f"mybk:cancel_abort:{booking_id}")],
+                [InlineKeyboardButton(text=i18n.t("common.yes", _locale()), callback_data=f"mybk:cancel_confirm:{callback_session_id}:{booking_id}")],
+                [InlineKeyboardButton(text=i18n.t("common.no", _locale()), callback_data=f"mybk:cancel_abort:{callback_session_id}:{booking_id}")],
             ]
         )
         await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_by_user.get(callback.from_user.id, ""), text=i18n.t("patient.booking.cancel.confirm", _locale()), keyboard=keyboard)
@@ -283,8 +299,16 @@ def make_router(
     async def cancel_confirm(callback: CallbackQuery) -> None:
         if not callback.from_user:
             return
-        booking_id = callback.data.split(":")[-1]
-        result = await booking_flow.cancel_booking(booking_id=booking_id)
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            return
+        _, _, callback_session_id, booking_id = callback.data.split(":", 3)
+        result = await booking_flow.cancel_booking(
+            clinic_id=clinic_id,
+            telegram_user_id=callback.from_user.id,
+            callback_session_id=callback_session_id,
+            booking_id=booking_id,
+        )
         if isinstance(result, OrchestrationSuccess):
             card = booking_flow.build_booking_card(booking=result.entity)
             await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_by_user.get(callback.from_user.id, ""), text=_render_booking_card_text(card, locale=_locale()))
@@ -430,9 +454,9 @@ def make_router(
         card = booking_flow.build_booking_card(booking=booking)
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text=i18n.t("patient.booking.my.reschedule", locale), callback_data=f"mybk:reschedule:{booking.booking_id}")],
-                [InlineKeyboardButton(text=i18n.t("patient.booking.my.earlier_slot", locale), callback_data=f"mybk:waitlist:{booking.booking_id}")],
-                [InlineKeyboardButton(text=i18n.t("patient.booking.my.cancel", locale), callback_data=f"mybk:cancel_prompt:{booking.booking_id}")],
+                [InlineKeyboardButton(text=i18n.t("patient.booking.my.reschedule", locale), callback_data=f"mybk:reschedule:{session_id}:{booking.booking_id}")],
+                [InlineKeyboardButton(text=i18n.t("patient.booking.my.earlier_slot", locale), callback_data=f"mybk:waitlist:{session_id}:{booking.booking_id}")],
+                [InlineKeyboardButton(text=i18n.t("patient.booking.my.cancel", locale), callback_data=f"mybk:cancel_prompt:{session_id}:{booking.booking_id}")],
             ]
         )
         await _send_or_edit_panel(

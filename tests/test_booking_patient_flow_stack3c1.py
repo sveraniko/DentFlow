@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.application.booking.orchestration import BookingOrchestrationService
-from app.application.booking.orchestration_outcomes import OrchestrationSuccess
+from app.application.booking.orchestration_outcomes import InvalidStateOutcome, OrchestrationSuccess
 from app.application.booking.patient_resolution import BookingPatientResolutionService
 from app.application.booking.state_services import BookingSessionStateService, BookingStateService, SlotHoldStateService, WaitlistStateService
 from app.application.booking.telegram_flow import BookingPatientFlowService
@@ -418,6 +418,8 @@ def test_existing_booking_controls_exact_match_no_match_and_ambiguous() -> None:
         )
     )
     assert no_match.kind == "no_match"
+    assert no_match.booking_session is not None
+    assert no_match.booking_session.resolved_patient_id is None
 
     flow_ambiguous, repo_ambiguous, _ = _build_flow(
         finder_rows=[
@@ -478,21 +480,140 @@ def test_reschedule_cancel_waitlist_and_admin_open_details() -> None:
         updated_at=now,
     )
 
-    rescheduled = asyncio.run(flow.request_reschedule(booking_id="b1"))
+    session = asyncio.run(flow.start_or_resume_existing_booking_session(clinic_id="clinic_main", telegram_user_id=5010))
+    asyncio.run(
+        flow.orchestration.attach_resolved_patient_to_session(
+            booking_session_id=session.booking_session_id,
+            patient_id="pat_1",
+        )
+    )
+
+    rescheduled = asyncio.run(
+        flow.request_reschedule(
+            clinic_id="clinic_main",
+            telegram_user_id=5010,
+            callback_session_id=session.booking_session_id,
+            booking_id="b1",
+        )
+    )
     assert isinstance(rescheduled, OrchestrationSuccess)
     assert rescheduled.entity.status == "reschedule_requested"
 
-    canceled = asyncio.run(flow.cancel_booking(booking_id="b1"))
-    assert isinstance(canceled, OrchestrationSuccess)
-    assert canceled.entity.status == "canceled"
-
-    waitlist = asyncio.run(flow.join_earlier_slot_waitlist(booking_id="b1", telegram_user_id=5010))
+    waitlist = asyncio.run(
+        flow.join_earlier_slot_waitlist(
+            clinic_id="clinic_main",
+            telegram_user_id=5010,
+            callback_session_id=session.booking_session_id,
+            booking_id="b1",
+        )
+    )
     assert isinstance(waitlist, OrchestrationSuccess)
     assert len(repo.waitlist) == 1
     assert next(iter(repo.waitlist.values())).status == "active"
+
+    canceled = asyncio.run(
+        flow.cancel_booking(
+            clinic_id="clinic_main",
+            telegram_user_id=5010,
+            callback_session_id=session.booking_session_id,
+            booking_id="b1",
+        )
+    )
+    assert isinstance(canceled, OrchestrationSuccess)
+    assert canceled.entity.status == "canceled"
 
     escalation_detail = asyncio.run(flow.get_admin_escalation_detail(clinic_id="clinic_main", escalation_id="e1"))
     booking_detail = asyncio.run(flow.get_admin_booking_detail(booking_id="b1"))
     assert escalation_detail is not None
     assert booking_detail is not None
     assert booking_detail.doctor_label == "Dr One"
+
+
+def test_existing_booking_action_integrity_rejects_stale_and_foreign_booking() -> None:
+    flow, repo, _ = _build_flow(finder_rows=[])
+    now = datetime(2026, 4, 16, 11, 0, tzinfo=timezone.utc)
+    repo.bookings["b_owner"] = Booking(
+        booking_id="b_owner",
+        clinic_id="clinic_main",
+        branch_id="branch_1",
+        patient_id="pat_owner",
+        doctor_id="doctor_1",
+        service_id="service_consult",
+        slot_id="slot_1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=now + timedelta(days=1),
+        scheduled_end_at=now + timedelta(days=1, minutes=30),
+        status="confirmed",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=None,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    repo.bookings["b_foreign"] = Booking(
+        booking_id="b_foreign",
+        clinic_id="clinic_main",
+        branch_id="branch_1",
+        patient_id="pat_foreign",
+        doctor_id="doctor_1",
+        service_id="service_consult",
+        slot_id="slot_1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=now + timedelta(days=2),
+        scheduled_end_at=now + timedelta(days=2, minutes=30),
+        status="confirmed",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=None,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    session = asyncio.run(flow.start_or_resume_existing_booking_session(clinic_id="clinic_main", telegram_user_id=5011))
+    asyncio.run(
+        flow.orchestration.attach_resolved_patient_to_session(
+            booking_session_id=session.booking_session_id,
+            patient_id="pat_owner",
+        )
+    )
+
+    foreign = asyncio.run(
+        flow.request_reschedule(
+            clinic_id="clinic_main",
+            telegram_user_id=5011,
+            callback_session_id=session.booking_session_id,
+            booking_id="b_foreign",
+        )
+    )
+    stale = asyncio.run(
+        flow.cancel_booking(
+            clinic_id="clinic_main",
+            telegram_user_id=5011,
+            callback_session_id="bs_stale",
+            booking_id="b_owner",
+        )
+    )
+    waitlist = asyncio.run(
+        flow.join_earlier_slot_waitlist(
+            clinic_id="clinic_main",
+            telegram_user_id=5011,
+            callback_session_id=session.booking_session_id,
+            booking_id="b_foreign",
+        )
+    )
+    assert isinstance(foreign, InvalidStateOutcome)
+    assert isinstance(stale, InvalidStateOutcome)
+    assert isinstance(waitlist, InvalidStateOutcome)

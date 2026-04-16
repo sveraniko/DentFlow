@@ -70,6 +70,13 @@ class BookingControlResolutionResult:
 
 
 @dataclass(slots=True, frozen=True)
+class ExistingBookingControlValidationResult:
+    kind: str
+    booking_session: BookingSession | None = None
+    booking: Booking | None = None
+
+
+@dataclass(slots=True, frozen=True)
 class BookingCardView:
     booking_id: str
     doctor_label: str
@@ -184,7 +191,7 @@ class BookingPatientFlowService:
             return updated.entity
         raise ValueError(updated.reason)
 
-    async def resolve_patient_from_contact(
+    async def resolve_patient_for_new_booking_contact(
         self,
         *,
         booking_session_id: str,
@@ -215,7 +222,6 @@ class BookingPatientFlowService:
             if isinstance(attached, OrchestrationSuccess):
                 return PatientResolutionFlowResult(kind="new_patient_created", booking_session=attached.entity)
             return PatientResolutionFlowResult(kind="invalid_state")
-
         if isinstance(outcome, AmbiguousMatchOutcome):
             escalation = await self.orchestration.escalate_session_to_admin(
                 booking_session_id=booking_session_id,
@@ -225,10 +231,47 @@ class BookingPatientFlowService:
             if escalation.kind == "escalated":
                 return PatientResolutionFlowResult(kind="ambiguous_escalated", escalation=escalation.escalation)
             return PatientResolutionFlowResult(kind="ambiguous_escalated")
-
-        if isinstance(outcome, InvalidStateOutcome):
-            return PatientResolutionFlowResult(kind="invalid_state")
         return PatientResolutionFlowResult(kind="invalid_state")
+
+    async def resolve_patient_for_existing_booking_contact(
+        self,
+        *,
+        booking_session_id: str,
+        phone: str,
+    ) -> PatientResolutionFlowResult:
+        outcome = await self.orchestration.resolve_patient_for_session(
+            booking_session_id=booking_session_id,
+            contact_type="phone",
+            contact_value=phone,
+        )
+        if isinstance(outcome, OrchestrationSuccess):
+            return PatientResolutionFlowResult(kind="exact_match", booking_session=outcome.entity)
+        if isinstance(outcome, NoMatchOutcome):
+            session = await self.reads.get_booking_session(booking_session_id)
+            return PatientResolutionFlowResult(kind="no_match", booking_session=session)
+        if isinstance(outcome, AmbiguousMatchOutcome):
+            escalation = await self.orchestration.escalate_session_to_admin(
+                booking_session_id=booking_session_id,
+                reason_code="ambiguous_exact_contact",
+                priority="high",
+            )
+            if escalation.kind == "escalated":
+                return PatientResolutionFlowResult(kind="ambiguous_escalated", escalation=escalation.escalation)
+            return PatientResolutionFlowResult(kind="ambiguous_escalated")
+        return PatientResolutionFlowResult(kind="invalid_state")
+
+    async def resolve_patient_from_contact(
+        self,
+        *,
+        booking_session_id: str,
+        phone: str,
+        fallback_display_name: str,
+    ) -> PatientResolutionFlowResult:
+        return await self.resolve_patient_for_new_booking_contact(
+            booking_session_id=booking_session_id,
+            phone=phone,
+            fallback_display_name=fallback_display_name,
+        )
 
     async def mark_review_ready(self, *, booking_session_id: str):
         return await self.orchestration.mark_session_review_ready(booking_session_id=booking_session_id)
@@ -254,11 +297,12 @@ class BookingPatientFlowService:
         phone: str,
     ) -> BookingControlResolutionResult:
         session = await self.start_or_resume_existing_booking_session(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
-        resolution = await self.resolve_patient_from_contact(
+        resolution = await self.resolve_patient_for_existing_booking_contact(
             booking_session_id=session.booking_session_id,
             phone=phone,
-            fallback_display_name="Patient",
         )
+        if resolution.kind == "no_match":
+            return BookingControlResolutionResult(kind="no_match", booking_session=resolution.booking_session or session)
         if resolution.kind == "ambiguous_escalated":
             return BookingControlResolutionResult(kind="ambiguous_escalated", booking_session=session)
         if resolution.kind == "invalid_state":
@@ -277,16 +321,67 @@ class BookingPatientFlowService:
             return BookingControlResolutionResult(kind="no_match", booking_session=resolved_session)
         return BookingControlResolutionResult(kind="exact_match", bookings=live, booking_session=resolved_session)
 
-    async def request_reschedule(self, *, booking_id: str):
-        return await self.orchestration.request_booking_reschedule(booking_id=booking_id, reason_code="patient_requested")
-
-    async def cancel_booking(self, *, booking_id: str):
-        return await self.orchestration.cancel_booking(booking_id=booking_id, reason_code="patient_requested")
-
-    async def join_earlier_slot_waitlist(self, *, booking_id: str, telegram_user_id: int):
+    async def validate_existing_booking_control_action(
+        self,
+        *,
+        clinic_id: str,
+        telegram_user_id: int,
+        callback_session_id: str,
+        booking_id: str,
+        allowed_statuses: set[str] | None = None,
+    ) -> ExistingBookingControlValidationResult:
+        active = await self.reads.list_active_sessions_for_telegram_user(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
+        if not active:
+            return ExistingBookingControlValidationResult(kind="missing_session")
+        latest = sorted(active, key=lambda row: row.updated_at, reverse=True)[0]
+        if latest.booking_session_id != callback_session_id or latest.route_type != "existing_booking_control":
+            return ExistingBookingControlValidationResult(kind="stale_or_mismatched_session", booking_session=latest)
+        if not latest.resolved_patient_id:
+            return ExistingBookingControlValidationResult(kind="missing_resolved_patient", booking_session=latest)
         booking = await self.reads.get_booking(booking_id)
         if booking is None:
-            return InvalidStateOutcome(kind="invalid_state", reason="booking not found")
+            return ExistingBookingControlValidationResult(kind="booking_not_found", booking_session=latest)
+        if booking.patient_id != latest.resolved_patient_id:
+            return ExistingBookingControlValidationResult(kind="booking_patient_mismatch", booking_session=latest, booking=booking)
+        if allowed_statuses is not None and booking.status not in allowed_statuses:
+            return ExistingBookingControlValidationResult(kind="booking_ineligible", booking_session=latest, booking=booking)
+        return ExistingBookingControlValidationResult(kind="valid", booking_session=latest, booking=booking)
+
+    async def request_reschedule(self, *, clinic_id: str, telegram_user_id: int, callback_session_id: str, booking_id: str):
+        validation = await self.validate_existing_booking_control_action(
+            clinic_id=clinic_id,
+            telegram_user_id=telegram_user_id,
+            callback_session_id=callback_session_id,
+            booking_id=booking_id,
+            allowed_statuses={"pending_confirmation", "confirmed", "checked_in", "in_service"},
+        )
+        if validation.kind != "valid":
+            return InvalidStateOutcome(kind="invalid_state", reason=validation.kind)
+        return await self.orchestration.request_booking_reschedule(booking_id=booking_id, reason_code="patient_requested")
+
+    async def cancel_booking(self, *, clinic_id: str, telegram_user_id: int, callback_session_id: str, booking_id: str):
+        validation = await self.validate_existing_booking_control_action(
+            clinic_id=clinic_id,
+            telegram_user_id=telegram_user_id,
+            callback_session_id=callback_session_id,
+            booking_id=booking_id,
+            allowed_statuses={"pending_confirmation", "confirmed", "reschedule_requested", "checked_in", "in_service"},
+        )
+        if validation.kind != "valid":
+            return InvalidStateOutcome(kind="invalid_state", reason=validation.kind)
+        return await self.orchestration.cancel_booking(booking_id=booking_id, reason_code="patient_requested")
+
+    async def join_earlier_slot_waitlist(self, *, clinic_id: str, telegram_user_id: int, callback_session_id: str, booking_id: str):
+        validation = await self.validate_existing_booking_control_action(
+            clinic_id=clinic_id,
+            telegram_user_id=telegram_user_id,
+            callback_session_id=callback_session_id,
+            booking_id=booking_id,
+            allowed_statuses={"pending_confirmation", "confirmed", "reschedule_requested", "checked_in", "in_service"},
+        )
+        if validation.kind != "valid" or validation.booking is None:
+            return InvalidStateOutcome(kind="invalid_state", reason=validation.kind)
+        booking = validation.booking
         return await self.orchestration.create_waitlist_entry(
             clinic_id=booking.clinic_id,
             service_id=booking.service_id,
