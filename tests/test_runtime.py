@@ -34,3 +34,5 @@ def test_dispatcher_bootstrap(required_env, monkeypatch: pytest.MonkeyPatch) -> 
     dispatcher = runtime.build_dispatcher()
     assert len(dispatcher.sub_routers) == 4
     assert called == {"clinic": 1, "access": 1, "policy": 1}
+    assert runtime.booking_service is not None
+    assert runtime.booking_patient_resolution_service is not None
