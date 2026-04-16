@@ -15,7 +15,7 @@ from app.application.booking.orchestration_outcomes import (
 )
 from app.application.clinic_reference import ClinicReferenceService
 from app.domain.booking import AdminEscalation, AvailabilitySlot, Booking, BookingSession
-from app.domain.clinic_reference.models import Doctor, Service
+from app.domain.clinic_reference.models import Branch, Doctor, Service
 
 ACTIVE_SESSION_STATUSES: tuple[str, ...] = (
     "initiated",
@@ -41,6 +41,8 @@ class BookingFlowReadRepository(Protocol):
     ) -> list[AvailabilitySlot]: ...
     async def list_open_admin_escalations(self, *, clinic_id: str, limit: int) -> list[AdminEscalation]: ...
     async def list_recent_bookings_by_statuses(self, *, clinic_id: str, statuses: tuple[str, ...], limit: int) -> list[Booking]: ...
+    async def list_bookings_by_patient(self, *, patient_id: str) -> list[Booking]: ...
+    async def get_booking(self, booking_id: str) -> Booking | None: ...
 
 
 class CanonicalPatientCreator(Protocol):
@@ -52,6 +54,30 @@ class PatientResolutionFlowResult:
     kind: str
     booking_session: BookingSession | None = None
     escalation: AdminEscalation | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class BookingResumePanel:
+    panel_key: str
+    booking_session: BookingSession
+
+
+@dataclass(slots=True, frozen=True)
+class BookingControlResolutionResult:
+    kind: str
+    bookings: tuple[Booking, ...] = ()
+    booking_session: BookingSession | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class BookingCardView:
+    booking_id: str
+    doctor_label: str
+    service_label: str
+    datetime_label: str
+    branch_label: str
+    status_label: str
+    next_step_key: str
 
 
 @dataclass(slots=True)
@@ -72,6 +98,33 @@ class BookingPatientFlowService:
             branch_id=branch_id,
         )
         return started.entity
+
+    async def start_or_resume_existing_booking_session(self, *, clinic_id: str, telegram_user_id: int) -> BookingSession:
+        active = await self.reads.list_active_sessions_for_telegram_user(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
+        for session in sorted(active, key=lambda row: row.updated_at, reverse=True):
+            if session.route_type == "existing_booking_control":
+                return session
+        started = await self.orchestration.start_booking_session(
+            clinic_id=clinic_id,
+            telegram_user_id=telegram_user_id,
+            route_type="existing_booking_control",
+        )
+        return started.entity
+
+    async def determine_resume_panel(self, *, booking_session_id: str) -> BookingResumePanel | None:
+        session = await self.reads.get_booking_session(booking_session_id)
+        if session is None:
+            return None
+        return BookingResumePanel(panel_key=self._panel_for_session(session), booking_session=session)
+
+    async def validate_active_session_callback(
+        self, *, clinic_id: str, telegram_user_id: int, callback_session_id: str
+    ) -> bool:
+        active = await self.reads.list_active_sessions_for_telegram_user(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
+        if not active:
+            return False
+        latest = sorted(active, key=lambda row: row.updated_at, reverse=True)[0]
+        return latest.booking_session_id == callback_session_id
 
     def list_services(self, *, clinic_id: str) -> list[Service]:
         return sorted(self.reference.list_services(clinic_id), key=lambda service: service.code)
@@ -193,6 +246,83 @@ class BookingPatientFlowService:
             limit=limit,
         )
 
+    async def resolve_existing_booking_by_contact(
+        self,
+        *,
+        clinic_id: str,
+        telegram_user_id: int,
+        phone: str,
+    ) -> BookingControlResolutionResult:
+        session = await self.start_or_resume_existing_booking_session(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
+        resolution = await self.resolve_patient_from_contact(
+            booking_session_id=session.booking_session_id,
+            phone=phone,
+            fallback_display_name="Patient",
+        )
+        if resolution.kind == "ambiguous_escalated":
+            return BookingControlResolutionResult(kind="ambiguous_escalated", booking_session=session)
+        if resolution.kind == "invalid_state":
+            return BookingControlResolutionResult(kind="invalid_state", booking_session=session)
+        resolved_session = resolution.booking_session
+        if resolved_session is None or resolved_session.resolved_patient_id is None:
+            return BookingControlResolutionResult(kind="invalid_state", booking_session=session)
+        bookings = await self.reads.list_bookings_by_patient(patient_id=resolved_session.resolved_patient_id)
+        live = tuple(
+            sorted(
+                [row for row in bookings if row.status in {"pending_confirmation", "confirmed", "reschedule_requested", "checked_in", "in_service"}],
+                key=lambda row: row.scheduled_start_at,
+            )
+        )
+        if not live:
+            return BookingControlResolutionResult(kind="no_match", booking_session=resolved_session)
+        return BookingControlResolutionResult(kind="exact_match", bookings=live, booking_session=resolved_session)
+
+    async def request_reschedule(self, *, booking_id: str):
+        return await self.orchestration.request_booking_reschedule(booking_id=booking_id, reason_code="patient_requested")
+
+    async def cancel_booking(self, *, booking_id: str):
+        return await self.orchestration.cancel_booking(booking_id=booking_id, reason_code="patient_requested")
+
+    async def join_earlier_slot_waitlist(self, *, booking_id: str, telegram_user_id: int):
+        booking = await self.reads.get_booking(booking_id)
+        if booking is None:
+            return InvalidStateOutcome(kind="invalid_state", reason="booking not found")
+        return await self.orchestration.create_waitlist_entry(
+            clinic_id=booking.clinic_id,
+            service_id=booking.service_id,
+            branch_id=booking.branch_id,
+            patient_id=booking.patient_id,
+            telegram_user_id=telegram_user_id,
+            notes=f"earlier_slot_for:{booking.booking_id}",
+        )
+
+    def build_booking_card(self, *, booking: Booking) -> BookingCardView:
+        branch = self._branch_by_id(booking.clinic_id).get(booking.branch_id or "")
+        doctor = self._doctor_by_id(booking.clinic_id).get(booking.doctor_id)
+        service = self._service_by_id(booking.clinic_id).get(booking.service_id)
+        return BookingCardView(
+            booking_id=booking.booking_id,
+            doctor_label=doctor.display_name if doctor else booking.doctor_id,
+            service_label=self._service_label(service, booking.service_id),
+            datetime_label=booking.scheduled_start_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            branch_label=branch.display_name if branch else (booking.branch_id or "-"),
+            status_label=f"booking.status.{booking.status}",
+            next_step_key=self._next_step_key_for_booking(booking.status),
+        )
+
+    async def get_admin_escalation_detail(self, *, clinic_id: str, escalation_id: str) -> AdminEscalation | None:
+        rows = await self.reads.list_open_admin_escalations(clinic_id=clinic_id, limit=200)
+        for row in rows:
+            if row.admin_escalation_id == escalation_id:
+                return row
+        return None
+
+    async def get_admin_booking_detail(self, *, booking_id: str) -> BookingCardView | None:
+        booking = await self.reads.get_booking(booking_id)
+        if booking is None:
+            return None
+        return self.build_booking_card(booking=booking)
+
     def _slot_matches_service(self, slot: AvailabilitySlot, *, service_id: str | None) -> bool:
         if service_id is None:
             return True
@@ -203,3 +333,42 @@ class BookingPatientFlowService:
             return service_id in service_ids
         return True
 
+    def _panel_for_session(self, session: BookingSession) -> str:
+        if session.status in {"admin_escalated", "completed", "canceled", "expired"}:
+            return "session_terminal"
+        if not session.service_id:
+            return "service_selection"
+        if session.doctor_preference_type not in {"any", "specific"}:
+            return "doctor_preference_selection"
+        if session.doctor_preference_type == "specific" and not session.doctor_id:
+            return "doctor_preference_selection"
+        if not session.selected_slot_id:
+            return "slot_selection"
+        if not session.contact_phone_snapshot or not session.resolved_patient_id:
+            return "contact_collection"
+        return "review_finalize"
+
+    def _service_label(self, service: Service | None, fallback: str) -> str:
+        if service is None:
+            return fallback
+        return f"{service.code} ({service.title_key})"
+
+    def _branch_by_id(self, clinic_id: str) -> dict[str, Branch]:
+        return {row.branch_id: row for row in self.reference.list_branches(clinic_id)}
+
+    def _doctor_by_id(self, clinic_id: str) -> dict[str, Doctor]:
+        return {row.doctor_id: row for row in self.reference.list_doctors(clinic_id)}
+
+    def _service_by_id(self, clinic_id: str) -> dict[str, Service]:
+        return {row.service_id: row for row in self.reference.list_services(clinic_id)}
+
+    def _next_step_key_for_booking(self, status: str) -> str:
+        if status == "reschedule_requested":
+            return "patient.booking.card.next.reschedule_requested"
+        if status == "confirmed":
+            return "patient.booking.card.next.confirmed"
+        if status == "pending_confirmation":
+            return "patient.booking.card.next.pending_confirmation"
+        if status == "canceled":
+            return "patient.booking.card.next.canceled"
+        return "patient.booking.card.next.default"
