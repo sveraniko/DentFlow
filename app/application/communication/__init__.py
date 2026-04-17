@@ -2,13 +2,22 @@ from app.application.communication.reminders import BookingReminderPlanner, Book
 from app.application.communication.delivery import (
     BookingReader,
     RecipientResolution,
+    ReminderActionButton,
     ReminderDeliveryRepository,
     ReminderDeliveryService,
     ReminderSendResult,
+    RenderedReminderMessage,
     TelegramDeliveryTarget,
     TelegramRecipientResolver,
     TelegramReminderSender,
-    render_booking_reminder_text,
+    render_booking_reminder_message,
+)
+from app.application.communication.actions import (
+    ReminderActionBookingReader,
+    ReminderActionName,
+    ReminderActionOutcome,
+    ReminderActionRepository,
+    ReminderActionService,
 )
 
 __all__ = [
@@ -23,6 +32,13 @@ __all__ = [
     "TelegramDeliveryTarget",
     "RecipientResolution",
     "ReminderSendResult",
+    "ReminderActionButton",
+    "RenderedReminderMessage",
     "ReminderDeliveryService",
-    "render_booking_reminder_text",
+    "render_booking_reminder_message",
+    "ReminderActionName",
+    "ReminderActionOutcome",
+    "ReminderActionRepository",
+    "ReminderActionBookingReader",
+    "ReminderActionService",
 ]

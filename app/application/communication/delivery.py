@@ -27,6 +27,19 @@ class ReminderSendResult:
     provider_message_id: str | None
 
 
+@dataclass(slots=True, frozen=True)
+class ReminderActionButton:
+    action: str
+    label: str
+    callback_data: str
+
+
+@dataclass(slots=True, frozen=True)
+class RenderedReminderMessage:
+    text: str
+    actions: tuple[ReminderActionButton, ...]
+
+
 class ReminderDeliveryRepository(Protocol):
     async def claim_due_reminders(self, *, now: datetime, limit: int) -> list[ReminderJob]: ...
     async def create_message_delivery(self, item: MessageDelivery) -> None: ...
@@ -45,7 +58,7 @@ class TelegramRecipientResolver(Protocol):
 
 
 class TelegramReminderSender(Protocol):
-    async def send_reminder(self, *, target: TelegramDeliveryTarget, text: str) -> ReminderSendResult: ...
+    async def send_reminder(self, *, target: TelegramDeliveryTarget, text: str, actions: tuple[ReminderActionButton, ...]) -> ReminderSendResult: ...
 
 
 @dataclass(slots=True)
@@ -125,9 +138,9 @@ class ReminderDeliveryService:
             )
             return
 
-        text = render_booking_reminder_text(reminder=reminder)
+        rendered = render_booking_reminder_message(reminder=reminder, booking=booking if reminder.booking_id is not None else None)
         try:
-            send_result = await self.sender.send_reminder(target=resolution.target, text=text)
+            send_result = await self.sender.send_reminder(target=resolution.target, text=rendered.text, actions=rendered.actions)
         except Exception as exc:  # noqa: BLE001
             await self._persist_failure(reminder=reminder, attempt_no=attempt_no, now=now, error_text=str(exc) or "send_failed")
             return
@@ -164,17 +177,63 @@ class ReminderDeliveryService:
         await self.repository.mark_reminder_failed(reminder_id=reminder.reminder_id, failed_at=now, error_text=error_text)
 
 
-def render_booking_reminder_text(*, reminder: ReminderJob) -> str:
+def render_booking_reminder_message(*, reminder: ReminderJob, booking: Booking | None) -> RenderedReminderMessage:
     locale = (reminder.locale_at_send_time or "ru").lower()
+    dt_label = "-"
+    doctor_label = "-"
+    service_label = "-"
+    branch_label = "-"
+    if booking is not None:
+        dt_label = booking.scheduled_start_at.strftime("%Y-%m-%d %H:%M UTC")
+        doctor_label = booking.doctor_id or "-"
+        service_label = booking.service_id or "-"
+        branch_label = booking.branch_id or "-"
+
+    reminder_summary = ""
+    actions: tuple[ReminderActionButton, ...]
     if locale.startswith("en"):
         if reminder.reminder_type == "booking_confirmation":
-            return "DentFlow reminder: your dental visit is coming up. Please keep this appointment in your plans."
-        if reminder.reminder_type == "booking_day_of":
-            return "DentFlow reminder: your dental visit is today. We are waiting for you at the clinic."
-        return "DentFlow reminder: your dental visit is coming soon."
+            reminder_summary = "Please confirm your booking."
+            actions = (
+                ReminderActionButton(action="confirm", label="✅ Confirm", callback_data=f"rem:confirm:{reminder.reminder_id}"),
+                ReminderActionButton(action="reschedule", label="🔁 Reschedule", callback_data=f"rem:reschedule:{reminder.reminder_id}"),
+                ReminderActionButton(action="cancel", label="❌ Cancel", callback_data=f"rem:cancel:{reminder.reminder_id}"),
+            )
+        elif reminder.reminder_type in {"booking_previsit", "booking_day_of"}:
+            reminder_summary = "Please acknowledge this reminder."
+            actions = (ReminderActionButton(action="ack", label="👍 Got it", callback_data=f"rem:ack:{reminder.reminder_id}"),)
+        else:
+            reminder_summary = "Your dental visit is coming soon."
+            actions = tuple()
+        text = (
+            "DentFlow reminder\n"
+            f"📅 {dt_label}\n"
+            f"👩‍⚕️ {doctor_label}\n"
+            f"🦷 {service_label}\n"
+            f"🏥 {branch_label}\n\n"
+            f"{reminder_summary}"
+        )
+        return RenderedReminderMessage(text=text, actions=actions)
 
     if reminder.reminder_type == "booking_confirmation":
-        return "Напоминание DentFlow: ваш визит к стоматологу скоро. Пожалуйста, сохраните запись в планах."
-    if reminder.reminder_type == "booking_day_of":
-        return "Напоминание DentFlow: ваш визит к стоматологу сегодня. Ждём вас в клинике."
-    return "Напоминание DentFlow: ваш визит к стоматологу скоро."
+        reminder_summary = "Подтвердите запись."
+        actions = (
+            ReminderActionButton(action="confirm", label="✅ Подтвердить", callback_data=f"rem:confirm:{reminder.reminder_id}"),
+            ReminderActionButton(action="reschedule", label="🔁 Перенести", callback_data=f"rem:reschedule:{reminder.reminder_id}"),
+            ReminderActionButton(action="cancel", label="❌ Отменить", callback_data=f"rem:cancel:{reminder.reminder_id}"),
+        )
+    elif reminder.reminder_type in {"booking_previsit", "booking_day_of"}:
+        reminder_summary = "Подтвердите, что увидели напоминание."
+        actions = (ReminderActionButton(action="ack", label="👍 Понял(а)", callback_data=f"rem:ack:{reminder.reminder_id}"),)
+    else:
+        reminder_summary = "Ваш визит скоро."
+        actions = tuple()
+    text = (
+        "Напоминание DentFlow\n"
+        f"📅 {dt_label}\n"
+        f"👩‍⚕️ {doctor_label}\n"
+        f"🦷 {service_label}\n"
+        f"🏥 {branch_label}\n\n"
+        f"{reminder_summary}"
+    )
+    return RenderedReminderMessage(text=text, actions=actions)
