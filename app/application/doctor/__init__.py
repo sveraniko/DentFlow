@@ -6,6 +6,7 @@ from app.application.doctor.operations import (
     DoctorOperationsService,
     DoctorPatientQuickCard,
     DoctorQueueItem,
+    DoctorChartSummaryCard,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "DoctorOperationsService",
     "DoctorPatientQuickCard",
     "DoctorQueueItem",
+    "DoctorChartSummaryCard",
 ]

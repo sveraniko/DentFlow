@@ -590,6 +590,155 @@ STACK1_TABLES: tuple[str, ...] = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS clinical.patient_charts (
+      chart_id TEXT PRIMARY KEY,
+      patient_id TEXT NOT NULL REFERENCES core_patient.patients(patient_id),
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      chart_number TEXT NULL,
+      opened_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL,
+      primary_doctor_id TEXT NULL REFERENCES core_reference.doctors(doctor_id),
+      notes_summary TEXT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_patient_charts_active_patient_clinic
+    ON clinical.patient_charts (patient_id, clinic_id)
+    WHERE status='active'
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS clinical.clinical_encounters (
+      encounter_id TEXT PRIMARY KEY,
+      chart_id TEXT NOT NULL REFERENCES clinical.patient_charts(chart_id) ON DELETE CASCADE,
+      booking_id TEXT NULL REFERENCES booking.bookings(booking_id) ON DELETE SET NULL,
+      doctor_id TEXT NOT NULL REFERENCES core_reference.doctors(doctor_id),
+      opened_at TIMESTAMPTZ NOT NULL,
+      closed_at TIMESTAMPTZ NULL,
+      status TEXT NOT NULL,
+      chief_complaint_snapshot TEXT NULL,
+      findings_summary TEXT NULL,
+      assessment_summary TEXT NULL,
+      plan_summary TEXT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_clinical_encounters_chart_status_opened
+    ON clinical.clinical_encounters (chart_id, status, opened_at DESC)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS clinical.presenting_complaints (
+      complaint_id TEXT PRIMARY KEY,
+      chart_id TEXT NOT NULL REFERENCES clinical.patient_charts(chart_id) ON DELETE CASCADE,
+      encounter_id TEXT NULL REFERENCES clinical.clinical_encounters(encounter_id) ON DELETE SET NULL,
+      booking_id TEXT NULL REFERENCES booking.bookings(booking_id) ON DELETE SET NULL,
+      complaint_text TEXT NOT NULL,
+      onset_description TEXT NULL,
+      context_note TEXT NULL,
+      recorded_by_actor_id TEXT NULL REFERENCES access_identity.actor_identities(actor_id),
+      recorded_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_presenting_complaints_chart_recorded
+    ON clinical.presenting_complaints (chart_id, recorded_at DESC)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS clinical.encounter_notes (
+      encounter_note_id TEXT PRIMARY KEY,
+      encounter_id TEXT NOT NULL REFERENCES clinical.clinical_encounters(encounter_id) ON DELETE CASCADE,
+      note_type TEXT NOT NULL,
+      note_text TEXT NOT NULL,
+      recorded_by_actor_id TEXT NULL REFERENCES access_identity.actor_identities(actor_id),
+      recorded_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_encounter_notes_encounter_recorded
+    ON clinical.encounter_notes (encounter_id, recorded_at DESC)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS clinical.diagnoses (
+      diagnosis_id TEXT PRIMARY KEY,
+      chart_id TEXT NOT NULL REFERENCES clinical.patient_charts(chart_id) ON DELETE CASCADE,
+      encounter_id TEXT NULL REFERENCES clinical.clinical_encounters(encounter_id) ON DELETE SET NULL,
+      diagnosis_code TEXT NULL,
+      diagnosis_text TEXT NOT NULL,
+      is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+      status TEXT NOT NULL,
+      recorded_by_actor_id TEXT NULL REFERENCES access_identity.actor_identities(actor_id),
+      recorded_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_diagnoses_chart_primary_recorded
+    ON clinical.diagnoses (chart_id, is_primary, recorded_at DESC)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS clinical.treatment_plans (
+      treatment_plan_id TEXT PRIMARY KEY,
+      chart_id TEXT NOT NULL REFERENCES clinical.patient_charts(chart_id) ON DELETE CASCADE,
+      encounter_id TEXT NULL REFERENCES clinical.clinical_encounters(encounter_id) ON DELETE SET NULL,
+      title TEXT NOT NULL,
+      plan_text TEXT NOT NULL,
+      status TEXT NOT NULL,
+      estimated_cost_amount NUMERIC(12,2) NULL,
+      currency_code TEXT NULL,
+      approved_by_patient_at TIMESTAMPTZ NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_treatment_plans_chart_status_updated
+    ON clinical.treatment_plans (chart_id, status, updated_at DESC)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS clinical.imaging_references (
+      imaging_ref_id TEXT PRIMARY KEY,
+      chart_id TEXT NOT NULL REFERENCES clinical.patient_charts(chart_id) ON DELETE CASCADE,
+      encounter_id TEXT NULL REFERENCES clinical.clinical_encounters(encounter_id) ON DELETE SET NULL,
+      imaging_type TEXT NOT NULL,
+      media_asset_id TEXT NULL,
+      external_url TEXT NULL,
+      description TEXT NULL,
+      taken_at TIMESTAMPTZ NULL,
+      uploaded_at TIMESTAMPTZ NOT NULL,
+      uploaded_by_actor_id TEXT NULL REFERENCES access_identity.actor_identities(actor_id),
+      is_primary_for_case BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CHECK (media_asset_id IS NOT NULL OR external_url IS NOT NULL)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_imaging_references_chart_uploaded
+    ON clinical.imaging_references (chart_id, uploaded_at DESC)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS clinical.odontogram_snapshots (
+      odontogram_snapshot_id TEXT PRIMARY KEY,
+      chart_id TEXT NOT NULL REFERENCES clinical.patient_charts(chart_id) ON DELETE CASCADE,
+      encounter_id TEXT NULL REFERENCES clinical.clinical_encounters(encounter_id) ON DELETE SET NULL,
+      snapshot_payload_json JSONB NOT NULL,
+      recorded_at TIMESTAMPTZ NOT NULL,
+      recorded_by_actor_id TEXT NULL REFERENCES access_identity.actor_identities(actor_id),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_odontogram_snapshots_chart_recorded
+    ON clinical.odontogram_snapshots (chart_id, recorded_at DESC)
+    """,
+    """
     CREATE TABLE IF NOT EXISTS policy_config.feature_flags (
       feature_flag_id TEXT PRIMARY KEY,
       scope_type TEXT NOT NULL,

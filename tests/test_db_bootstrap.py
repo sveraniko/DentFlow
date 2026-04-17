@@ -89,3 +89,15 @@ def test_stack3a_booking_tables_declared() -> None:
     assert "REFERENCES core_patient.patients(patient_id)" in ddl
     assert "CREATE TABLE IF NOT EXISTS booking.booking_patients" not in ddl
     assert "CREATE TABLE IF NOT EXISTS booking.patient_profiles" not in ddl
+
+def test_stack7a_clinical_tables_declared() -> None:
+    ddl = "\n".join(db_bootstrap.STACK1_TABLES)
+    assert "CREATE TABLE IF NOT EXISTS clinical.patient_charts" in ddl
+    assert "CREATE TABLE IF NOT EXISTS clinical.presenting_complaints" in ddl
+    assert "CREATE TABLE IF NOT EXISTS clinical.clinical_encounters" in ddl
+    assert "CREATE TABLE IF NOT EXISTS clinical.encounter_notes" in ddl
+    assert "CREATE TABLE IF NOT EXISTS clinical.diagnoses" in ddl
+    assert "CREATE TABLE IF NOT EXISTS clinical.treatment_plans" in ddl
+    assert "CREATE TABLE IF NOT EXISTS clinical.imaging_references" in ddl
+    assert "CREATE TABLE IF NOT EXISTS clinical.odontogram_snapshots" in ddl
+    assert "WHERE status='active'" in ddl
