@@ -7,6 +7,7 @@ from app.domain.access_identity.models import (
     ActorStatus,
     ActorType,
     ClinicRoleAssignment,
+    DoctorProfile,
     RoleCode,
     StaffMember,
     TelegramBinding,
@@ -33,6 +34,7 @@ class InMemoryAccessRepository:
         self.telegram_bindings: dict[int, TelegramBinding] = {}
         self.staff_members: dict[str, StaffMember] = {}
         self.role_assignments: dict[str, ClinicRoleAssignment] = {}
+        self.doctor_profiles: dict[str, DoctorProfile] = {}
 
     def upsert_actor_identity(self, actor: ActorIdentity) -> None:
         self.actor_identities[actor.actor_id] = actor
@@ -45,6 +47,9 @@ class InMemoryAccessRepository:
 
     def upsert_role_assignment(self, role_assignment: ClinicRoleAssignment) -> None:
         self.role_assignments[role_assignment.role_assignment_id] = role_assignment
+
+    def upsert_doctor_profile(self, doctor_profile: DoctorProfile) -> None:
+        self.doctor_profiles[doctor_profile.doctor_profile_id] = doctor_profile
 
 
 class AccessResolver:
@@ -85,3 +90,31 @@ class AccessResolver:
         if actor_context.role_codes.intersection(allowed_roles):
             return AccessDecision(allowed=True, reason="access.allowed")
         return AccessDecision(allowed=False, reason="access.denied.role")
+
+    def resolve_doctor_id(self, telegram_user_id: int) -> tuple[str | None, str | None]:
+        actor_context = self.resolve_actor_context(telegram_user_id)
+        if actor_context is None:
+            return None, "access.denied.unbound"
+        if RoleCode.DOCTOR not in actor_context.role_codes:
+            return None, "access.denied.role"
+        staff = next(
+            (
+                item
+                for item in self.repository.staff_members.values()
+                if item.actor_id == actor_context.actor_id and item.staff_status.value == "active"
+            ),
+            None,
+        )
+        if staff is None:
+            return None, "doctor.identity.unavailable"
+        rows = [
+            row
+            for row in self.repository.doctor_profiles.values()
+            if row.staff_id == staff.staff_id and row.clinic_id == staff.clinic_id and row.active_for_clinical_work
+        ]
+        if not rows:
+            return None, "doctor.identity.missing_profile"
+        doctor_ids = sorted({row.doctor_id for row in rows})
+        if len(doctor_ids) != 1:
+            return None, "doctor.identity.ambiguous_profile"
+        return doctor_ids[0], None
