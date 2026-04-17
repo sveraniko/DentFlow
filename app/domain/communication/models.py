@@ -22,6 +22,11 @@ class ReminderJob:
     supersedes_reminder_id: str | None
     created_at: datetime
     updated_at: datetime
+    queued_at: datetime | None = None
+    delivery_attempts_count: int = 0
+    last_error_code: str | None = None
+    last_error_text: str | None = None
+    last_failed_at: datetime | None = None
     sent_at: datetime | None = None
     acknowledged_at: datetime | None = None
     canceled_at: datetime | None = None

@@ -72,5 +72,9 @@
   "admin.booking.escalation.open.panel": "Эскалация {escalation_id}\nСессия: {session_id}\nПричина: {reason}\nПриоритет: {priority}\nСтатус: {status}",
   "admin.booking.open.usage": "Формат: /booking_open <booking_id>",
   "admin.booking.open.missing": "Запись не найдена.",
-  "admin.booking.open.panel": "Запись {booking_id}\nВрач: {doctor}\nУслуга: {service}\nВремя: {datetime}\nФилиал: {branch}\nСтатус: {status}\nДальше: {next_step}"
+  "admin.booking.open.panel": "Запись {booking_id}\nВрач: {doctor}\nУслуга: {service}\nВремя: {datetime}\nФилиал: {branch}\nСтатус: {status}\nДальше: {next_step}",
+  "admin.booking.escalation.take.usage": "Формат: /booking_escalation_take <escalation_id>",
+  "admin.booking.escalation.take.ok": "Эскалация {escalation_id} взята в работу.",
+  "admin.booking.escalation.resolve.usage": "Формат: /booking_escalation_resolve <escalation_id>",
+  "admin.booking.escalation.resolve.ok": "Эскалация {escalation_id} закрыта как решённая."
 }

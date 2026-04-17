@@ -31,7 +31,8 @@ class DbReminderJobRepository:
                             """
                             SELECT reminder_id, clinic_id, patient_id, booking_id, care_order_id, recommendation_id,
                                    reminder_type, channel, status, scheduled_for, payload_key, locale_at_send_time,
-                                   planning_group, supersedes_reminder_id, created_at, updated_at, sent_at,
+                                   planning_group, supersedes_reminder_id, created_at, updated_at, queued_at,
+                                   delivery_attempts_count, last_error_code, last_error_text, last_failed_at, sent_at,
                                    acknowledged_at, canceled_at, cancel_reason_code
                             FROM communication.reminder_jobs
                             WHERE booking_id=:booking_id
@@ -54,7 +55,8 @@ class DbReminderJobRepository:
                         """
                         SELECT reminder_id, clinic_id, patient_id, booking_id, care_order_id, recommendation_id,
                                reminder_type, channel, status, scheduled_for, payload_key, locale_at_send_time,
-                               planning_group, supersedes_reminder_id, created_at, updated_at, sent_at,
+                               planning_group, supersedes_reminder_id, created_at, updated_at, queued_at,
+                               delivery_attempts_count, last_error_code, last_error_text, last_failed_at, sent_at,
                                acknowledged_at, canceled_at, cancel_reason_code
                         FROM communication.reminder_jobs
                         WHERE reminder_id=:reminder_id
@@ -101,12 +103,13 @@ class DbReminderJobRepository:
                               FOR UPDATE SKIP LOCKED
                             )
                             UPDATE communication.reminder_jobs r
-                            SET status='queued', updated_at=:now
+                            SET status='queued', updated_at=:now, queued_at=:now
                             FROM due
                             WHERE r.reminder_id = due.reminder_id
                             RETURNING r.reminder_id, r.clinic_id, r.patient_id, r.booking_id, r.care_order_id, r.recommendation_id,
                                       r.reminder_type, r.channel, r.status, r.scheduled_for, r.payload_key, r.locale_at_send_time,
-                                      r.planning_group, r.supersedes_reminder_id, r.created_at, r.updated_at, r.sent_at,
+                                      r.planning_group, r.supersedes_reminder_id, r.created_at, r.updated_at, r.queued_at,
+                                      r.delivery_attempts_count, r.last_error_code, r.last_error_text, r.last_failed_at, r.sent_at,
                                       r.acknowledged_at, r.canceled_at, r.cancel_reason_code
                             """
                         ),
@@ -143,7 +146,7 @@ class DbReminderJobRepository:
             reminder_id=reminder_id,
             now=sent_at,
             status="sent",
-            extra_set=", sent_at=:now",
+            extra_set=", sent_at=:now, queued_at=NULL, last_error_code=NULL, last_error_text=NULL",
             extra_params={},
         )
 
@@ -152,9 +155,129 @@ class DbReminderJobRepository:
             reminder_id=reminder_id,
             now=failed_at,
             status="failed",
-            extra_set="",
-            extra_params={},
+            extra_set=", queued_at=NULL, delivery_attempts_count=delivery_attempts_count + 1, last_error_code=:error_code, last_error_text=:error_text, last_failed_at=:now",
+            extra_params={"error_text": error_text, "error_code": error_text[:64]},
         )
+
+    async def schedule_queued_reminder_retry(
+        self,
+        *,
+        reminder_id: str,
+        retry_at: datetime,
+        failed_at: datetime,
+        error_code: str,
+        error_text: str,
+    ) -> bool:
+        return await self._update_status(
+            reminder_id=reminder_id,
+            now=failed_at,
+            status="scheduled",
+            extra_set=", queued_at=NULL, scheduled_for=:retry_at, delivery_attempts_count=delivery_attempts_count + 1, last_error_code=:error_code, last_error_text=:error_text, last_failed_at=:now",
+            extra_params={"retry_at": retry_at, "error_code": error_code, "error_text": error_text},
+        )
+
+    async def reclaim_stale_queued_reminder(self, *, reminder_id: str, retry_at: datetime) -> bool:
+        engine = create_engine(self._db_config)
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text(
+                    """
+                    UPDATE communication.reminder_jobs
+                    SET status='scheduled', scheduled_for=:retry_at, updated_at=:retry_at, queued_at=NULL
+                    WHERE reminder_id=:reminder_id
+                      AND status='queued'
+                    """
+                ),
+                {"reminder_id": reminder_id, "retry_at": retry_at},
+            )
+        await engine.dispose()
+        return bool(result.rowcount)
+
+    async def list_stale_queued_reminders(self, *, queued_before: datetime, limit: int) -> list[ReminderJob]:
+        engine = create_engine(self._db_config)
+        async with engine.connect() as conn:
+            rows = list(
+                (
+                    await conn.execute(
+                        text(
+                            """
+                            SELECT reminder_id, clinic_id, patient_id, booking_id, care_order_id, recommendation_id,
+                                   reminder_type, channel, status, scheduled_for, payload_key, locale_at_send_time,
+                                   planning_group, supersedes_reminder_id, created_at, updated_at, queued_at,
+                                   delivery_attempts_count, last_error_code, last_error_text, last_failed_at, sent_at,
+                                   acknowledged_at, canceled_at, cancel_reason_code
+                            FROM communication.reminder_jobs
+                            WHERE status='queued'
+                              AND queued_at IS NOT NULL
+                              AND queued_at <= :queued_before
+                            ORDER BY queued_at ASC, updated_at ASC
+                            LIMIT :limit
+                            """
+                        ),
+                        {"queued_before": queued_before, "limit": limit},
+                    )
+                ).mappings()
+            )
+        await engine.dispose()
+        return [ReminderJob(**dict(row)) for row in rows]
+
+    async def list_failed_booking_reminders(self, *, limit: int) -> list[ReminderJob]:
+        engine = create_engine(self._db_config)
+        async with engine.connect() as conn:
+            rows = list(
+                (
+                    await conn.execute(
+                        text(
+                            """
+                            SELECT reminder_id, clinic_id, patient_id, booking_id, care_order_id, recommendation_id,
+                                   reminder_type, channel, status, scheduled_for, payload_key, locale_at_send_time,
+                                   planning_group, supersedes_reminder_id, created_at, updated_at, queued_at,
+                                   delivery_attempts_count, last_error_code, last_error_text, last_failed_at, sent_at,
+                                   acknowledged_at, canceled_at, cancel_reason_code
+                            FROM communication.reminder_jobs
+                            WHERE status='failed'
+                              AND booking_id IS NOT NULL
+                            ORDER BY updated_at DESC
+                            LIMIT :limit
+                            """
+                        ),
+                        {"limit": limit},
+                    )
+                ).mappings()
+            )
+        await engine.dispose()
+        return [ReminderJob(**dict(row)) for row in rows]
+
+    async def list_confirmation_no_response_candidates(self, *, sent_before: datetime, limit: int) -> list[ReminderJob]:
+        engine = create_engine(self._db_config)
+        async with engine.connect() as conn:
+            rows = list(
+                (
+                    await conn.execute(
+                        text(
+                            """
+                            SELECT reminder_id, clinic_id, patient_id, booking_id, care_order_id, recommendation_id,
+                                   reminder_type, channel, status, scheduled_for, payload_key, locale_at_send_time,
+                                   planning_group, supersedes_reminder_id, created_at, updated_at, queued_at,
+                                   delivery_attempts_count, last_error_code, last_error_text, last_failed_at, sent_at,
+                                   acknowledged_at, canceled_at, cancel_reason_code
+                            FROM communication.reminder_jobs
+                            WHERE reminder_type='booking_confirmation'
+                              AND status='sent'
+                              AND sent_at IS NOT NULL
+                              AND sent_at <= :sent_before
+                              AND acknowledged_at IS NULL
+                              AND booking_id IS NOT NULL
+                            ORDER BY sent_at ASC
+                            LIMIT :limit
+                            """
+                        ),
+                        {"sent_before": sent_before, "limit": limit},
+                    )
+                ).mappings()
+            )
+        await engine.dispose()
+        return [ReminderJob(**dict(row)) for row in rows]
 
     async def mark_reminder_canceled(self, *, reminder_id: str, canceled_at: datetime, reason_code: str) -> bool:
         return await self._update_status(
@@ -253,12 +376,14 @@ async def _insert_reminder_on_conn(conn: Any, payload: dict[str, object]) -> Non
             INSERT INTO communication.reminder_jobs (
               reminder_id, clinic_id, patient_id, booking_id, care_order_id, recommendation_id,
               reminder_type, channel, status, scheduled_for, payload_key, locale_at_send_time,
-              planning_group, supersedes_reminder_id, created_at, updated_at, sent_at, acknowledged_at,
+              planning_group, supersedes_reminder_id, created_at, updated_at, queued_at,
+              delivery_attempts_count, last_error_code, last_error_text, last_failed_at, sent_at, acknowledged_at,
               canceled_at, cancel_reason_code
             ) VALUES (
               :reminder_id, :clinic_id, :patient_id, :booking_id, :care_order_id, :recommendation_id,
               :reminder_type, :channel, :status, :scheduled_for, :payload_key, :locale_at_send_time,
-              :planning_group, :supersedes_reminder_id, :created_at, :updated_at, :sent_at, :acknowledged_at,
+              :planning_group, :supersedes_reminder_id, :created_at, :updated_at, :queued_at,
+              :delivery_attempts_count, :last_error_code, :last_error_text, :last_failed_at, :sent_at, :acknowledged_at,
               :canceled_at, :cancel_reason_code
             )
             ON CONFLICT (reminder_id) DO UPDATE SET
@@ -270,6 +395,11 @@ async def _insert_reminder_on_conn(conn: Any, payload: dict[str, object]) -> Non
               planning_group=EXCLUDED.planning_group,
               supersedes_reminder_id=EXCLUDED.supersedes_reminder_id,
               updated_at=EXCLUDED.updated_at,
+              queued_at=EXCLUDED.queued_at,
+              delivery_attempts_count=EXCLUDED.delivery_attempts_count,
+              last_error_code=EXCLUDED.last_error_code,
+              last_error_text=EXCLUDED.last_error_text,
+              last_failed_at=EXCLUDED.last_failed_at,
               sent_at=EXCLUDED.sent_at,
               acknowledged_at=EXCLUDED.acknowledged_at,
               canceled_at=EXCLUDED.canceled_at,

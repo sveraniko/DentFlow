@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
@@ -457,6 +458,39 @@ class BookingPatientFlowService:
             if row.admin_escalation_id == escalation_id:
                 return row
         return None
+
+    async def take_admin_escalation(self, *, clinic_id: str, escalation_id: str, actor_id: str) -> AdminEscalation | None:
+        escalation = await self.orchestration.repository.get_admin_escalation(escalation_id)  # type: ignore[attr-defined]
+        if escalation is None or escalation.clinic_id != clinic_id:
+            return None
+        updated = AdminEscalation(
+            **{
+                **asdict(escalation),
+                "status": "in_progress",
+                "assigned_to_actor_id": actor_id,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        await self.orchestration.repository.upsert_admin_escalation(updated)  # type: ignore[attr-defined]
+        return updated
+
+    async def resolve_admin_escalation(self, *, clinic_id: str, escalation_id: str, actor_id: str) -> AdminEscalation | None:
+        escalation = await self.orchestration.repository.get_admin_escalation(escalation_id)  # type: ignore[attr-defined]
+        if escalation is None or escalation.clinic_id != clinic_id:
+            return None
+        payload = dict(escalation.payload_summary or {})
+        payload["resolved_by"] = actor_id
+        updated = AdminEscalation(
+            **{
+                **asdict(escalation),
+                "status": "resolved",
+                "assigned_to_actor_id": actor_id,
+                "payload_summary": payload,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        await self.orchestration.repository.upsert_admin_escalation(updated)  # type: ignore[attr-defined]
+        return updated
 
     async def get_admin_booking_detail(self, *, booking_id: str) -> BookingCardView | None:
         booking = await self.reads.get_booking(booking_id)

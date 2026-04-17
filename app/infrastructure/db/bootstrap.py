@@ -531,11 +531,16 @@ STACK1_TABLES: tuple[str, ...] = (
       supersedes_reminder_id TEXT NULL REFERENCES communication.reminder_jobs(reminder_id),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      queued_at TIMESTAMPTZ NULL,
+      delivery_attempts_count INTEGER NOT NULL DEFAULT 0,
+      last_error_code TEXT NULL,
+      last_error_text TEXT NULL,
+      last_failed_at TIMESTAMPTZ NULL,
       sent_at TIMESTAMPTZ NULL,
       acknowledged_at TIMESTAMPTZ NULL,
       canceled_at TIMESTAMPTZ NULL,
       cancel_reason_code TEXT NULL,
-      CHECK (status IN ('scheduled', 'queued', 'sent', 'failed', 'canceled', 'expired'))
+      CHECK (status IN ('scheduled', 'queued', 'sent', 'failed', 'acknowledged', 'canceled', 'expired'))
     )
     """,
     """
