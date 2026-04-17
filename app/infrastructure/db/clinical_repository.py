@@ -143,22 +143,56 @@ class DbClinicalRepository(ClinicalRepository):
         )
         return [EncounterNote(**row) for row in rows]
 
+    async def list_chart_notes(self, *, chart_id: str) -> list[EncounterNote]:
+        rows = await _fetch_all(
+            self._db_config,
+            """
+            SELECT n.encounter_note_id, n.encounter_id, n.note_type, n.note_text, n.recorded_by_actor_id, n.recorded_at, n.created_at, n.updated_at
+            FROM clinical.encounter_notes n
+            JOIN clinical.clinical_encounters e ON e.encounter_id = n.encounter_id
+            WHERE e.chart_id=:chart_id
+            ORDER BY n.recorded_at ASC
+            """,
+            {"chart_id": chart_id},
+        )
+        return [EncounterNote(**row) for row in rows]
+
+    async def get_current_primary_diagnosis(self, *, chart_id: str) -> Diagnosis | None:
+        row = await _fetch_one(
+            self._db_config,
+            """
+            SELECT diagnosis_id, chart_id, encounter_id, diagnosis_code, diagnosis_text, is_primary, version_no, is_current, status,
+                   supersedes_diagnosis_id, superseded_at, recorded_by_actor_id, recorded_at, created_at, updated_at
+            FROM clinical.diagnoses
+            WHERE chart_id=:chart_id
+              AND is_primary=TRUE
+              AND is_current=TRUE
+            LIMIT 1
+            """,
+            {"chart_id": chart_id},
+        )
+        return Diagnosis(**row) if row else None
+
     async def upsert_diagnosis(self, item: Diagnosis) -> None:
         await _exec(
             self._db_config,
             """
             INSERT INTO clinical.diagnoses (
-              diagnosis_id, chart_id, encounter_id, diagnosis_code, diagnosis_text, is_primary, status,
-              recorded_by_actor_id, recorded_at, created_at, updated_at
+              diagnosis_id, chart_id, encounter_id, diagnosis_code, diagnosis_text, is_primary, version_no, is_current, status,
+              supersedes_diagnosis_id, superseded_at, recorded_by_actor_id, recorded_at, created_at, updated_at
             ) VALUES (
-              :diagnosis_id, :chart_id, :encounter_id, :diagnosis_code, :diagnosis_text, :is_primary, :status,
-              :recorded_by_actor_id, :recorded_at, :created_at, :updated_at
+              :diagnosis_id, :chart_id, :encounter_id, :diagnosis_code, :diagnosis_text, :is_primary, :version_no, :is_current, :status,
+              :supersedes_diagnosis_id, :superseded_at, :recorded_by_actor_id, :recorded_at, :created_at, :updated_at
             )
             ON CONFLICT (diagnosis_id) DO UPDATE SET
               diagnosis_code=EXCLUDED.diagnosis_code,
               diagnosis_text=EXCLUDED.diagnosis_text,
               is_primary=EXCLUDED.is_primary,
+              version_no=EXCLUDED.version_no,
+              is_current=EXCLUDED.is_current,
               status=EXCLUDED.status,
+              supersedes_diagnosis_id=EXCLUDED.supersedes_diagnosis_id,
+              superseded_at=EXCLUDED.superseded_at,
               updated_at=EXCLUDED.updated_at
             """,
             asdict(item),
@@ -168,8 +202,8 @@ class DbClinicalRepository(ClinicalRepository):
         rows = await _fetch_all(
             self._db_config,
             """
-            SELECT diagnosis_id, chart_id, encounter_id, diagnosis_code, diagnosis_text, is_primary, status,
-                   recorded_by_actor_id, recorded_at, created_at, updated_at
+            SELECT diagnosis_id, chart_id, encounter_id, diagnosis_code, diagnosis_text, is_primary, version_no, is_current, status,
+                   supersedes_diagnosis_id, superseded_at, recorded_by_actor_id, recorded_at, created_at, updated_at
             FROM clinical.diagnoses
             WHERE chart_id=:chart_id
             ORDER BY recorded_at ASC
@@ -178,21 +212,41 @@ class DbClinicalRepository(ClinicalRepository):
         )
         return [Diagnosis(**row) for row in rows]
 
+    async def get_current_treatment_plan(self, *, chart_id: str) -> TreatmentPlan | None:
+        row = await _fetch_one(
+            self._db_config,
+            """
+            SELECT treatment_plan_id, chart_id, encounter_id, title, plan_text, version_no, is_current, status,
+                   supersedes_treatment_plan_id, superseded_at,
+                   estimated_cost_amount, currency_code, approved_by_patient_at, created_at, updated_at
+            FROM clinical.treatment_plans
+            WHERE chart_id=:chart_id
+              AND is_current=TRUE
+            LIMIT 1
+            """,
+            {"chart_id": chart_id},
+        )
+        return TreatmentPlan(**row) if row else None
+
     async def upsert_treatment_plan(self, item: TreatmentPlan) -> None:
         await _exec(
             self._db_config,
             """
             INSERT INTO clinical.treatment_plans (
-              treatment_plan_id, chart_id, encounter_id, title, plan_text, status,
-              estimated_cost_amount, currency_code, approved_by_patient_at, created_at, updated_at
+              treatment_plan_id, chart_id, encounter_id, title, plan_text, version_no, is_current, status,
+              supersedes_treatment_plan_id, superseded_at, estimated_cost_amount, currency_code, approved_by_patient_at, created_at, updated_at
             ) VALUES (
-              :treatment_plan_id, :chart_id, :encounter_id, :title, :plan_text, :status,
-              :estimated_cost_amount, :currency_code, :approved_by_patient_at, :created_at, :updated_at
+              :treatment_plan_id, :chart_id, :encounter_id, :title, :plan_text, :version_no, :is_current, :status,
+              :supersedes_treatment_plan_id, :superseded_at, :estimated_cost_amount, :currency_code, :approved_by_patient_at, :created_at, :updated_at
             )
             ON CONFLICT (treatment_plan_id) DO UPDATE SET
               title=EXCLUDED.title,
               plan_text=EXCLUDED.plan_text,
+              version_no=EXCLUDED.version_no,
+              is_current=EXCLUDED.is_current,
               status=EXCLUDED.status,
+              supersedes_treatment_plan_id=EXCLUDED.supersedes_treatment_plan_id,
+              superseded_at=EXCLUDED.superseded_at,
               estimated_cost_amount=EXCLUDED.estimated_cost_amount,
               currency_code=EXCLUDED.currency_code,
               approved_by_patient_at=EXCLUDED.approved_by_patient_at,
@@ -205,7 +259,8 @@ class DbClinicalRepository(ClinicalRepository):
         rows = await _fetch_all(
             self._db_config,
             """
-            SELECT treatment_plan_id, chart_id, encounter_id, title, plan_text, status,
+            SELECT treatment_plan_id, chart_id, encounter_id, title, plan_text, version_no, is_current, status,
+                   supersedes_treatment_plan_id, superseded_at,
                    estimated_cost_amount, currency_code, approved_by_patient_at, created_at, updated_at
             FROM clinical.treatment_plans
             WHERE chart_id=:chart_id

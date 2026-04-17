@@ -10,6 +10,7 @@ class AppConfig(BaseSettings):
     name: str = "DentFlow"
     env: str = "dev"
     default_locale: str = "ru"
+    default_timezone: str = "UTC"
 
 
 class TelegramConfig(BaseSettings):
