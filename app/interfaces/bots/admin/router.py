@@ -74,7 +74,9 @@ def make_router(
 
     @router.message(Command("search_patient"))
     async def search_patient(message: Message) -> None:
-        await _run_search(message, access_resolver=access_resolver, i18n=i18n, default_locale=default_locale)
+        locale = await _run_search(message, access_resolver=access_resolver, i18n=i18n, default_locale=default_locale)
+        if locale is None:
+            return
         if not message.from_user or not message.text:
             return
         actor_context = access_resolver.resolve_actor_context(message.from_user.id)
@@ -82,13 +84,23 @@ def make_router(
             return
         query = message.text.replace("/search_patient", "", 1).strip()
         if not query:
-            await message.answer("Usage: /search_patient <query>")
+            await message.answer(i18n.t("search.usage.patient", locale))
             return
-        await message.answer(await run_patient_search(service=search_service, clinic_id=actor_context.clinic_id, query=query))
+        await message.answer(
+            await run_patient_search(
+                service=search_service,
+                i18n=i18n,
+                locale=locale,
+                clinic_id=actor_context.clinic_id,
+                query=query,
+            )
+        )
 
     @router.message(Command("search_doctor"))
     async def search_doctor(message: Message) -> None:
         locale = await _run_search(message, access_resolver=access_resolver, i18n=i18n, default_locale=default_locale)
+        if locale is None:
+            return
         if not message.from_user or not message.text:
             return
         actor_context = access_resolver.resolve_actor_context(message.from_user.id)
@@ -96,13 +108,23 @@ def make_router(
             return
         query = message.text.replace("/search_doctor", "", 1).strip()
         if not query:
-            await message.answer("Usage: /search_doctor <query>")
+            await message.answer(i18n.t("search.usage.doctor", locale))
             return
-        await message.answer(await run_doctor_search(service=search_service, clinic_id=actor_context.clinic_id, query=query))
+        await message.answer(
+            await run_doctor_search(
+                service=search_service,
+                i18n=i18n,
+                locale=locale,
+                clinic_id=actor_context.clinic_id,
+                query=query,
+            )
+        )
 
     @router.message(Command("search_service"))
     async def search_service(message: Message) -> None:
         locale = await _run_search(message, access_resolver=access_resolver, i18n=i18n, default_locale=default_locale)
+        if locale is None:
+            return
         if not message.from_user or not message.text:
             return
         actor_context = access_resolver.resolve_actor_context(message.from_user.id)
@@ -110,10 +132,16 @@ def make_router(
             return
         query = message.text.replace("/search_service", "", 1).strip()
         if not query:
-            await message.answer("Usage: /search_service <query>")
+            await message.answer(i18n.t("search.usage.service", locale))
             return
         await message.answer(
-            await run_service_search(service=search_service, clinic_id=actor_context.clinic_id, query=query, locale=locale)
+            await run_service_search(
+                service=search_service,
+                i18n=i18n,
+                locale=locale,
+                clinic_id=actor_context.clinic_id,
+                query=query,
+            )
         )
 
     @router.message(Command("clinic"))

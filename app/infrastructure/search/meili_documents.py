@@ -12,8 +12,10 @@ class MeiliPatientDocument:
     clinic_id: str
     display_name: str
     patient_number: str | None
+    name_normalized: str | None
     name_tokens_normalized: str | None
     translit_tokens: str | None
+    external_id_normalized: str | None
     primary_phone_normalized: str | None
     preferred_language: str | None
     primary_photo_ref: str | None
@@ -29,6 +31,7 @@ class MeiliDoctorDocument:
     clinic_id: str
     branch_id: str | None
     display_name: str
+    name_normalized: str | None
     name_tokens_normalized: str | None
     translit_tokens: str | None
     specialty_code: str | None
@@ -60,8 +63,10 @@ def patient_projection_to_document(row: PatientProjectionRow) -> dict:
             clinic_id=row.clinic_id,
             display_name=row.display_name,
             patient_number=row.patient_number,
+            name_normalized=row.name_normalized,
             name_tokens_normalized=row.name_tokens_normalized,
             translit_tokens=row.translit_tokens,
+            external_id_normalized=row.external_id_normalized,
             primary_phone_normalized=row.primary_phone_normalized,
             preferred_language=row.preferred_language,
             primary_photo_ref=row.primary_photo_ref,
@@ -80,6 +85,7 @@ def doctor_projection_to_document(row: DoctorProjectionRow) -> dict:
             clinic_id=row.clinic_id,
             branch_id=row.branch_id,
             display_name=row.display_name,
+            name_normalized=row.name_normalized,
             name_tokens_normalized=row.name_tokens_normalized,
             translit_tokens=row.translit_tokens,
             specialty_code=row.specialty_code,

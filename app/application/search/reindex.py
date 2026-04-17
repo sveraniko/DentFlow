@@ -49,8 +49,8 @@ class MeiliReindexService:
         }
 
     async def _replace_in_batches(self, *, index_name: str, docs: list[dict]) -> None:
+        await self._client.clear_documents(index_name=index_name)
         if not docs:
-            await self._client.replace_documents(index_name=index_name, documents=[])
             return
         for start in range(0, len(docs), self._batch_size):
-            await self._client.replace_documents(index_name=index_name, documents=docs[start : start + self._batch_size])
+            await self._client.add_documents(index_name=index_name, documents=docs[start : start + self._batch_size])

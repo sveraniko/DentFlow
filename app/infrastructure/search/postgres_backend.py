@@ -23,7 +23,7 @@ class PostgresSearchBackend:
         normalized_query = query.query.strip().lower()
         statement = text(
             """
-            SELECT patient_id, clinic_id, display_name, patient_number, primary_phone_normalized, status
+            SELECT patient_id, clinic_id, display_name, patient_number, primary_phone_normalized, active_flags_summary, status
             FROM search.patient_search_projection
             WHERE clinic_id = :clinic_id
               AND (
@@ -39,13 +39,18 @@ class PostgresSearchBackend:
         engine = create_engine(self._db_config)
         try:
             async with engine.connect() as conn:
-                rows = (await conn.execute(statement, {
-                    "clinic_id": query.clinic_id,
-                    "exact_query": query.query.strip(),
-                    "normalized_phone": normalized_phone,
-                    "normalized_query": normalized_query,
-                    "limit": query.limit,
-                })).mappings().all()
+                rows = (
+                    await conn.execute(
+                        statement,
+                        {
+                            "clinic_id": query.clinic_id,
+                            "exact_query": query.query.strip(),
+                            "normalized_phone": normalized_phone,
+                            "normalized_query": normalized_query,
+                            "limit": query.limit,
+                        },
+                    )
+                ).mappings().all()
         finally:
             await engine.dispose()
         return [
@@ -55,6 +60,7 @@ class PostgresSearchBackend:
                 display_name=row.get("display_name") or "",
                 patient_number=row.get("patient_number"),
                 primary_phone_normalized=row.get("primary_phone_normalized"),
+                active_flags_summary=row.get("active_flags_summary"),
                 status=row.get("status"),
                 origin=SearchResultOrigin.POSTGRES_STRICT,
             )
@@ -62,14 +68,14 @@ class PostgresSearchBackend:
         ]
 
     async def search_patients(self, query: SearchQuery) -> list[PatientSearchResult]:
-        # Fallback non-strict path still uses canonical projection table.
         statement = text(
             """
-            SELECT patient_id, clinic_id, display_name, patient_number, primary_phone_normalized, status
+            SELECT patient_id, clinic_id, display_name, patient_number, primary_phone_normalized, active_flags_summary, status
             FROM search.patient_search_projection
             WHERE clinic_id = :clinic_id
               AND (
                 lower(display_name) LIKE :q
+                OR coalesce(name_normalized, '') LIKE :q
                 OR coalesce(name_tokens_normalized, '') LIKE :q
                 OR coalesce(translit_tokens, '') LIKE :q
               )
@@ -88,6 +94,7 @@ class PostgresSearchBackend:
             WHERE clinic_id = :clinic_id
               AND (
                 lower(display_name) LIKE :q
+                OR coalesce(name_normalized, '') LIKE :q
                 OR coalesce(name_tokens_normalized, '') LIKE :q
                 OR coalesce(translit_tokens, '') LIKE :q
                 OR coalesce(specialty_label, '') LIKE :q
@@ -170,6 +177,7 @@ class PostgresSearchBackend:
                 display_name=row.get("display_name") or "",
                 patient_number=row.get("patient_number"),
                 primary_phone_normalized=row.get("primary_phone_normalized"),
+                active_flags_summary=row.get("active_flags_summary"),
                 status=row.get("status"),
                 origin=SearchResultOrigin.POSTGRES_FALLBACK,
             )
