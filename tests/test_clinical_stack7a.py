@@ -11,7 +11,7 @@ from app.application.clinic_reference import ClinicReferenceService, InMemoryCli
 from app.application.doctor.patient_read import DoctorPatientSnapshot
 from app.domain.access_identity.models import ActorIdentity, ActorStatus, ActorType, ClinicRoleAssignment, DoctorProfile, RoleCode, StaffMember, StaffStatus, TelegramBinding
 from app.domain.booking import Booking
-from app.domain.clinic_reference.models import Clinic, Doctor, RecordStatus, Service
+from app.domain.clinic_reference.models import Branch, Clinic, Doctor, RecordStatus, Service
 from app.domain.clinical import ClinicalEncounter, Diagnosis, EncounterNote, ImagingReference, OdontogramSnapshot, PatientChart, TreatmentPlan
 
 
@@ -58,6 +58,15 @@ class _ClinicalRepo:
     async def list_encounter_notes(self, *, encounter_id: str):
         return sorted([n for n in self.notes.values() if n.encounter_id == encounter_id], key=lambda x: x.recorded_at)
 
+    async def list_chart_notes(self, *, chart_id: str):
+        encounter_ids = {e.encounter_id for e in self.encounters.values() if e.chart_id == chart_id}
+        return sorted([n for n in self.notes.values() if n.encounter_id in encounter_ids], key=lambda x: x.recorded_at)
+
+    async def get_current_primary_diagnosis(self, *, chart_id: str):
+        rows = [d for d in self.diagnoses.values() if d.chart_id == chart_id and d.is_primary and d.is_current]
+        rows.sort(key=lambda x: x.version_no)
+        return rows[-1] if rows else None
+
     async def upsert_diagnosis(self, item: Diagnosis) -> None:
         self.diagnoses[item.diagnosis_id] = item
 
@@ -66,6 +75,11 @@ class _ClinicalRepo:
 
     async def upsert_treatment_plan(self, item: TreatmentPlan) -> None:
         self.plans[item.treatment_plan_id] = item
+
+    async def get_current_treatment_plan(self, *, chart_id: str):
+        rows = [p for p in self.plans.values() if p.chart_id == chart_id and p.is_current]
+        rows.sort(key=lambda x: x.version_no)
+        return rows[-1] if rows else None
 
     async def list_chart_treatment_plans(self, *, chart_id: str):
         return sorted([p for p in self.plans.values() if p.chart_id == chart_id], key=lambda x: x.created_at)
@@ -147,6 +161,7 @@ def _ops() -> DoctorOperationsService:
         reference_service=ClinicReferenceService(ref_repo),
         patient_reader=_Reader(),
         clinical_service=clinical,
+        app_default_timezone="UTC",
     )
 
 
@@ -163,6 +178,29 @@ def test_chart_and_encounter_baseline_flow() -> None:
     assert diagnosis_id and plan_id
 
 
+def test_diagnosis_and_treatment_plan_versioned_current_semantics() -> None:
+    ops = _ops()
+    _ = asyncio.run(ops.set_chart_diagnosis(doctor_id="d1", clinic_id="c1", patient_id="p1", diagnosis_text="Initial diagnosis"))
+    _ = asyncio.run(ops.set_chart_diagnosis(doctor_id="d1", clinic_id="c1", patient_id="p1", diagnosis_text="Revised diagnosis"))
+    _ = asyncio.run(ops.set_chart_treatment_plan(doctor_id="d1", clinic_id="c1", patient_id="p1", title="Plan A", plan_text="First plan"))
+    _ = asyncio.run(ops.set_chart_treatment_plan(doctor_id="d1", clinic_id="c1", patient_id="p1", title="Plan B", plan_text="Revised plan"))
+
+    card = asyncio.run(ops.open_chart_summary(doctor_id="d1", clinic_id="c1", patient_id="p1"))
+    assert card is not None
+    assert card.latest_diagnosis_text == "Revised diagnosis"
+    assert card.latest_treatment_plan_text == "Plan B"
+
+    repo = ops.clinical_service.repository
+    diagnoses = sorted(repo.diagnoses.values(), key=lambda d: d.version_no)
+    plans = sorted(repo.plans.values(), key=lambda p: p.version_no)
+    assert [d.version_no for d in diagnoses] == [1, 2]
+    assert diagnoses[0].is_current is False and diagnoses[0].superseded_at is not None
+    assert diagnoses[1].is_current is True and diagnoses[1].supersedes_diagnosis_id == diagnoses[0].diagnosis_id
+    assert [p.version_no for p in plans] == [1, 2]
+    assert plans[0].is_current is False and plans[0].superseded_at is not None
+    assert plans[1].is_current is True and plans[1].supersedes_treatment_plan_id == plans[0].treatment_plan_id
+
+
 def test_doctor_cannot_open_unrelated_chart() -> None:
     ops = _ops()
     denied = asyncio.run(ops.open_chart_summary(doctor_id="d1", clinic_id="c1", patient_id="p2"))
@@ -175,3 +213,47 @@ def test_imaging_url_and_odontogram_snapshot_baseline() -> None:
     assert ref and ref.external_url == "https://example.com/ct/1"
     snap = asyncio.run(ops.save_chart_odontogram(doctor_id="d1", clinic_id="c1", patient_id="p1", snapshot_payload_json={"teeth": [{"id": "11", "state": "filled"}]}))
     assert snap and snap.snapshot_payload_json["teeth"][0]["id"] == "11"
+
+
+def test_chart_summary_note_count_and_latest_note_include_closed_encounters() -> None:
+    ops = _ops()
+    encounter = asyncio.run(ops.open_or_get_encounter(doctor_id="d1", clinic_id="c1", patient_id="p1", booking_id="b1"))
+    assert encounter is not None
+    _ = asyncio.run(ops.add_encounter_note(doctor_id="d1", encounter_id=encounter.encounter_id, note_type="soap", note_text="open note"))
+    closed = asyncio.run(ops.clinical_service.close_encounter(encounter.encounter_id))
+    assert closed and closed.status == "closed"
+    second = asyncio.run(ops.open_or_get_encounter(doctor_id="d1", clinic_id="c1", patient_id="p1"))
+    assert second is not None
+    _ = asyncio.run(ops.add_encounter_note(doctor_id="d1", encounter_id=second.encounter_id, note_type="progress", note_text="latest chart note"))
+    card = asyncio.run(ops.open_chart_summary(doctor_id="d1", clinic_id="c1", patient_id="p1"))
+    assert card is not None
+    assert card.note_count == 2
+    assert card.latest_note_snippet == "latest chart note"
+
+
+def test_doctor_timezones_use_branch_then_clinic_then_app_default() -> None:
+    ops = _ops()
+    booking = replace(ops.booking_service.repository.booking, branch_id="b1", clinic_id="c1")
+    ops.booking_service.repository.booking = booking
+    assert ops.booking_service.repository.booking.scheduled_start_at.tzinfo == timezone.utc
+    ops.reference_service.repository.upsert_branch(
+        Branch(
+            branch_id="b1",
+            clinic_id="c1",
+            display_name="Main",
+            address_text="-",
+            timezone="Europe/Warsaw",
+            status=RecordStatus.ACTIVE,
+        )
+    )
+    row = asyncio.run(ops.get_booking_detail(doctor_id="d1", booking_id="b1"))
+    assert row and row.scheduled_label.endswith("CEST")
+
+    ops.reference_service.repository.branches.clear()
+    row2 = asyncio.run(ops.get_booking_detail(doctor_id="d1", booking_id="b1"))
+    assert row2 and row2.scheduled_label.endswith("UTC")
+
+    ops.reference_service.repository.clinics["c1"] = replace(ops.reference_service.repository.clinics["c1"], timezone="")
+    ops.app_default_timezone = "America/New_York"
+    row3 = asyncio.run(ops.get_booking_detail(doctor_id="d1", booking_id="b1"))
+    assert row3 and row3.scheduled_label.endswith("EDT")

@@ -671,7 +671,11 @@ STACK1_TABLES: tuple[str, ...] = (
       diagnosis_code TEXT NULL,
       diagnosis_text TEXT NOT NULL,
       is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+      version_no INTEGER NOT NULL DEFAULT 1,
+      is_current BOOLEAN NOT NULL DEFAULT TRUE,
       status TEXT NOT NULL,
+      supersedes_diagnosis_id TEXT NULL REFERENCES clinical.diagnoses(diagnosis_id),
+      superseded_at TIMESTAMPTZ NULL,
       recorded_by_actor_id TEXT NULL REFERENCES access_identity.actor_identities(actor_id),
       recorded_at TIMESTAMPTZ NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -683,13 +687,22 @@ STACK1_TABLES: tuple[str, ...] = (
     ON clinical.diagnoses (chart_id, is_primary, recorded_at DESC)
     """,
     """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_diagnoses_current_primary_per_chart
+    ON clinical.diagnoses (chart_id)
+    WHERE is_primary=TRUE AND is_current=TRUE
+    """,
+    """
     CREATE TABLE IF NOT EXISTS clinical.treatment_plans (
       treatment_plan_id TEXT PRIMARY KEY,
       chart_id TEXT NOT NULL REFERENCES clinical.patient_charts(chart_id) ON DELETE CASCADE,
       encounter_id TEXT NULL REFERENCES clinical.clinical_encounters(encounter_id) ON DELETE SET NULL,
       title TEXT NOT NULL,
       plan_text TEXT NOT NULL,
+      version_no INTEGER NOT NULL DEFAULT 1,
+      is_current BOOLEAN NOT NULL DEFAULT TRUE,
       status TEXT NOT NULL,
+      supersedes_treatment_plan_id TEXT NULL REFERENCES clinical.treatment_plans(treatment_plan_id),
+      superseded_at TIMESTAMPTZ NULL,
       estimated_cost_amount NUMERIC(12,2) NULL,
       currency_code TEXT NULL,
       approved_by_patient_at TIMESTAMPTZ NULL,
@@ -700,6 +713,11 @@ STACK1_TABLES: tuple[str, ...] = (
     """
     CREATE INDEX IF NOT EXISTS idx_treatment_plans_chart_status_updated
     ON clinical.treatment_plans (chart_id, status, updated_at DESC)
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_treatment_plans_current_per_chart
+    ON clinical.treatment_plans (chart_id)
+    WHERE is_current=TRUE
     """,
     """
     CREATE TABLE IF NOT EXISTS clinical.imaging_references (

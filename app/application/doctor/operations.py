@@ -12,6 +12,7 @@ from app.application.booking.services import BookingService
 from app.application.clinic_reference import ClinicReferenceService
 from app.application.clinical import ChartSummary, ClinicalChartService
 from app.application.doctor.patient_read import DoctorPatientReader
+from app.application.timezone import DoctorTimezoneFormatter
 from app.domain.booking import Booking
 from app.domain.booking.errors import InvalidBookingTransitionError
 from app.domain.clinical import ClinicalEncounter, EncounterNote, ImagingReference, OdontogramSnapshot
@@ -82,6 +83,7 @@ class DoctorOperationsService:
     reference_service: ClinicReferenceService
     patient_reader: DoctorPatientReader
     clinical_service: ClinicalChartService | None = None
+    app_default_timezone: str = "UTC"
 
     def resolve_doctor_identity(self, telegram_user_id: int) -> tuple[str | None, str | None]:
         return self.access_resolver.resolve_doctor_id(telegram_user_id)
@@ -149,7 +151,7 @@ class DoctorOperationsService:
         summary = await self.clinical_service.load_chart_summary(chart_id=chart.chart_id)
         if summary is None:
             return None
-        return self._build_chart_summary_card(summary)
+        return self._build_chart_summary_card(summary, clinic_id=clinic_id)
 
     async def open_or_get_encounter(
         self,
@@ -241,7 +243,8 @@ class DoctorOperationsService:
             return InvalidStateOutcome(kind="invalid_state", reason=f"booking cannot transition to {action}")
         return OrchestrationSuccess(kind="success", entity=changed.entity)
 
-    def _build_chart_summary_card(self, summary: ChartSummary) -> DoctorChartSummaryCard:
+    def _build_chart_summary_card(self, summary: ChartSummary, *, clinic_id: str) -> DoctorChartSummaryCard:
+        tz = DoctorTimezoneFormatter(reference_service=self.reference_service, app_default_timezone=self.app_default_timezone)
         latest_note_snippet = None
         if summary.latest_note:
             latest_note_snippet = summary.latest_note.note_text[:120]
@@ -254,10 +257,11 @@ class DoctorOperationsService:
             latest_note_snippet=latest_note_snippet,
             note_count=summary.note_count,
             imaging_count=summary.imaging_count,
-            updated_at_label=summary.updated_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            updated_at_label=tz.format_clinic_time(clinic_id=clinic_id, when=summary.updated_at, fmt="%Y-%m-%d %H:%M %Z"),
         )
 
     async def _build_queue_item(self, booking: Booking) -> DoctorQueueItem:
+        tz = DoctorTimezoneFormatter(reference_service=self.reference_service, app_default_timezone=self.app_default_timezone)
         patient_card = await self.build_patient_quick_card(
             patient_id=booking.patient_id,
             doctor_id=booking.doctor_id,
@@ -278,7 +282,7 @@ class DoctorOperationsService:
             service_label=(f"{service_row.code} ({service_row.title_key})" if service_row else booking.service_id),
             branch_label=(branch_row.display_name if branch_row else (booking.branch_id or "-")),
             booking_status=booking.status,
-            scheduled_label=booking.scheduled_start_at.astimezone(timezone.utc).strftime("%H:%M UTC"),
+            scheduled_label=tz.format_booking_time(clinic_id=booking.clinic_id, branch_id=booking.branch_id, when=booking.scheduled_start_at, fmt="%H:%M %Z"),
             scheduled_start_at=booking.scheduled_start_at,
         )
 
@@ -299,13 +303,14 @@ class DoctorOperationsService:
                 upcoming_booking_snippet=None,
             )
         queue_item = await self._build_queue_item(booking)
+        tz = DoctorTimezoneFormatter(reference_service=self.reference_service, app_default_timezone=self.app_default_timezone)
         return DoctorBookingDetail(
             booking_id=booking.booking_id,
             patient_card=card,
             service_label=queue_item.service_label,
             branch_label=queue_item.branch_label,
             booking_status=booking.status,
-            scheduled_label=booking.scheduled_start_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            scheduled_label=tz.format_booking_time(clinic_id=booking.clinic_id, branch_id=booking.branch_id, when=booking.scheduled_start_at, fmt="%Y-%m-%d %H:%M %Z"),
         )
 
     async def _upcoming_booking_snippet(self, *, patient_id: str, doctor_id: str) -> str | None:
@@ -315,7 +320,8 @@ class DoctorOperationsService:
         if not future:
             return None
         row = future[0]
-        return f"{row.scheduled_start_at.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} · {row.status}"
+        tz = DoctorTimezoneFormatter(reference_service=self.reference_service, app_default_timezone=self.app_default_timezone)
+        return f"{tz.format_booking_time(clinic_id=row.clinic_id, branch_id=row.branch_id, when=row.scheduled_start_at, fmt='%Y-%m-%d %H:%M %Z')} · {row.status}"
 
     async def _doctor_can_view_patient(self, *, doctor_id: str, patient_id: str) -> bool:
         rows = await self.booking_service.list_by_patient(patient_id=patient_id)

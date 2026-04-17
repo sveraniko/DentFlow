@@ -101,3 +101,7 @@ def test_stack7a_clinical_tables_declared() -> None:
     assert "CREATE TABLE IF NOT EXISTS clinical.imaging_references" in ddl
     assert "CREATE TABLE IF NOT EXISTS clinical.odontogram_snapshots" in ddl
     assert "WHERE status='active'" in ddl
+    assert "version_no INTEGER NOT NULL DEFAULT 1" in ddl
+    assert "is_current BOOLEAN NOT NULL DEFAULT TRUE" in ddl
+    assert "uq_diagnoses_current_primary_per_chart" in ddl
+    assert "uq_treatment_plans_current_per_chart" in ddl

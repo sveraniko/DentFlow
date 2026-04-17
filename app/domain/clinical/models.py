@@ -67,12 +67,16 @@ class Diagnosis:
     chart_id: str
     diagnosis_text: str
     is_primary: bool
+    version_no: int
+    is_current: bool
     status: str
     recorded_at: datetime
     created_at: datetime
     updated_at: datetime
     encounter_id: str | None = None
     diagnosis_code: str | None = None
+    supersedes_diagnosis_id: str | None = None
+    superseded_at: datetime | None = None
     recorded_by_actor_id: str | None = None
 
 
@@ -82,10 +86,14 @@ class TreatmentPlan:
     chart_id: str
     title: str
     plan_text: str
+    version_no: int
+    is_current: bool
     status: str
     created_at: datetime
     updated_at: datetime
     encounter_id: str | None = None
+    supersedes_treatment_plan_id: str | None = None
+    superseded_at: datetime | None = None
     estimated_cost_amount: float | None = None
     currency_code: str | None = None
     approved_by_patient_at: datetime | None = None

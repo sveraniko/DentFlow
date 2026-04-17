@@ -28,8 +28,11 @@ class ClinicalRepository(Protocol):
     async def upsert_encounter(self, item: ClinicalEncounter) -> None: ...
     async def add_encounter_note(self, item: EncounterNote) -> None: ...
     async def list_encounter_notes(self, *, encounter_id: str) -> list[EncounterNote]: ...
+    async def list_chart_notes(self, *, chart_id: str) -> list[EncounterNote]: ...
+    async def get_current_primary_diagnosis(self, *, chart_id: str) -> Diagnosis | None: ...
     async def upsert_diagnosis(self, item: Diagnosis) -> None: ...
     async def list_chart_diagnoses(self, *, chart_id: str) -> list[Diagnosis]: ...
+    async def get_current_treatment_plan(self, *, chart_id: str) -> TreatmentPlan | None: ...
     async def upsert_treatment_plan(self, item: TreatmentPlan) -> None: ...
     async def list_chart_treatment_plans(self, *, chart_id: str) -> list[TreatmentPlan]: ...
     async def upsert_imaging_reference(self, item: ImagingReference) -> None: ...
@@ -64,29 +67,25 @@ class ClinicalChartService:
         chart = await self.repository.get_chart(chart_id)
         if chart is None:
             return None
-        diagnoses = await self.repository.list_chart_diagnoses(chart_id=chart_id)
-        plans = await self.repository.list_chart_treatment_plans(chart_id=chart_id)
+        diagnosis = await self.repository.get_current_primary_diagnosis(chart_id=chart_id)
+        plan = await self.repository.get_current_treatment_plan(chart_id=chart_id)
         imaging = await self.repository.list_imaging_references(chart_id=chart_id)
-        latest_note = None
-        note_count = 0
-        encounter = await self.repository.get_open_encounter(chart_id=chart_id, doctor_id="", booking_id=None)
-        if encounter:
-            notes = await self.repository.list_encounter_notes(encounter_id=encounter.encounter_id)
-            note_count = len(notes)
-            latest_note = notes[-1] if notes else None
+        notes = await self.repository.list_chart_notes(chart_id=chart_id)
+        note_count = len(notes)
+        latest_note = notes[-1] if notes else None
         timestamps = [chart.updated_at]
-        if diagnoses:
-            timestamps.append(diagnoses[-1].updated_at)
-        if plans:
-            timestamps.append(plans[-1].updated_at)
+        if diagnosis:
+            timestamps.append(diagnosis.updated_at)
+        if plan:
+            timestamps.append(plan.updated_at)
         if latest_note:
             timestamps.append(latest_note.updated_at)
         if imaging:
             timestamps.append(imaging[-1].updated_at)
         return ChartSummary(
             chart=chart,
-            latest_diagnosis=diagnoses[-1] if diagnoses else None,
-            latest_treatment_plan=plans[-1] if plans else None,
+            latest_diagnosis=diagnosis,
+            latest_treatment_plan=plan,
             latest_note=latest_note,
             note_count=note_count,
             imaging_count=len(imaging),
@@ -137,6 +136,18 @@ class ClinicalChartService:
 
     async def set_diagnosis(self, *, chart_id: str, diagnosis_text: str, encounter_id: str | None = None, diagnosis_code: str | None = None, is_primary: bool = True, recorded_by_actor_id: str | None = None) -> Diagnosis:
         now = datetime.now(timezone.utc)
+        current = await self.repository.get_current_primary_diagnosis(chart_id=chart_id) if is_primary else None
+        if current is not None:
+            superseded = Diagnosis(
+                **{
+                    **asdict(current),
+                    "is_current": False,
+                    "status": "superseded",
+                    "superseded_at": now,
+                    "updated_at": now,
+                }
+            )
+            await self.repository.upsert_diagnosis(superseded)
         diagnosis = Diagnosis(
             diagnosis_id=f"dx_{uuid4().hex[:12]}",
             chart_id=chart_id,
@@ -144,7 +155,11 @@ class ClinicalChartService:
             diagnosis_code=diagnosis_code,
             diagnosis_text=diagnosis_text,
             is_primary=is_primary,
+            version_no=(current.version_no + 1) if current else 1,
+            is_current=True,
             status="active",
+            supersedes_diagnosis_id=current.diagnosis_id if current else None,
+            superseded_at=None,
             recorded_by_actor_id=recorded_by_actor_id,
             recorded_at=now,
             created_at=now,
@@ -155,13 +170,29 @@ class ClinicalChartService:
 
     async def set_treatment_plan(self, *, chart_id: str, title: str, plan_text: str, encounter_id: str | None = None, estimated_cost_amount: float | None = None, currency_code: str | None = None) -> TreatmentPlan:
         now = datetime.now(timezone.utc)
+        current = await self.repository.get_current_treatment_plan(chart_id=chart_id)
+        if current is not None:
+            superseded = TreatmentPlan(
+                **{
+                    **asdict(current),
+                    "is_current": False,
+                    "status": "superseded",
+                    "superseded_at": now,
+                    "updated_at": now,
+                }
+            )
+            await self.repository.upsert_treatment_plan(superseded)
         plan = TreatmentPlan(
             treatment_plan_id=f"tp_{uuid4().hex[:12]}",
             chart_id=chart_id,
             encounter_id=encounter_id,
             title=title,
             plan_text=plan_text,
+            version_no=(current.version_no + 1) if current else 1,
+            is_current=True,
             status="active",
+            supersedes_treatment_plan_id=current.treatment_plan_id if current else None,
+            superseded_at=None,
             estimated_cost_amount=estimated_cost_amount,
             currency_code=currency_code,
             approved_by_patient_at=None,
