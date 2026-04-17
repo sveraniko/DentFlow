@@ -838,6 +838,59 @@ class DbBookingUnitOfWork:
         )
         return int(result.rowcount or 0)
 
+    async def get_reminder_for_update_in_transaction(self, *, reminder_id: str) -> ReminderJob | None:
+        assert self._conn is not None
+        row = (
+            await self._conn.execute(
+                text(
+                    """
+                    SELECT reminder_id, clinic_id, patient_id, booking_id, care_order_id, recommendation_id,
+                           reminder_type, channel, status, scheduled_for, payload_key, locale_at_send_time,
+                           planning_group, supersedes_reminder_id, created_at, updated_at, sent_at,
+                           acknowledged_at, canceled_at, cancel_reason_code
+                    FROM communication.reminder_jobs
+                    WHERE reminder_id=:reminder_id
+                    FOR UPDATE
+                    """
+                ),
+                {"reminder_id": reminder_id},
+            )
+        ).mappings().first()
+        return ReminderJob(**dict(row)) if row is not None else None
+
+    async def mark_reminder_acknowledged_in_transaction(self, *, reminder_id: str, acknowledged_at: datetime) -> bool:
+        assert self._conn is not None
+        result = await self._conn.execute(
+            text(
+                """
+                UPDATE communication.reminder_jobs
+                SET status='acknowledged', acknowledged_at=:acknowledged_at, updated_at=:acknowledged_at
+                WHERE reminder_id=:reminder_id
+                  AND status='sent'
+                """
+            ),
+            {"reminder_id": reminder_id, "acknowledged_at": acknowledged_at},
+        )
+        return bool(result.rowcount)
+
+    async def has_sent_delivery_for_provider_message_in_transaction(self, *, reminder_id: str, provider_message_id: str) -> bool:
+        assert self._conn is not None
+        count = (
+            await self._conn.execute(
+                text(
+                    """
+                    SELECT COUNT(*) AS c
+                    FROM communication.message_deliveries
+                    WHERE reminder_id=:reminder_id
+                      AND provider_message_id=:provider_message_id
+                      AND delivery_status='sent'
+                    """
+                ),
+                {"reminder_id": reminder_id, "provider_message_id": provider_message_id},
+            )
+        ).scalar_one()
+        return int(count) > 0
+
 
 async def _fetch_one(db_config, sql: str, params: dict) -> dict | None:
     engine = create_engine(db_config)

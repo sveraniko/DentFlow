@@ -13,11 +13,11 @@ from app.application.communication.delivery import (
     render_booking_reminder_message,
 )
 from app.application.communication.actions import (
-    ReminderActionBookingReader,
     ReminderActionName,
     ReminderActionOutcome,
     ReminderActionRepository,
     ReminderActionService,
+    ReminderActionTransactionRepository,
 )
 
 __all__ = [
@@ -39,6 +39,6 @@ __all__ = [
     "ReminderActionName",
     "ReminderActionOutcome",
     "ReminderActionRepository",
-    "ReminderActionBookingReader",
+    "ReminderActionTransactionRepository",
     "ReminderActionService",
 ]
