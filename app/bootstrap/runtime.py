@@ -20,7 +20,7 @@ from app.application.booking import (
     WaitlistService,
 )
 from app.application.clinic_reference import ClinicReferenceService
-from app.application.communication import BookingReminderPlanner, BookingReminderService
+from app.application.communication import BookingReminderPlanner, BookingReminderService, ReminderActionService
 from app.application.policy import PolicyResolver
 from app.common.i18n import I18nService
 from app.config.settings import Settings
@@ -87,6 +87,11 @@ class RuntimeRegistry:
             reference=self.reference_service,
             patient_creator=DbCanonicalPatientCreator(settings.db),
         )
+        self.reminder_action_service = ReminderActionService(
+            repository=self.reminder_repository,
+            booking_reader=self.booking_repository,
+            booking_orchestration=self.booking_orchestration_service,
+        )
 
     def build_dispatcher(self) -> Dispatcher:
         dispatcher = Dispatcher()
@@ -95,6 +100,7 @@ class RuntimeRegistry:
                 self.i18n,
                 self.booking_patient_flow_service,
                 self.reference_service,
+                reminder_actions=self.reminder_action_service,
                 default_locale=self.settings.app.default_locale,
             )
         )

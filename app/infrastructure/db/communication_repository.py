@@ -45,6 +45,27 @@ class DbReminderJobRepository:
         await engine.dispose()
         return [ReminderJob(**dict(row)) for row in rows]
 
+    async def get_reminder(self, *, reminder_id: str) -> ReminderJob | None:
+        engine = create_engine(self._db_config)
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT reminder_id, clinic_id, patient_id, booking_id, care_order_id, recommendation_id,
+                               reminder_type, channel, status, scheduled_for, payload_key, locale_at_send_time,
+                               planning_group, supersedes_reminder_id, created_at, updated_at, sent_at,
+                               acknowledged_at, canceled_at, cancel_reason_code
+                        FROM communication.reminder_jobs
+                        WHERE reminder_id=:reminder_id
+                        """
+                    ),
+                    {"reminder_id": reminder_id},
+                )
+            ).mappings().first()
+        await engine.dispose()
+        return ReminderJob(**dict(row)) if row is not None else None
+
     async def cancel_scheduled_reminders_for_booking(self, *, booking_id: str, canceled_at: datetime, reason_code: str) -> int:
         engine = create_engine(self._db_config)
         async with engine.begin() as conn:
@@ -143,6 +164,43 @@ class DbReminderJobRepository:
             extra_set=", canceled_at=:now, cancel_reason_code=:reason_code",
             extra_params={"reason_code": reason_code},
         )
+
+    async def mark_reminder_acknowledged(self, *, reminder_id: str, acknowledged_at: datetime) -> bool:
+        engine = create_engine(self._db_config)
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text(
+                    """
+                    UPDATE communication.reminder_jobs
+                    SET status='acknowledged', acknowledged_at=:acknowledged_at, updated_at=:acknowledged_at
+                    WHERE reminder_id=:reminder_id
+                      AND status='sent'
+                    """
+                ),
+                {"reminder_id": reminder_id, "acknowledged_at": acknowledged_at},
+            )
+        await engine.dispose()
+        return bool(result.rowcount)
+
+    async def has_sent_delivery_for_provider_message(self, *, reminder_id: str, provider_message_id: str) -> bool:
+        engine = create_engine(self._db_config)
+        async with engine.connect() as conn:
+            count = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT COUNT(*) AS c
+                        FROM communication.message_deliveries
+                        WHERE reminder_id=:reminder_id
+                          AND provider_message_id=:provider_message_id
+                          AND delivery_status='sent'
+                        """
+                    ),
+                    {"reminder_id": reminder_id, "provider_message_id": provider_message_id},
+                )
+            ).scalar_one()
+        await engine.dispose()
+        return int(count) > 0
 
     async def next_delivery_attempt_no(self, *, reminder_id: str) -> int:
         engine = create_engine(self._db_config)

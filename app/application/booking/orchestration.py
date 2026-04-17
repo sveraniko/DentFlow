@@ -596,6 +596,22 @@ class BookingOrchestrationService:
             )
             return OrchestrationSuccess(kind="success", entity=transitioned_booking)
 
+    async def confirm_booking(self, *, booking_id: str, reason_code: str | None = None) -> BookingOutcome:
+        async with self.repository.transaction() as tx:
+            booking = await tx.get_booking_for_update(booking_id)
+            if booking is None:
+                return InvalidStateOutcome(kind="invalid_state", reason="booking not found")
+            try:
+                transitioned = await self.booking_state_service.transition_booking_in_transaction(
+                    tx=tx,
+                    current=booking,
+                    to_status="confirmed",
+                    reason_code=reason_code,
+                )
+            except InvalidBookingTransitionError:
+                return InvalidStateOutcome(kind="invalid_state", reason="booking cannot transition to confirmed")
+            return OrchestrationSuccess(kind="success", entity=transitioned.entity)
+
     async def cancel_booking(self, *, booking_id: str, reason_code: str | None = None) -> BookingOutcome:
         async with self.repository.transaction() as tx:
             booking = await tx.get_booking_for_update(booking_id)

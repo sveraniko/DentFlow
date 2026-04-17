@@ -90,12 +90,12 @@ class _Resolver:
 class _Sender:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
-        self.sent: list[tuple[int, str]] = []
+        self.sent: list[tuple[int, str, tuple[str, ...]]] = []
 
-    async def send_reminder(self, *, target: TelegramDeliveryTarget, text: str) -> ReminderSendResult:
+    async def send_reminder(self, *, target: TelegramDeliveryTarget, text: str, actions) -> ReminderSendResult:
         if self.fail:
             raise RuntimeError("telegram_send_failed")
-        self.sent.append((target.telegram_user_id, text))
+        self.sent.append((target.telegram_user_id, text, tuple(action.action for action in actions)))
         return ReminderSendResult(provider_message_id="777")
 
 
@@ -176,6 +176,7 @@ def test_delivery_success_persists_message_and_marks_sent() -> None:
     assert repo.jobs["r1"].status == "sent"
     assert repo.message_deliveries and repo.message_deliveries[0].delivery_status == "sent"
     assert repo.message_deliveries[0].provider_message_id == "777"
+    assert service.sender.sent[0][2] == ("confirm", "reschedule", "cancel")
 
 
 def test_delivery_failure_persists_message_and_marks_failed() -> None:

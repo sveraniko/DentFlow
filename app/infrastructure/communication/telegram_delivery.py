@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from aiogram import Bot
 from sqlalchemy import text
 
-from app.application.communication import RecipientResolution, ReminderSendResult, TelegramDeliveryTarget
+from app.application.communication import RecipientResolution, ReminderActionButton, ReminderSendResult, TelegramDeliveryTarget
 from app.domain.communication import ReminderJob
 from app.infrastructure.db.engine import create_engine
+
+if TYPE_CHECKING:
+    from aiogram import Bot
+    from aiogram.types import InlineKeyboardMarkup
 
 
 @dataclass(slots=True)
@@ -49,11 +53,23 @@ class DbTelegramReminderRecipientResolver:
 class AiogramTelegramReminderSender:
     bot_token: str
 
-    async def send_reminder(self, *, target: TelegramDeliveryTarget, text: str) -> ReminderSendResult:
+    async def send_reminder(self, *, target: TelegramDeliveryTarget, text: str, actions: tuple[ReminderActionButton, ...]) -> ReminderSendResult:
+        from aiogram import Bot
+
         bot = Bot(token=self.bot_token)
         try:
-            message = await bot.send_message(chat_id=target.telegram_user_id, text=text)
+            markup = _build_actions_markup(actions)
+            message = await bot.send_message(chat_id=target.telegram_user_id, text=text, reply_markup=markup)
             provider_message_id = str(message.message_id) if message is not None else None
             return ReminderSendResult(provider_message_id=provider_message_id)
         finally:
             await bot.session.close()
+
+
+def _build_actions_markup(actions: tuple[ReminderActionButton, ...]) -> "InlineKeyboardMarkup | None":
+    if not actions:
+        return None
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    rows = [[InlineKeyboardButton(text=action.label, callback_data=action.callback_data)] for action in actions]
+    return InlineKeyboardMarkup(inline_keyboard=rows)

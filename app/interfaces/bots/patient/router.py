@@ -7,6 +7,7 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, Message, ReplyKeyboardMarkup
 
+from app.application.communication import ReminderActionService
 from app.application.booking.orchestration_outcomes import ConflictOutcome, InvalidStateOutcome, OrchestrationSuccess, SlotUnavailableOutcome
 from app.application.booking.telegram_flow import BookingCardView, BookingControlResolutionResult, BookingPatientFlowService
 from app.application.clinic_reference import ClinicReferenceService
@@ -23,6 +24,7 @@ def make_router(
     i18n: I18nService,
     booking_flow: BookingPatientFlowService,
     reference: ClinicReferenceService,
+    reminder_actions: ReminderActionService,
     *,
     default_locale: str,
 ) -> Router:
@@ -256,6 +258,37 @@ def make_router(
             await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_by_user.get(callback.from_user.id, ""), text=_render_booking_card_text(card, locale=_locale()))
             return
         await callback.answer(i18n.t("patient.booking.finalize.invalid_state", _locale()), show_alert=True)
+
+    @router.callback_query(F.data.startswith("rem:"))
+    async def reminder_action_callback(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        callback_parts = callback.data.split(":", 2)
+        if len(callback_parts) != 3:
+            await callback.answer(i18n.t("patient.reminder.action.invalid", _locale()), show_alert=True)
+            return
+        _, action, reminder_id = callback_parts
+        if action not in {"ack", "confirm", "reschedule", "cancel"}:
+            await callback.answer(i18n.t("patient.reminder.action.invalid", _locale()), show_alert=True)
+            return
+        message_id = str(callback.message.message_id) if callback.message else None
+        outcome = await reminder_actions.handle_action(
+            reminder_id=reminder_id,
+            action=action,
+            provider_message_id=message_id,
+        )
+        if outcome.kind == "accepted":
+            if callback.message:
+                try:
+                    await callback.message.edit_reply_markup(reply_markup=None)
+                except Exception:
+                    pass
+            await callback.answer(i18n.t("patient.reminder.action.accepted", _locale()), show_alert=False)
+            return
+        if outcome.kind == "stale":
+            await callback.answer(i18n.t("patient.reminder.action.stale", _locale()), show_alert=True)
+            return
+        await callback.answer(i18n.t("patient.reminder.action.invalid", _locale()), show_alert=True)
 
     @router.callback_query(F.data.startswith("mybk:waitlist:"))
     async def join_waitlist(callback: CallbackQuery) -> None:
