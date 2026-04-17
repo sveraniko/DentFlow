@@ -193,10 +193,14 @@ class _Finder:
 class _PatientCreator:
     def __init__(self) -> None:
         self.calls = 0
+        self.telegram_links: list[tuple[str, int]] = []
 
     async def create_minimal_patient(self, *, clinic_id: str, display_name: str, phone: str) -> str:
         self.calls += 1
         return "pat_new"
+
+    async def upsert_telegram_contact(self, *, patient_id: str, telegram_user_id: int) -> None:
+        self.telegram_links.append((patient_id, telegram_user_id))
 
 
 def _reference_service() -> ClinicReferenceService:
@@ -247,6 +251,7 @@ def test_happy_path_with_no_match_creates_canonical_patient_and_finalizes() -> N
     )
     assert resolution.kind == "new_patient_created"
     assert creator.calls == 1
+    assert ("pat_new", 999) in creator.telegram_links
     review = asyncio.run(flow.mark_review_ready(booking_session_id=session.booking_session_id))
     assert isinstance(review, OrchestrationSuccess)
     finalized = asyncio.run(flow.finalize(booking_session_id=session.booking_session_id))
@@ -274,6 +279,7 @@ def test_exact_match_path_does_not_create_duplicate_patient() -> None:
     )
     assert resolution.kind == "exact_match"
     assert creator.calls == 0
+    assert ("pat_existing", 1001) in creator.telegram_links
 
 
 def test_ambiguous_path_escalates_and_does_not_leak_candidates() -> None:

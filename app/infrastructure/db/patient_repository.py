@@ -470,6 +470,18 @@ class DbCanonicalPatientCreator(CanonicalPatientCreator):
         )
         return patient.patient_id
 
+    async def upsert_telegram_contact(self, *, patient_id: str, telegram_user_id: int) -> None:
+        repository = await DbPatientRegistryRepository.load(self._db_config)
+        service = DbPatientRegistryService(repository)
+        await service.upsert_contact_db(
+            patient_id=patient_id,
+            contact_type="telegram",
+            contact_value=str(telegram_user_id),
+            is_primary=True,
+            is_verified=True,
+            is_active=True,
+        )
+
 
 async def seed_stack2_patients(db_config, payload: dict) -> dict[str, int]:
     repo = DbPatientRegistryRepository(db_config)
