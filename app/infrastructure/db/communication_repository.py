@@ -6,7 +6,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from app.domain.communication import ReminderJob
+from app.domain.communication import MessageDelivery, ReminderJob
 from app.infrastructure.db.engine import create_engine
 
 
@@ -61,6 +61,131 @@ class DbReminderJobRepository:
             )
         await engine.dispose()
         return int(result.rowcount or 0)
+
+    async def claim_due_reminders(self, *, now: datetime, limit: int) -> list[ReminderJob]:
+        engine = create_engine(self._db_config)
+        async with engine.begin() as conn:
+            rows = list(
+                (
+                    await conn.execute(
+                        text(
+                            """
+                            WITH due AS (
+                              SELECT reminder_id
+                              FROM communication.reminder_jobs
+                              WHERE status='scheduled'
+                                AND scheduled_for <= :now
+                              ORDER BY scheduled_for ASC, created_at ASC
+                              LIMIT :limit
+                              FOR UPDATE SKIP LOCKED
+                            )
+                            UPDATE communication.reminder_jobs r
+                            SET status='queued', updated_at=:now
+                            FROM due
+                            WHERE r.reminder_id = due.reminder_id
+                            RETURNING r.reminder_id, r.clinic_id, r.patient_id, r.booking_id, r.care_order_id, r.recommendation_id,
+                                      r.reminder_type, r.channel, r.status, r.scheduled_for, r.payload_key, r.locale_at_send_time,
+                                      r.planning_group, r.supersedes_reminder_id, r.created_at, r.updated_at, r.sent_at,
+                                      r.acknowledged_at, r.canceled_at, r.cancel_reason_code
+                            """
+                        ),
+                        {"now": now, "limit": max(limit, 0)},
+                    )
+                ).mappings()
+            )
+        await engine.dispose()
+        return [ReminderJob(**dict(row)) for row in rows]
+
+    async def create_message_delivery(self, item: MessageDelivery) -> None:
+        payload = asdict(item)
+        engine = create_engine(self._db_config)
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO communication.message_deliveries (
+                      message_delivery_id, reminder_id, patient_id, channel, delivery_status,
+                      provider_message_id, attempt_no, error_text, created_at
+                    )
+                    VALUES (
+                      :message_delivery_id, :reminder_id, :patient_id, :channel, :delivery_status,
+                      :provider_message_id, :attempt_no, :error_text, :created_at
+                    )
+                    """
+                ),
+                payload,
+            )
+        await engine.dispose()
+
+    async def mark_reminder_sent(self, *, reminder_id: str, sent_at: datetime) -> bool:
+        return await self._update_status(
+            reminder_id=reminder_id,
+            now=sent_at,
+            status="sent",
+            extra_set=", sent_at=:now",
+            extra_params={},
+        )
+
+    async def mark_reminder_failed(self, *, reminder_id: str, failed_at: datetime, error_text: str) -> bool:
+        return await self._update_status(
+            reminder_id=reminder_id,
+            now=failed_at,
+            status="failed",
+            extra_set="",
+            extra_params={},
+        )
+
+    async def mark_reminder_canceled(self, *, reminder_id: str, canceled_at: datetime, reason_code: str) -> bool:
+        return await self._update_status(
+            reminder_id=reminder_id,
+            now=canceled_at,
+            status="canceled",
+            extra_set=", canceled_at=:now, cancel_reason_code=:reason_code",
+            extra_params={"reason_code": reason_code},
+        )
+
+    async def next_delivery_attempt_no(self, *, reminder_id: str) -> int:
+        engine = create_engine(self._db_config)
+        async with engine.connect() as conn:
+            count = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT COUNT(*) AS c
+                        FROM communication.message_deliveries
+                        WHERE reminder_id=:reminder_id
+                        """
+                    ),
+                    {"reminder_id": reminder_id},
+                )
+            ).scalar_one()
+        await engine.dispose()
+        return int(count) + 1
+
+    async def _update_status(
+        self,
+        *,
+        reminder_id: str,
+        now: datetime,
+        status: str,
+        extra_set: str,
+        extra_params: dict[str, object],
+    ) -> bool:
+        engine = create_engine(self._db_config)
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text(
+                    f"""
+                    UPDATE communication.reminder_jobs
+                    SET status=:status, updated_at=:now{extra_set}
+                    WHERE reminder_id=:reminder_id
+                      AND status='queued'
+                    """
+                ),
+                {"reminder_id": reminder_id, "now": now, "status": status, **extra_params},
+            )
+        await engine.dispose()
+        return bool(result.rowcount)
 
 
 async def _insert_reminder_on_conn(conn: Any, payload: dict[str, object]) -> None:

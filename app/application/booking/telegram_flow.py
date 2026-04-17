@@ -49,6 +49,7 @@ class BookingFlowReadRepository(Protocol):
 
 class CanonicalPatientCreator(Protocol):
     async def create_minimal_patient(self, *, clinic_id: str, display_name: str, phone: str) -> str: ...
+    async def upsert_telegram_contact(self, *, patient_id: str, telegram_user_id: int) -> None: ...
 
 
 @dataclass(slots=True, frozen=True)
@@ -229,6 +230,12 @@ class BookingPatientFlowService:
             contact_value=phone,
         )
         if isinstance(outcome, OrchestrationSuccess):
+            session = await self.reads.get_booking_session(booking_session_id)
+            if session is not None and outcome.entity.resolved_patient_id is not None:
+                await self.patient_creator.upsert_telegram_contact(
+                    patient_id=outcome.entity.resolved_patient_id,
+                    telegram_user_id=session.telegram_user_id,
+                )
             return PatientResolutionFlowResult(kind="exact_match", booking_session=outcome.entity)
 
         if isinstance(outcome, NoMatchOutcome):
@@ -245,6 +252,10 @@ class BookingPatientFlowService:
                 patient_id=created_patient_id,
             )
             if isinstance(attached, OrchestrationSuccess):
+                await self.patient_creator.upsert_telegram_contact(
+                    patient_id=created_patient_id,
+                    telegram_user_id=session.telegram_user_id,
+                )
                 return PatientResolutionFlowResult(kind="new_patient_created", booking_session=attached.entity)
             return PatientResolutionFlowResult(kind="invalid_state")
         if isinstance(outcome, AmbiguousMatchOutcome):
@@ -270,6 +281,12 @@ class BookingPatientFlowService:
             contact_value=phone,
         )
         if isinstance(outcome, OrchestrationSuccess):
+            session = await self.reads.get_booking_session(booking_session_id)
+            if session is not None and outcome.entity.resolved_patient_id is not None:
+                await self.patient_creator.upsert_telegram_contact(
+                    patient_id=outcome.entity.resolved_patient_id,
+                    telegram_user_id=session.telegram_user_id,
+                )
             return PatientResolutionFlowResult(kind="exact_match", booking_session=outcome.entity)
         if isinstance(outcome, NoMatchOutcome):
             session = await self.reads.get_booking_session(booking_session_id)
