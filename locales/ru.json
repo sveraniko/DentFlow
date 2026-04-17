@@ -85,5 +85,15 @@
   "search.no_matches": "Совпадений нет",
   "search.usage.patient": "Использование: /search_patient <запрос>",
   "search.usage.doctor": "Использование: /search_doctor <запрос>",
-  "search.usage.service": "Использование: /search_service <запрос>"
+  "search.usage.service": "Использование: /search_service <запрос>",
+  "voice.mode.patient.activated": "Голосовой поиск пациента активирован на {ttl} сек. Отправьте одно голосовое сообщение.",
+  "voice.mode.doctor.activated": "Голосовой поиск врача активирован на {ttl} сек. Отправьте одно голосовое сообщение.",
+  "voice.mode.service.activated": "Голосовой поиск услуги активирован на {ttl} сек. Отправьте одно голосовое сообщение.",
+  "voice.fallback.mode_not_active": "Режим голосового поиска не активен. Используйте /voice_find_patient, /voice_find_doctor или /voice_find_service.",
+  "voice.fallback.transcription_failed": "Не удалось распознать голос. Повторите попытку или введите запрос текстом.",
+  "voice.fallback.low_confidence": "Низкая уверенность распознавания. Повторите чётче или введите запрос текстом.",
+  "voice.fallback.unsupported_audio": "Неподдерживаемый аудиоформат. Отправьте голосовое сообщение Telegram.",
+  "voice.fallback.too_long": "Голосовое сообщение слишком длинное для поиска. Отправьте более короткое сообщение.",
+  "voice.fallback.too_large": "Голосовое сообщение слишком большое. Отправьте более короткое/лёгкое сообщение.",
+  "voice.transcript.echo": "Распознано: \"{transcript}\""
 }

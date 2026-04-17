@@ -45,6 +45,18 @@ class SearchConfig(BaseSettings):
     meili_batch_size: int = 500
 
 
+class SpeechToTextConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="STT_", extra="ignore")
+
+    enabled: bool = False
+    provider: str = "fake"
+    timeout_sec: float = 5.0
+    language_hint: str | None = "auto"
+    confidence_threshold: float = 0.7
+    max_voice_duration_sec: int = 30
+    max_voice_file_size_bytes: int = 2_000_000
+    mode_ttl_sec: int = 45
+
 class StorageConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="STORAGE_", extra="ignore")
 
@@ -84,6 +96,7 @@ class Settings(BaseSettings):
     db: DatabaseConfig = Field(default_factory=DatabaseConfig)
     redis: RedisConfig = Field(default_factory=RedisConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
+    stt: SpeechToTextConfig = Field(default_factory=SpeechToTextConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     ai: AIConfig = Field(default_factory=AIConfig)
     integrations: IntegrationsConfig = Field(default_factory=IntegrationsConfig)

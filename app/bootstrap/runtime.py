@@ -23,6 +23,7 @@ from app.application.clinic_reference import ClinicReferenceService
 from app.application.communication import BookingReminderPlanner, BookingReminderService, ReminderActionService
 from app.application.policy import PolicyResolver
 from app.application.search.service import HybridSearchService
+from app.application.voice import SpeechToTextService, VoiceSearchModeStore
 from app.common.i18n import I18nService
 from app.config.settings import Settings
 from app.infrastructure.db.booking_repository import DbBookingRepository
@@ -37,6 +38,8 @@ from app.infrastructure.db.repositories import DbAccessRepository, DbClinicRefer
 from app.infrastructure.search.meili_backend import MeiliSearchBackend
 from app.infrastructure.search.meili_client import HttpMeiliClient
 from app.infrastructure.search.postgres_backend import PostgresSearchBackend
+from app.infrastructure.speech.disabled_provider import DisabledSpeechToTextProvider
+from app.infrastructure.speech.fake_provider import FakeSpeechToTextProvider
 from app.interfaces.bots.admin.router import make_router as make_admin_router
 from app.interfaces.bots.doctor.router import make_router as make_doctor_router
 from app.interfaces.bots.owner.router import make_router as make_owner_router
@@ -96,6 +99,17 @@ class RuntimeRegistry:
             transaction_repository=self.booking_repository,
             booking_orchestration=self.booking_orchestration_service,
         )
+        self.voice_mode_store = VoiceSearchModeStore()
+        stt_provider = DisabledSpeechToTextProvider()
+        if settings.stt.enabled and settings.stt.provider == "fake":
+            stt_provider = FakeSpeechToTextProvider()
+        self.speech_to_text_service = SpeechToTextService(
+            provider=stt_provider,
+            timeout_sec=settings.stt.timeout_sec,
+            confidence_threshold=settings.stt.confidence_threshold,
+            language_hint=settings.stt.language_hint,
+        )
+
         self.postgres_search_backend = PostgresSearchBackend(settings.db)
         self.meili_search_backend = None
         if settings.search.enabled:
@@ -134,7 +148,12 @@ class RuntimeRegistry:
                 self.reference_service,
                 self.booking_patient_flow_service,
                 search_service=self.search_service,
+                stt_service=self.speech_to_text_service,
+                voice_mode_store=self.voice_mode_store,
                 default_locale=self.settings.app.default_locale,
+                max_voice_duration_sec=self.settings.stt.max_voice_duration_sec,
+                max_voice_file_size_bytes=self.settings.stt.max_voice_file_size_bytes,
+                voice_mode_ttl_sec=self.settings.stt.mode_ttl_sec,
             )
         )
         dispatcher.include_router(
@@ -142,7 +161,12 @@ class RuntimeRegistry:
                 self.i18n,
                 self.access_resolver,
                 search_service=self.search_service,
+                stt_service=self.speech_to_text_service,
+                voice_mode_store=self.voice_mode_store,
                 default_locale=self.settings.app.default_locale,
+                max_voice_duration_sec=self.settings.stt.max_voice_duration_sec,
+                max_voice_file_size_bytes=self.settings.stt.max_voice_file_size_bytes,
+                voice_mode_ttl_sec=self.settings.stt.mode_ttl_sec,
             )
         )
         dispatcher.include_router(make_owner_router(self.i18n, self.access_resolver, default_locale=self.settings.app.default_locale))
