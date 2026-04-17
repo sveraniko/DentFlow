@@ -13,8 +13,9 @@ class ProjectionSearchReader:
     async def load_patient_projection_rows(self) -> list[PatientProjectionRow]:
         statement = text(
             """
-            SELECT patient_id, clinic_id, display_name, patient_number, name_tokens_normalized, translit_tokens,
-                   primary_phone_normalized, preferred_language, primary_photo_ref, active_flags_summary, status, updated_at
+            SELECT patient_id, clinic_id, display_name, patient_number, name_normalized, name_tokens_normalized, translit_tokens,
+                   external_id_normalized, primary_phone_normalized, preferred_language, primary_photo_ref,
+                   active_flags_summary, status, updated_at
             FROM search.patient_search_projection
             """
         )
@@ -29,7 +30,7 @@ class ProjectionSearchReader:
     async def load_doctor_projection_rows(self) -> list[DoctorProjectionRow]:
         statement = text(
             """
-            SELECT doctor_id, clinic_id, branch_id, display_name, name_tokens_normalized, translit_tokens,
+            SELECT doctor_id, clinic_id, branch_id, display_name, name_normalized, name_tokens_normalized, translit_tokens,
                    specialty_code, specialty_label, public_booking_enabled, status, updated_at
             FROM search.doctor_search_projection
             """

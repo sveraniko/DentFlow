@@ -67,6 +67,14 @@ def test_stack2_patient_tables_declared() -> None:
     assert "UNIQUE(patient_id, external_system)" in ddl
 
 
+def test_search_schema_and_projection_tables_declared() -> None:
+    ddl = "\n".join(db_bootstrap.STACK1_TABLES)
+    assert "search" in db_bootstrap.SCHEMAS
+    assert "CREATE TABLE IF NOT EXISTS search.patient_search_projection" in ddl
+    assert "CREATE TABLE IF NOT EXISTS search.doctor_search_projection" in ddl
+    assert "CREATE TABLE IF NOT EXISTS search.service_search_projection" in ddl
+
+
 def test_stack3a_booking_tables_declared() -> None:
     ddl = "\n".join(db_bootstrap.STACK1_TABLES)
     assert "CREATE TABLE IF NOT EXISTS booking.booking_sessions" in ddl

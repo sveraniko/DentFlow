@@ -76,5 +76,14 @@
   "admin.booking.escalation.take.usage": "Usage: /booking_escalation_take <escalation_id>",
   "admin.booking.escalation.take.ok": "Escalation {escalation_id} is now in progress.",
   "admin.booking.escalation.resolve.usage": "Usage: /booking_escalation_resolve <escalation_id>",
-  "admin.booking.escalation.resolve.ok": "Escalation {escalation_id} resolved."
+  "admin.booking.escalation.resolve.ok": "Escalation {escalation_id} resolved.",
+  "search.patient.title": "Patient search",
+  "search.doctor.title": "Doctor search",
+  "search.service.title": "Service search",
+  "search.patient.exact": "Exact matches:",
+  "search.patient.suggestions": "Suggestions:",
+  "search.no_matches": "No matches",
+  "search.usage.patient": "Usage: /search_patient <query>",
+  "search.usage.doctor": "Usage: /search_doctor <query>",
+  "search.usage.service": "Usage: /search_service <query>"
 }

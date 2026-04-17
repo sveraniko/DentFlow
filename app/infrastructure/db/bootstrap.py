@@ -9,6 +9,7 @@ SCHEMAS: tuple[str, ...] = (
     "access_identity",
     "policy_config",
     "core_patient",
+    "search",
     "booking",
     "communication",
     "clinical",
@@ -308,6 +309,93 @@ STACK1_TABLES: tuple[str, ...] = (
       UNIQUE(external_system, external_id),
       UNIQUE(patient_id, external_system)
     )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS search.patient_search_projection (
+      patient_id TEXT PRIMARY KEY REFERENCES core_patient.patients(patient_id) ON DELETE CASCADE,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      patient_number TEXT NULL,
+      display_name TEXT NOT NULL,
+      full_name_legal TEXT NULL,
+      first_name TEXT NULL,
+      last_name TEXT NULL,
+      middle_name TEXT NULL,
+      name_normalized TEXT NOT NULL,
+      name_tokens_normalized TEXT NOT NULL,
+      translit_tokens TEXT NOT NULL,
+      external_id_normalized TEXT NULL,
+      primary_phone_normalized TEXT NULL,
+      preferred_language TEXT NULL,
+      primary_photo_ref TEXT NULL,
+      active_flags_summary TEXT NULL,
+      status TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_patient_search_projection_clinic_updated
+    ON search.patient_search_projection (clinic_id, updated_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_patient_search_projection_phone
+    ON search.patient_search_projection (clinic_id, primary_phone_normalized)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_patient_search_projection_number
+    ON search.patient_search_projection (clinic_id, patient_number)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_patient_search_projection_external_id
+    ON search.patient_search_projection (clinic_id, external_id_normalized)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_patient_search_projection_name_norm
+    ON search.patient_search_projection (clinic_id, name_normalized)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS search.doctor_search_projection (
+      doctor_id TEXT PRIMARY KEY REFERENCES core_reference.doctors(doctor_id) ON DELETE CASCADE,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      branch_id TEXT NULL REFERENCES core_reference.branches(branch_id),
+      display_name TEXT NOT NULL,
+      name_normalized TEXT NOT NULL,
+      name_tokens_normalized TEXT NOT NULL,
+      translit_tokens TEXT NOT NULL,
+      specialty_code TEXT NULL,
+      specialty_label TEXT NULL,
+      public_booking_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      status TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_doctor_search_projection_clinic_updated
+    ON search.doctor_search_projection (clinic_id, updated_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_doctor_search_projection_name_norm
+    ON search.doctor_search_projection (clinic_id, name_normalized)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS search.service_search_projection (
+      service_id TEXT PRIMARY KEY REFERENCES core_reference.services(service_id) ON DELETE CASCADE,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      code TEXT NOT NULL,
+      title_key TEXT NOT NULL,
+      localized_search_text_ru TEXT NOT NULL,
+      localized_search_text_en TEXT NOT NULL,
+      specialty_required BOOLEAN NOT NULL DEFAULT FALSE,
+      status TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_service_search_projection_clinic_updated
+    ON search.service_search_projection (clinic_id, updated_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_service_search_projection_code
+    ON search.service_search_projection (clinic_id, code)
     """,
     """
     CREATE TABLE IF NOT EXISTS booking.booking_sessions (

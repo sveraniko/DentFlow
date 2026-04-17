@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
-
-import asyncio
 
 from app.application.search.models import (
     DoctorProjectionRow,
@@ -17,6 +16,7 @@ from app.application.search.models import (
 )
 from app.application.search.reindex import MeiliReindexService
 from app.application.search.service import HybridSearchService
+from app.common.i18n import I18nService
 from app.infrastructure.search.meili_documents import (
     doctor_projection_to_document,
     patient_projection_to_document,
@@ -31,8 +31,10 @@ def test_patient_projection_mapping_privacy_safe() -> None:
         clinic_id="c1",
         display_name="John Doe",
         patient_number="PT-9",
+        name_normalized="john doe",
         name_tokens_normalized="john doe",
         translit_tokens="jon dou",
+        external_id_normalized="ext-1",
         primary_phone_normalized="79991234567",
         preferred_language="en",
         primary_photo_ref="photo-1",
@@ -60,6 +62,7 @@ def test_doctor_and_service_projection_mapping() -> None:
             public_booking_enabled=True,
             status="active",
             updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            name_normalized="dr a",
         )
     )
     s = service_projection_to_document(
@@ -112,12 +115,12 @@ class _SearchStub:
 
 def test_hybrid_patient_search_strict_first_and_dedup() -> None:
     strict = [
-        PatientSearchResult("p1", "c1", "John", "N1", "100", "active", SearchResultOrigin.POSTGRES_STRICT),
-        PatientSearchResult("p2", "c1", "Jane", "N2", "200", "active", SearchResultOrigin.POSTGRES_STRICT),
+        PatientSearchResult("p1", "c1", "John", "N1", "100", "vip", "active", SearchResultOrigin.POSTGRES_STRICT),
+        PatientSearchResult("p2", "c1", "Jane", "N2", "200", None, "active", SearchResultOrigin.POSTGRES_STRICT),
     ]
     meili = [
-        PatientSearchResult("p2", "c1", "Jane fuzzy", "N2", "200", "active", SearchResultOrigin.MEILI),
-        PatientSearchResult("p3", "c1", "Janet", "N3", "300", "active", SearchResultOrigin.MEILI),
+        PatientSearchResult("p2", "c1", "Jane fuzzy", "N2", "200", None, "active", SearchResultOrigin.MEILI),
+        PatientSearchResult("p3", "c1", "Janet", "N3", "300", None, "active", SearchResultOrigin.MEILI),
     ]
     service = HybridSearchService(
         strict_backend=_StrictStub(strict),
@@ -151,12 +154,12 @@ def test_patient_and_doctor_service_fallback_when_meili_down() -> None:
 class _ReaderStub:
     async def load_patient_projection_rows(self):
         return [
-            PatientProjectionRow("p1", "c1", "John", None, None, None, None, None, None, None, "active", datetime(2026, 1, 1, tzinfo=timezone.utc))
+            PatientProjectionRow("p1", "c1", "John", None, "john", None, None, None, None, None, None, None, "active", datetime(2026, 1, 1, tzinfo=timezone.utc))
         ]
 
     async def load_doctor_projection_rows(self):
         return [
-            DoctorProjectionRow("d1", "c1", None, "Dr A", None, None, None, None, True, "active", datetime(2026, 1, 1, tzinfo=timezone.utc))
+            DoctorProjectionRow("d1", "c1", None, "Dr A", "dr a", "dr a", "dr a", None, None, True, "active", datetime(2026, 1, 1, tzinfo=timezone.utc))
         ]
 
     async def load_service_projection_rows(self):
@@ -167,37 +170,43 @@ class _ReaderStub:
 
 class _MeiliClientStub:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, int]] = []
+        self.calls: list[tuple[str, str, int]] = []
 
-    async def replace_documents(self, *, index_name: str, documents: list[dict]) -> None:
-        self.calls.append((index_name, len(documents)))
+    async def clear_documents(self, *, index_name: str) -> None:
+        self.calls.append(("clear", index_name, 0))
+
+    async def add_documents(self, *, index_name: str, documents: list[dict]) -> None:
+        self.calls.append(("add", index_name, len(documents)))
 
 
-def test_full_reindex_uses_projection_rows() -> None:
+def test_full_reindex_uses_projection_rows_and_clears_first() -> None:
     client = _MeiliClientStub()
     svc = MeiliReindexService(reader=_ReaderStub(), meili_client=client, index_prefix="dentflow", batch_size=2)
     counts = asyncio.run(svc.reindex_all())
     assert counts == {"patients": 1, "doctors": 1, "services": 1}
-    assert ("dentflow_patients", 1) in client.calls
-    assert ("dentflow_doctors", 1) in client.calls
-    assert ("dentflow_services", 1) in client.calls
+    assert ("clear", "dentflow_patients", 0) in client.calls
+    assert ("add", "dentflow_patients", 1) in client.calls
+    assert ("clear", "dentflow_doctors", 0) in client.calls
+    assert ("clear", "dentflow_services", 0) in client.calls
 
 
-def test_search_handlers_surface_hybrid_paths() -> None:
+def test_search_handlers_surface_localized_hybrid_paths() -> None:
     svc = HybridSearchService(
         strict_backend=_StrictStub([
-            PatientSearchResult("p1", "c1", "John", None, None, "active", SearchResultOrigin.POSTGRES_STRICT)
+            PatientSearchResult("p1", "c1", "John", "PT-1", "79990001122", "vip", "active", SearchResultOrigin.POSTGRES_STRICT)
         ]),
         meili_backend=_SearchStub(
-            [PatientSearchResult("p2", "c1", "Jon", None, None, "active", SearchResultOrigin.MEILI)],
+            [PatientSearchResult("p2", "c1", "Jon", None, None, None, "active", SearchResultOrigin.MEILI)],
             [DoctorSearchResult("d1", "c1", None, "Dr A", None, None, True, "active", SearchResultOrigin.MEILI)],
             [ServiceSearchResult("s1", "c1", "S", "svc", "чистка", "cleaning", False, "active", SearchResultOrigin.MEILI)],
         ),
         postgres_backend=_SearchStub([], [], []),
     )
-    patient_text = asyncio.run(run_patient_search(service=svc, clinic_id="c1", query="john"))
-    doctor_text = asyncio.run(run_doctor_search(service=svc, clinic_id="c1", query="a"))
-    service_text = asyncio.run(run_service_search(service=svc, clinic_id="c1", query="clean", locale="en"))
-    assert "Exact:" in patient_text and "Suggestions:" in patient_text
-    assert "(meili)" in doctor_text
+    i18n = I18nService(locales_path=__import__("pathlib").Path("locales"), default_locale="en")
+    patient_text = asyncio.run(run_patient_search(service=svc, i18n=i18n, locale="en", clinic_id="c1", query="john"))
+    doctor_text = asyncio.run(run_doctor_search(service=svc, i18n=i18n, locale="ru", clinic_id="c1", query="a"))
+    service_text = asyncio.run(run_service_search(service=svc, i18n=i18n, locale="en", clinic_id="c1", query="clean"))
+    assert "Exact matches:" in patient_text and "Suggestions:" in patient_text
+    assert "***1122" in patient_text
+    assert "Поиск врача" in doctor_text
     assert "cleaning" in service_text

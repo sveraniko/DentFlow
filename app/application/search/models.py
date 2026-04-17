@@ -18,6 +18,7 @@ class PatientSearchResult:
     display_name: str
     patient_number: str | None
     primary_phone_normalized: str | None
+    active_flags_summary: str | None
     status: str | None
     origin: SearchResultOrigin
 
@@ -68,8 +69,10 @@ class PatientProjectionRow:
     clinic_id: str
     display_name: str
     patient_number: str | None
+    name_normalized: str | None
     name_tokens_normalized: str | None
     translit_tokens: str | None
+    external_id_normalized: str | None
     primary_phone_normalized: str | None
     preferred_language: str | None
     primary_photo_ref: str | None
@@ -84,6 +87,7 @@ class DoctorProjectionRow:
     clinic_id: str
     branch_id: str | None
     display_name: str
+    name_normalized: str | None
     name_tokens_normalized: str | None
     translit_tokens: str | None
     specialty_code: str | None

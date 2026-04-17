@@ -11,7 +11,9 @@ from urllib.request import Request, urlopen
 class MeiliClient(Protocol):
     async def update_settings(self, *, index_name: str, settings: dict[str, Any]) -> None: ...
 
-    async def replace_documents(self, *, index_name: str, documents: list[dict[str, Any]]) -> None: ...
+    async def clear_documents(self, *, index_name: str) -> None: ...
+
+    async def add_documents(self, *, index_name: str, documents: list[dict[str, Any]]) -> None: ...
 
     async def search(self, *, index_name: str, query: str, payload: dict[str, Any]) -> list[dict[str, Any]]: ...
 
@@ -35,9 +37,15 @@ class HttpMeiliClient:
             payload=settings,
         )
 
-    async def replace_documents(self, *, index_name: str, documents: list[dict[str, Any]]) -> None:
+    async def clear_documents(self, *, index_name: str) -> None:
         await self._request(
-            method="PUT",
+            method="DELETE",
+            path=f"/indexes/{index_name}/documents",
+        )
+
+    async def add_documents(self, *, index_name: str, documents: list[dict[str, Any]]) -> None:
+        await self._request(
+            method="POST",
             path=f"/indexes/{index_name}/documents",
             payload=documents,
         )

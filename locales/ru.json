@@ -76,5 +76,14 @@
   "admin.booking.escalation.take.usage": "Формат: /booking_escalation_take <escalation_id>",
   "admin.booking.escalation.take.ok": "Эскалация {escalation_id} взята в работу.",
   "admin.booking.escalation.resolve.usage": "Формат: /booking_escalation_resolve <escalation_id>",
-  "admin.booking.escalation.resolve.ok": "Эскалация {escalation_id} закрыта как решённая."
+  "admin.booking.escalation.resolve.ok": "Эскалация {escalation_id} закрыта как решённая.",
+  "search.patient.title": "Поиск пациента",
+  "search.doctor.title": "Поиск врача",
+  "search.service.title": "Поиск услуги",
+  "search.patient.exact": "Точные совпадения:",
+  "search.patient.suggestions": "Подсказки:",
+  "search.no_matches": "Совпадений нет",
+  "search.usage.patient": "Использование: /search_patient <запрос>",
+  "search.usage.doctor": "Использование: /search_doctor <запрос>",
+  "search.usage.service": "Использование: /search_service <запрос>"
 }

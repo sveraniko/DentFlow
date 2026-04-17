@@ -40,6 +40,7 @@ class MeiliSearchBackend:
                 display_name=row.get("display_name") or "",
                 patient_number=row.get("patient_number"),
                 primary_phone_normalized=row.get("primary_phone_normalized"),
+                active_flags_summary=row.get("active_flags_summary"),
                 status=row.get("status"),
                 origin=SearchResultOrigin.MEILI,
             )
@@ -94,9 +95,11 @@ PATIENT_INDEX_SETTINGS = MeiliIndexDefinition(
     settings={
         "searchableAttributes": [
             "display_name",
+            "name_normalized",
             "name_tokens_normalized",
             "translit_tokens",
             "patient_number",
+            "external_id_normalized",
             "primary_phone_normalized",
         ],
         "filterableAttributes": ["clinic_id", "status"],
@@ -105,7 +108,9 @@ PATIENT_INDEX_SETTINGS = MeiliIndexDefinition(
             "clinic_id",
             "display_name",
             "patient_number",
+            "name_normalized",
             "primary_phone_normalized",
+            "external_id_normalized",
             "preferred_language",
             "primary_photo_ref",
             "active_flags_summary",
@@ -118,13 +123,21 @@ PATIENT_INDEX_SETTINGS = MeiliIndexDefinition(
 DOCTOR_INDEX_SETTINGS = MeiliIndexDefinition(
     name="doctors",
     settings={
-        "searchableAttributes": ["display_name", "name_tokens_normalized", "translit_tokens", "specialty_label", "specialty_code"],
+        "searchableAttributes": [
+            "display_name",
+            "name_normalized",
+            "name_tokens_normalized",
+            "translit_tokens",
+            "specialty_label",
+            "specialty_code",
+        ],
         "filterableAttributes": ["clinic_id", "branch_id", "public_booking_enabled", "status"],
         "displayedAttributes": [
             "doctor_id",
             "clinic_id",
             "branch_id",
             "display_name",
+            "name_normalized",
             "specialty_code",
             "specialty_label",
             "public_booking_enabled",
