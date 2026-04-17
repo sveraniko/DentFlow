@@ -8,6 +8,7 @@ from sqlalchemy import text
 from app.application.patient import InMemoryPatientRegistryRepository, PatientRegistryService, normalize_contact_value
 from app.application.doctor.patient_read import DoctorPatientSnapshot
 from app.application.booking.telegram_flow import CanonicalPatientCreator
+from app.domain.events import build_event
 from app.domain.patient_registry.models import (
     Patient,
     PatientContact,
@@ -18,6 +19,7 @@ from app.domain.patient_registry.models import (
     PatientPreference,
 )
 from app.infrastructure.db.engine import create_engine
+from app.infrastructure.outbox.repository import OutboxRepository
 
 DEFAULT_SEED_TIMESTAMP = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
@@ -188,7 +190,20 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
         await engine.dispose()
         return repo
 
-    async def persist_patient(self, patient: Patient) -> None:
+    async def _append_event_on_conn(self, conn, event_name: str, patient_id: str, clinic_id: str, payload: dict[str, object]) -> None:
+        await OutboxRepository(self._db_config).append_on_connection(
+            conn,
+            build_event(
+                event_name=event_name,
+                producer_context="patient.registry",
+                clinic_id=clinic_id,
+                entity_type="patient",
+                entity_id=patient_id,
+                payload=payload,
+            ),
+        )
+
+    async def persist_patient(self, patient: Patient, *, event_name: str | None = None) -> None:
         engine = create_engine(self._db_config)
         async with engine.begin() as conn:
             await conn.execute(
@@ -219,9 +234,17 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
                 ),
                 asdict(patient),
             )
+            if event_name is not None:
+                await self._append_event_on_conn(
+                    conn,
+                    event_name=event_name,
+                    patient_id=patient.patient_id,
+                    clinic_id=patient.clinic_id,
+                    payload={"display_name": patient.display_name},
+                )
         await engine.dispose()
 
-    async def persist_contact(self, contact) -> None:
+    async def persist_contact(self, contact, *, event_name: str = "patient.contact_updated") -> None:
         engine = create_engine(self._db_config)
         async with engine.begin() as conn:
             if contact.is_primary:
@@ -251,6 +274,15 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
                 ),
                 asdict(contact),
             )
+            patient = self.patients.get(contact.patient_id)
+            if patient is not None:
+                await self._append_event_on_conn(
+                    conn,
+                    event_name=event_name,
+                    patient_id=contact.patient_id,
+                    clinic_id=patient.clinic_id,
+                    payload={"contact_type": contact.contact_type, "is_primary": contact.is_primary},
+                )
         await engine.dispose()
 
     async def persist_preferences(self, preference: PatientPreference) -> None:
@@ -281,9 +313,18 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
                 ),
                 asdict(preference),
             )
+            patient = self.patients.get(preference.patient_id)
+            if patient is not None:
+                await self._append_event_on_conn(
+                    conn,
+                    event_name="patient.preference_updated",
+                    patient_id=preference.patient_id,
+                    clinic_id=patient.clinic_id,
+                    payload={"preferred_language": preference.preferred_language},
+                )
         await engine.dispose()
 
-    async def persist_flag(self, flag: PatientFlag) -> None:
+    async def persist_flag(self, flag: PatientFlag, *, event_name: str) -> None:
         engine = create_engine(self._db_config)
         async with engine.begin() as conn:
             await conn.execute(
@@ -306,6 +347,15 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
                 ),
                 asdict(flag),
             )
+            patient = self.patients.get(flag.patient_id)
+            if patient is not None:
+                await self._append_event_on_conn(
+                    conn,
+                    event_name=event_name,
+                    patient_id=flag.patient_id,
+                    clinic_id=patient.clinic_id,
+                    payload={"flag_type": flag.flag_type, "is_active": flag.is_active},
+                )
         await engine.dispose()
 
     async def persist_photo(self, photo: PatientPhoto) -> None:
@@ -334,6 +384,15 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
                 ),
                 asdict(photo),
             )
+            patient = self.patients.get(photo.patient_id)
+            if patient is not None:
+                await self._append_event_on_conn(
+                    conn,
+                    event_name="patient.photo_updated",
+                    patient_id=photo.patient_id,
+                    clinic_id=patient.clinic_id,
+                    payload={"is_primary": photo.is_primary},
+                )
         await engine.dispose()
 
     async def persist_medical_summary(self, summary: PatientMedicalSummary) -> None:
@@ -393,17 +452,17 @@ class DbPatientRegistryService(PatientRegistryService):
 
     async def create_patient_db(self, **kwargs):
         patient = self.create_patient(**kwargs)
-        await self.repository.persist_patient(patient)
+        await self.repository.persist_patient(patient, event_name="patient.created")
         return patient
 
     async def update_patient_db(self, patient_id: str, **changes):
         patient = self.update_patient(patient_id, **changes)
-        await self.repository.persist_patient(patient)
+        await self.repository.persist_patient(patient, event_name="patient.updated")
         return patient
 
     async def upsert_contact_db(self, *, patient_id: str, contact_type: str, contact_value: str, **kwargs):
         contact = self.upsert_contact(patient_id=patient_id, contact_type=contact_type, contact_value=contact_value, **kwargs)
-        await self.repository.persist_contact(contact)
+        await self.repository.persist_contact(contact, event_name="patient.contact_added")
         return contact
 
     async def upsert_preferences_db(self, *, patient_id: str, **changes):
@@ -413,12 +472,12 @@ class DbPatientRegistryService(PatientRegistryService):
 
     async def add_flag_db(self, *, patient_id: str, flag_type: str, flag_severity: str, **kwargs):
         flag = self.add_flag(patient_id=patient_id, flag_type=flag_type, flag_severity=flag_severity, **kwargs)
-        await self.repository.persist_flag(flag)
+        await self.repository.persist_flag(flag, event_name="patient.flag_set")
         return flag
 
     async def deactivate_flag_db(self, patient_flag_id: str):
         flag = self.deactivate_flag(patient_flag_id)
-        await self.repository.persist_flag(flag)
+        await self.repository.persist_flag(flag, event_name="patient.flag_cleared")
         return flag
 
     async def add_photo_db(self, *, patient_id: str, source_type: str, **kwargs):

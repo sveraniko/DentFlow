@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.application.clinic_reference import ClinicReferenceService
@@ -19,6 +19,14 @@ class DoctorTimezoneFormatter:
     def format_clinic_time(self, *, clinic_id: str, when: datetime, fmt: str) -> str:
         tz_name = self._resolve_timezone(clinic_id=clinic_id, branch_id=None)
         return when.astimezone(self._zone_or_utc(tz_name)).strftime(fmt)
+
+    def local_day_utc_window(self, *, clinic_id: str, branch_id: str | None, point: datetime) -> tuple[datetime, datetime]:
+        tz_name = self._resolve_timezone(clinic_id=clinic_id, branch_id=branch_id)
+        zone = self._zone_or_utc(tz_name)
+        local_point = point.astimezone(zone)
+        local_day_start = datetime(local_point.year, local_point.month, local_point.day, tzinfo=zone)
+        local_day_end = local_day_start + timedelta(days=1)
+        return local_day_start.astimezone(timezone.utc), local_day_end.astimezone(timezone.utc)
 
     def _resolve_timezone(self, *, clinic_id: str, branch_id: str | None) -> str:
         if branch_id:

@@ -13,6 +13,7 @@ from app.domain.booking.errors import (
     InvalidSlotHoldTransitionError,
     InvalidWaitlistTransitionError,
 )
+from app.domain.events import build_event
 from app.domain.booking.lifecycle import (
     TransitionDecision,
     evaluate_booking_session_transition,
@@ -29,6 +30,7 @@ class BookingTransaction(Protocol):
     async def upsert_booking(self, item: Booking) -> None: ...
     async def append_booking_status_history(self, item: BookingStatusHistory) -> None: ...
     async def upsert_waitlist_entry(self, item: WaitlistEntry) -> None: ...
+    async def append_outbox_event(self, event) -> None: ...
 
 
 class BookingTransitionRepository(Protocol):
@@ -271,6 +273,30 @@ class BookingStateService:
                 occurred_at=now,
             )
         )
+        event_names = {
+            "confirmed": "booking.confirmed",
+            "reschedule_requested": "booking.reschedule_requested",
+            "canceled": "booking.canceled",
+            "checked_in": "booking.checked_in",
+            "in_service": "booking.in_service_started",
+            "completed": "booking.completed",
+            "no_show": "booking.no_show_marked",
+        }
+        event_name = event_names.get(to_status)
+        if event_name:
+            await tx.append_outbox_event(
+                build_event(
+                    event_name=event_name,
+                    producer_context="booking.state_service",
+                    clinic_id=updated.clinic_id,
+                    entity_type="booking",
+                    entity_id=updated.booking_id,
+                    actor_type=actor_type,
+                    actor_id=actor_id,
+                    occurred_at=now,
+                    payload={"status": to_status, "reason_code": reason_code},
+                )
+            )
         return TransitionResult(entity=updated, changed=True, decision=decision)
 
     def _build_booking_payload(self, *, current: Booking, to_status: str, now: datetime) -> dict[str, object]:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Protocol
 
 from app.application.access import AccessResolver
@@ -90,8 +90,9 @@ class DoctorOperationsService:
 
     async def list_today_queue(self, *, doctor_id: str, now: datetime | None = None) -> list[DoctorQueueItem]:
         point = now or datetime.now(timezone.utc)
-        day_start = datetime(point.year, point.month, point.day, tzinfo=timezone.utc)
-        day_end = day_start + timedelta(days=1)
+        tz = DoctorTimezoneFormatter(reference_service=self.reference_service, app_default_timezone=self.app_default_timezone)
+        clinic_id, branch_id = self._resolve_doctor_scope(doctor_id=doctor_id)
+        day_start, day_end = tz.local_day_utc_window(clinic_id=clinic_id, branch_id=branch_id, point=point)
         rows = await self.booking_service.list_by_doctor_time_window(doctor_id=doctor_id, start_at=day_start, end_at=day_end)
         live = sorted((row for row in rows if row.status in LIVE_QUEUE_STATUSES), key=lambda row: row.scheduled_start_at)
         items: list[DoctorQueueItem] = []
@@ -285,6 +286,14 @@ class DoctorOperationsService:
             scheduled_label=tz.format_booking_time(clinic_id=booking.clinic_id, branch_id=booking.branch_id, when=booking.scheduled_start_at, fmt="%H:%M %Z"),
             scheduled_start_at=booking.scheduled_start_at,
         )
+
+
+    def _resolve_doctor_scope(self, *, doctor_id: str) -> tuple[str, str | None]:
+        for clinic in self.reference_service.list_clinics():
+            doctor = self.reference_service.get_doctor(clinic.clinic_id, doctor_id)
+            if doctor is not None:
+                return clinic.clinic_id, doctor.branch_id
+        raise KeyError(f"Doctor not found: {doctor_id}")
 
     async def _build_booking_detail(self, booking: Booking) -> DoctorBookingDetail:
         card = await self.build_patient_quick_card(

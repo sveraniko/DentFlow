@@ -105,3 +105,11 @@ def test_stack7a_clinical_tables_declared() -> None:
     assert "is_current BOOLEAN NOT NULL DEFAULT TRUE" in ddl
     assert "uq_diagnoses_current_primary_per_chart" in ddl
     assert "uq_treatment_plans_current_per_chart" in ddl
+
+
+def test_stack8a_runtime_event_tables_declared() -> None:
+    ddl = "\n".join(db_bootstrap.STACK1_TABLES)
+    assert "system_runtime" in db_bootstrap.SCHEMAS
+    assert "CREATE TABLE IF NOT EXISTS system_runtime.event_outbox" in ddl
+    assert "CREATE TABLE IF NOT EXISTS system_runtime.projector_checkpoints" in ddl
+    assert "CREATE TABLE IF NOT EXISTS analytics_raw.event_ledger" in ddl

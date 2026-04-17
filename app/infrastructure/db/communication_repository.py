@@ -7,7 +7,9 @@ from typing import Any
 from sqlalchemy import text
 
 from app.domain.communication import MessageDelivery, ReminderJob
+from app.domain.events import build_event
 from app.infrastructure.db.engine import create_engine
+from app.infrastructure.outbox.repository import OutboxRepository
 
 
 class DbReminderJobRepository:
@@ -280,13 +282,38 @@ class DbReminderJobRepository:
         return [ReminderJob(**dict(row)) for row in rows]
 
     async def mark_reminder_canceled(self, *, reminder_id: str, canceled_at: datetime, reason_code: str) -> bool:
-        return await self._update_status(
-            reminder_id=reminder_id,
-            now=canceled_at,
-            status="canceled",
-            extra_set=", canceled_at=:now, cancel_reason_code=:reason_code",
-            extra_params={"reason_code": reason_code},
-        )
+        engine = create_engine(self._db_config)
+        try:
+            async with engine.begin() as conn:
+                result = await conn.execute(
+                    text(
+                        """
+                        UPDATE communication.reminder_jobs
+                        SET status='canceled', canceled_at=:now, cancel_reason_code=:reason_code, updated_at=:now
+                        WHERE reminder_id=:reminder_id
+                          AND status='queued'
+                        RETURNING reminder_id, clinic_id, booking_id
+                        """
+                    ),
+                    {"reminder_id": reminder_id, "now": canceled_at, "reason_code": reason_code},
+                )
+                row = result.mappings().first()
+                if row:
+                    await OutboxRepository(self._db_config).append_on_connection(
+                        conn,
+                        build_event(
+                            event_name="reminder.canceled",
+                            producer_context="communication.delivery",
+                            clinic_id=row["clinic_id"],
+                            entity_type="reminder",
+                            entity_id=row["reminder_id"],
+                            occurred_at=canceled_at,
+                            payload={"booking_id": row["booking_id"], "reason_code": reason_code},
+                        ),
+                    )
+                return bool(row)
+        finally:
+            await engine.dispose()
 
     async def mark_reminder_acknowledged(self, *, reminder_id: str, acknowledged_at: datetime) -> bool:
         engine = create_engine(self._db_config)

@@ -11,7 +11,9 @@ from sqlalchemy import text
 from app.application.booking.services import BookingRepository
 from app.domain.booking import AdminEscalation, AvailabilitySlot, Booking, BookingSession, BookingStatusHistory, SessionEvent, SlotHold, WaitlistEntry
 from app.domain.communication import ReminderJob
+from app.domain.events import build_event
 from app.infrastructure.db.engine import create_engine
+from app.infrastructure.outbox.repository import OutboxRepository
 
 
 class DbBookingRepository(BookingRepository):
@@ -22,7 +24,7 @@ class DbBookingRepository(BookingRepository):
         return create_engine(self._db_config)
 
     def transaction(self):
-        return DbBookingUnitOfWork(self._engine())
+        return DbBookingUnitOfWork(self._engine(), self._db_config)
 
     async def _upsert_booking_session_on_conn(self, conn: Any, item: BookingSession) -> None:
         payload = asdict(item)
@@ -585,17 +587,20 @@ class DbBookingRepository(BookingRepository):
 
 
 class DbBookingUnitOfWork:
-    def __init__(self, engine) -> None:
+    def __init__(self, engine, db_config) -> None:
         self._engine = engine
+        self._db_config = db_config
         self._tx_ctx = None
         self._conn = None
         self._repo = None
+        self._outbox = None
 
     async def __aenter__(self):
         self._repo = DbBookingRepository.__new__(DbBookingRepository)
-        self._repo._db_config = None
+        self._repo._db_config = self._db_config
         self._repo._engine = lambda: self._engine
         self._tx_ctx = self._engine.begin()
+        self._outbox = OutboxRepository(self._repo._db_config)
         self._conn = await self._tx_ctx.__aenter__()
         return self
 
@@ -845,6 +850,18 @@ class DbBookingUnitOfWork:
             payload,
         )
 
+        await self.append_outbox_event(
+            build_event(
+                event_name="reminder.scheduled",
+                producer_context="communication.reminder_plan",
+                clinic_id=item.clinic_id,
+                entity_type="reminder",
+                entity_id=item.reminder_id,
+                occurred_at=item.created_at,
+                payload={"booking_id": item.booking_id, "status": item.status, "reminder_type": item.reminder_type},
+            )
+        )
+
     async def cancel_scheduled_reminders_for_booking_in_transaction(
         self, *, booking_id: str, canceled_at: datetime, reason_code: str
     ) -> int:
@@ -856,11 +873,25 @@ class DbBookingUnitOfWork:
                 SET status='canceled', canceled_at=:canceled_at, cancel_reason_code=:reason_code, updated_at=:canceled_at
                 WHERE booking_id=:booking_id
                   AND status='scheduled'
+                RETURNING reminder_id, clinic_id
                 """
             ),
             {"booking_id": booking_id, "canceled_at": canceled_at, "reason_code": reason_code},
         )
-        return int(result.rowcount or 0)
+        rows = result.mappings().all()
+        for row in rows:
+            await self.append_outbox_event(
+                build_event(
+                    event_name="reminder.canceled",
+                    producer_context="communication.reminder_plan",
+                    clinic_id=row["clinic_id"],
+                    entity_type="reminder",
+                    entity_id=row["reminder_id"],
+                    occurred_at=canceled_at,
+                    payload={"booking_id": booking_id, "reason_code": reason_code},
+                )
+            )
+        return len(rows)
 
     async def get_reminder_for_update_in_transaction(self, *, reminder_id: str) -> ReminderJob | None:
         assert self._conn is not None
@@ -892,11 +923,30 @@ class DbBookingUnitOfWork:
                 SET status='acknowledged', acknowledged_at=:acknowledged_at, updated_at=:acknowledged_at
                 WHERE reminder_id=:reminder_id
                   AND status='sent'
+                RETURNING clinic_id, reminder_id, booking_id
                 """
             ),
             {"reminder_id": reminder_id, "acknowledged_at": acknowledged_at},
         )
-        return bool(result.rowcount)
+        row = result.mappings().first()
+        if row:
+            await self.append_outbox_event(
+                build_event(
+                    event_name="reminder.acknowledged",
+                    producer_context="communication.actions",
+                    clinic_id=row["clinic_id"],
+                    entity_type="reminder",
+                    entity_id=row["reminder_id"],
+                    occurred_at=acknowledged_at,
+                    payload={"booking_id": row["booking_id"]},
+                )
+            )
+        return bool(row)
+
+
+    async def append_outbox_event(self, event) -> None:
+        assert self._outbox is not None and self._conn is not None
+        await self._outbox.append_on_connection(self._conn, event)
 
     async def has_sent_delivery_for_provider_message_in_transaction(self, *, reminder_id: str, provider_message_id: str) -> bool:
         assert self._conn is not None
