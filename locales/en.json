@@ -95,5 +95,8 @@
   "voice.fallback.unsupported_audio": "Unsupported audio format. Please send a Telegram voice message.",
   "voice.fallback.too_long": "Voice message is too long for search. Please send a shorter message.",
   "voice.fallback.too_large": "Voice message is too large. Please send a shorter/lower-size voice message.",
+  "voice.fallback.download_failed": "Could not process the Telegram voice file. Please retry or type your search query.",
+  "voice.fallback.provider_timeout": "Voice transcription provider timed out. Please retry or type your query.",
+  "voice.fallback.provider_error": "Voice transcription provider failed. Please retry or type your query.",
   "voice.transcript.echo": "Heard: \"{transcript}\""
 }

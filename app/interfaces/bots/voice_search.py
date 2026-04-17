@@ -102,15 +102,23 @@ class VoiceSearchHandler:
             return
 
         temp_path: Path | None = None
+        audio_bytes: bytes | None = None
         try:
             file = await message.bot.get_file(message.voice.file_id)
             with tempfile.NamedTemporaryFile(prefix="dentflow_voice_", suffix=".ogg", delete=False) as temp_file:
                 temp_path = Path(temp_file.name)
             await message.bot.download_file(file.file_path, destination=str(temp_path))
             audio_bytes = temp_path.read_bytes()
+        except Exception:
+            await self._reply_fallback(message, locale=locale, outcome=SpeechToTextOutcome.DOWNLOAD_FAILED)
+            return
         finally:
             if temp_path and temp_path.exists():
                 os.unlink(temp_path)
+
+        if not audio_bytes:
+            await self._reply_fallback(message, locale=locale, outcome=SpeechToTextOutcome.DOWNLOAD_FAILED)
+            return
 
         stt = await self._stt_service.transcribe_voice(audio_bytes=audio_bytes, mime_type="audio/ogg")
         if stt.outcome != SpeechToTextOutcome.SUCCESS or not stt.transcript:
