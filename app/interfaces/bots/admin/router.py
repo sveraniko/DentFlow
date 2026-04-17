@@ -8,10 +8,12 @@ from app.application.access import AccessResolver
 from app.application.booking.telegram_flow import BookingPatientFlowService
 from app.application.clinic_reference import ClinicReferenceService
 from app.application.search.service import HybridSearchService
+from app.application.voice import SpeechToTextService, VoiceSearchModeStore
 from app.common.i18n import I18nService
 from app.domain.access_identity.models import RoleCode
 from app.interfaces.bots.common import guard_roles, resolve_locale
 from app.interfaces.bots.search_handlers import run_doctor_search, run_patient_search, run_service_search
+from app.interfaces.bots.voice_search import attach_voice_search_handlers
 
 
 def _clinic_locale(reference_service: ClinicReferenceService, clinic_id: str) -> str | None:
@@ -48,10 +50,29 @@ def make_router(
     reference_service: ClinicReferenceService,
     booking_flow: BookingPatientFlowService,
     search_service: HybridSearchService,
+    stt_service: SpeechToTextService,
+    voice_mode_store: VoiceSearchModeStore,
     *,
     default_locale: str,
+    max_voice_duration_sec: int,
+    max_voice_file_size_bytes: int,
+    voice_mode_ttl_sec: int,
 ) -> Router:
     router = Router(name="admin_router")
+
+    attach_voice_search_handlers(
+        router,
+        i18n=i18n,
+        access_resolver=access_resolver,
+        search_service=search_service,
+        stt_service=stt_service,
+        mode_store=voice_mode_store,
+        default_locale=default_locale,
+        allowed_roles={RoleCode.ADMIN},
+        max_voice_duration_sec=max_voice_duration_sec,
+        max_voice_file_size_bytes=max_voice_file_size_bytes,
+        mode_ttl_sec=voice_mode_ttl_sec,
+    )
 
     @router.message(CommandStart())
     async def start(message: Message) -> None:

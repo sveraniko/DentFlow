@@ -4,19 +4,46 @@ from aiogram.types import Message
 
 from app.application.access import AccessResolver
 from app.application.search.service import HybridSearchService
+from app.application.voice import SpeechToTextService, VoiceSearchModeStore
 from app.common.i18n import I18nService
 from app.domain.access_identity.models import RoleCode
 from app.interfaces.bots.common import build_role_router, guard_roles, resolve_locale
 from app.interfaces.bots.search_handlers import run_doctor_search, run_patient_search, run_service_search
+from app.interfaces.bots.voice_search import attach_voice_search_handlers
 
 
-def make_router(i18n: I18nService, access_resolver: AccessResolver, search_service: HybridSearchService, *, default_locale: str) -> Router:
+def make_router(
+    i18n: I18nService,
+    access_resolver: AccessResolver,
+    search_service: HybridSearchService,
+    stt_service: SpeechToTextService,
+    voice_mode_store: VoiceSearchModeStore,
+    *,
+    default_locale: str,
+    max_voice_duration_sec: int,
+    max_voice_file_size_bytes: int,
+    voice_mode_ttl_sec: int,
+) -> Router:
     router = build_role_router(
         role_key="doctor",
         i18n=i18n,
         locale=default_locale,
         access_resolver=access_resolver,
         required_role=RoleCode.DOCTOR,
+    )
+
+    attach_voice_search_handlers(
+        router,
+        i18n=i18n,
+        access_resolver=access_resolver,
+        search_service=search_service,
+        stt_service=stt_service,
+        mode_store=voice_mode_store,
+        default_locale=default_locale,
+        allowed_roles={RoleCode.DOCTOR},
+        max_voice_duration_sec=max_voice_duration_sec,
+        max_voice_file_size_bytes=max_voice_file_size_bytes,
+        mode_ttl_sec=voice_mode_ttl_sec,
     )
 
     @router.message(Command("search_patient"))

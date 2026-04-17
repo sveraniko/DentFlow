@@ -6,10 +6,20 @@ from types import SimpleNamespace
 
 from app.application.access import AccessDecision, ActorContext
 from app.common.i18n import I18nService
+from app.application.voice import SpeechToTextService, VoiceSearchModeStore
 from app.domain.access_identity.models import RoleCode
 from app.interfaces.bots.admin.router import make_router as make_admin_router
+from app.infrastructure.speech.fake_provider import FakeSpeechToTextProvider
 from app.interfaces.bots.doctor.router import make_router as make_doctor_router
 
+
+def _stt_service() -> SpeechToTextService:
+    return SpeechToTextService(
+        provider=FakeSpeechToTextProvider(),
+        timeout_sec=2.0,
+        confidence_threshold=0.7,
+        language_hint="auto",
+    )
 
 class _Message:
     def __init__(self, text: str, user_id: int = 10):
@@ -74,7 +84,12 @@ def test_admin_search_patient_stops_after_failed_guard() -> None:
         reference_service=_ClinicReferenceStub(),
         booking_flow=_BookingFlowStub(),
         search_service=search,
+        stt_service=_stt_service(),
+        voice_mode_store=VoiceSearchModeStore(),
         default_locale="en",
+        max_voice_duration_sec=30,
+        max_voice_file_size_bytes=2_000_000,
+        voice_mode_ttl_sec=45,
     )
     cb = _handler(router, "search_patient")
     message = _Message("/search_patient ivan")
@@ -92,7 +107,12 @@ def test_admin_search_doctor_and_service_stop_after_failed_guard() -> None:
         reference_service=_ClinicReferenceStub(),
         booking_flow=_BookingFlowStub(),
         search_service=search,
+        stt_service=_stt_service(),
+        voice_mode_store=VoiceSearchModeStore(),
         default_locale="en",
+        max_voice_duration_sec=30,
+        max_voice_file_size_bytes=2_000_000,
+        voice_mode_ttl_sec=45,
     )
     for command_name, text in [("search_doctor", "/search_doctor ortho"), ("search_service", "/search_service clean")]:
         cb = _handler(router, command_name)
@@ -109,7 +129,12 @@ def test_doctor_search_commands_are_guarded_and_localized() -> None:
         i18n=i18n,
         access_resolver=_AccessResolverStub(allowed_roles={RoleCode.ADMIN}, locale="ru"),
         search_service=search,
+        stt_service=_stt_service(),
+        voice_mode_store=VoiceSearchModeStore(),
         default_locale="en",
+        max_voice_duration_sec=30,
+        max_voice_file_size_bytes=2_000_000,
+        voice_mode_ttl_sec=45,
     )
     for command_name, text in [("search_patient", "/search_patient ivan"), ("search_doctor", "/search_doctor ortho"), ("search_service", "/search_service clean")]:
         cb = _handler(router, command_name)

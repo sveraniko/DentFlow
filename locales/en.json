@@ -85,5 +85,15 @@
   "search.no_matches": "No matches",
   "search.usage.patient": "Usage: /search_patient <query>",
   "search.usage.doctor": "Usage: /search_doctor <query>",
-  "search.usage.service": "Usage: /search_service <query>"
+  "search.usage.service": "Usage: /search_service <query>",
+  "voice.mode.patient.activated": "Voice patient search mode is active for {ttl}s. Send one voice message now.",
+  "voice.mode.doctor.activated": "Voice doctor search mode is active for {ttl}s. Send one voice message now.",
+  "voice.mode.service.activated": "Voice service search mode is active for {ttl}s. Send one voice message now.",
+  "voice.fallback.mode_not_active": "Voice search mode is not active. Use /voice_find_patient, /voice_find_doctor, or /voice_find_service.",
+  "voice.fallback.transcription_failed": "Could not transcribe voice. Please retry or type your search query.",
+  "voice.fallback.low_confidence": "Voice confidence is too low. Please repeat clearly or type your query.",
+  "voice.fallback.unsupported_audio": "Unsupported audio format. Please send a Telegram voice message.",
+  "voice.fallback.too_long": "Voice message is too long for search. Please send a shorter message.",
+  "voice.fallback.too_large": "Voice message is too large. Please send a shorter/lower-size voice message.",
+  "voice.transcript.echo": "Heard: \"{transcript}\""
 }
