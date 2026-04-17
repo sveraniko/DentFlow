@@ -1,3 +1,5 @@
+import json
+
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
@@ -5,6 +7,7 @@ from aiogram.types import Message
 from app.application.access import AccessResolver
 from app.application.booking import BookingOrchestrationService, BookingService, BookingStateService
 from app.application.clinic_reference import ClinicReferenceService
+from app.application.clinical import ClinicalChartService
 from app.application.doctor import DOCTOR_ALLOWED_ACTIONS, DoctorOperationsService, DoctorPatientReader
 from app.application.search.service import HybridSearchService
 from app.application.voice import SpeechToTextService, VoiceSearchModeStore
@@ -26,6 +29,7 @@ def make_router(
     booking_orchestration: BookingOrchestrationService | None = None,
     reference_service: ClinicReferenceService | None = None,
     patient_reader: DoctorPatientReader | None = None,
+    clinical_service: ClinicalChartService | None = None,
     *,
     default_locale: str,
     max_voice_duration_sec: int,
@@ -63,20 +67,22 @@ def make_router(
             booking_orchestration=booking_orchestration,
             reference_service=reference_service,
             patient_reader=patient_reader,
+            clinical_service=clinical_service,
         )
         if booking_service and booking_state_service and booking_orchestration and reference_service and patient_reader
         else None
     )
 
-    async def _resolve_doctor_context(message: Message) -> tuple[str | None, str]:
+    async def _resolve_doctor_context(message: Message) -> tuple[str | None, str, str | None]:
         locale = await resolve_locale(message, access_resolver=access_resolver, fallback_locale=default_locale)
         if not message.from_user:
-            return None, locale
+            return None, locale, None
         doctor_id, reason = access_resolver.resolve_doctor_id(message.from_user.id)
         if doctor_id is None:
             await message.answer(i18n.t(reason or "doctor.identity.unavailable", locale))
-            return None, locale
-        return doctor_id, locale
+            return None, locale, None
+        actor = access_resolver.resolve_actor_context(message.from_user.id)
+        return doctor_id, locale, actor.clinic_id if actor else None
 
     async def _guard_doctor(message: Message) -> bool:
         return await guard_roles(
@@ -91,21 +97,203 @@ def make_router(
     async def doctor_home(message: Message) -> None:
         if not await _guard_doctor(message):
             return
-        doctor_id, locale = await _resolve_doctor_context(message)
+        doctor_id, locale, _ = await _resolve_doctor_context(message)
         if doctor_id is None:
             return
         await message.answer(
             i18n.t("doctor.home.panel", locale).format(
                 doctor_id=doctor_id,
-                actions="/today_queue · /next_patient · /search_patient · /search_doctor · /search_service · /voice_find_patient",
+                actions="/today_queue · /next_patient · /booking_open · /patient_open · /chart_open · /encounter_open",
             )
         )
+
+    @router.message(Command("chart_open"))
+    async def chart_open(message: Message) -> None:
+        if not await _guard_doctor(message) or not message.text:
+            return
+        doctor_id, locale, clinic_id = await _resolve_doctor_context(message)
+        if doctor_id is None or clinic_id is None or operations is None:
+            await message.answer(i18n.t("doctor.surface.unavailable", locale))
+            return
+        parts = message.text.split(maxsplit=1)
+        if len(parts) != 2:
+            await message.answer(i18n.t("doctor.chart.open.usage", locale))
+            return
+        card = await operations.open_chart_summary(doctor_id=doctor_id, clinic_id=clinic_id, patient_id=parts[1].strip())
+        if card is None:
+            await message.answer(i18n.t("doctor.chart.open.denied_or_missing", locale))
+            return
+        await message.answer(
+            i18n.t("doctor.chart.summary.card", locale).format(
+                chart_id=card.chart_id,
+                patient_id=card.patient_id,
+                status=card.status,
+                diagnosis=card.latest_diagnosis_text or "-",
+                plan=card.latest_treatment_plan_text or "-",
+                note=card.latest_note_snippet or "-",
+                note_count=card.note_count,
+                imaging_count=card.imaging_count,
+                updated_at=card.updated_at_label,
+            )
+        )
+
+    @router.message(Command("encounter_open"))
+    async def encounter_open(message: Message) -> None:
+        if not await _guard_doctor(message) or not message.text:
+            return
+        doctor_id, locale, clinic_id = await _resolve_doctor_context(message)
+        if doctor_id is None or clinic_id is None or operations is None:
+            await message.answer(i18n.t("doctor.surface.unavailable", locale))
+            return
+        parts = message.text.split(maxsplit=2)
+        if len(parts) < 2:
+            await message.answer(i18n.t("doctor.encounter.open.usage", locale))
+            return
+        patient_id = parts[1].strip()
+        booking_id = parts[2].strip() if len(parts) == 3 else None
+        encounter = await operations.open_or_get_encounter(doctor_id=doctor_id, clinic_id=clinic_id, patient_id=patient_id, booking_id=booking_id)
+        if encounter is None:
+            await message.answer(i18n.t("doctor.encounter.open.denied_or_missing", locale))
+            return
+        await message.answer(i18n.t("doctor.encounter.open.ok", locale).format(encounter_id=encounter.encounter_id, status=encounter.status))
+
+    @router.message(Command("encounter_note"))
+    async def encounter_note(message: Message) -> None:
+        if not await _guard_doctor(message) or not message.text:
+            return
+        doctor_id, locale, _ = await _resolve_doctor_context(message)
+        if doctor_id is None or operations is None:
+            await message.answer(i18n.t("doctor.surface.unavailable", locale))
+            return
+        parts = message.text.split(maxsplit=3)
+        if len(parts) != 4:
+            await message.answer(i18n.t("doctor.encounter.note.usage", locale))
+            return
+        note = await operations.add_encounter_note(doctor_id=doctor_id, encounter_id=parts[1].strip(), note_type=parts[2].strip(), note_text=parts[3].strip())
+        if note is None:
+            await message.answer(i18n.t("doctor.encounter.note.denied_or_missing", locale))
+            return
+        await message.answer(i18n.t("doctor.encounter.note.ok", locale).format(note_id=note.encounter_note_id))
+
+    @router.message(Command("diagnosis_set"))
+    async def diagnosis_set(message: Message) -> None:
+        if not await _guard_doctor(message) or not message.text:
+            return
+        doctor_id, locale, clinic_id = await _resolve_doctor_context(message)
+        if doctor_id is None or clinic_id is None or operations is None:
+            await message.answer(i18n.t("doctor.surface.unavailable", locale))
+            return
+        parts = message.text.split(maxsplit=2)
+        if len(parts) != 3:
+            await message.answer(i18n.t("doctor.diagnosis.set.usage", locale))
+            return
+        result_id = await operations.set_chart_diagnosis(doctor_id=doctor_id, clinic_id=clinic_id, patient_id=parts[1].strip(), diagnosis_text=parts[2].strip())
+        if result_id is None:
+            await message.answer(i18n.t("doctor.chart.open.denied_or_missing", locale))
+            return
+        await message.answer(i18n.t("doctor.diagnosis.set.ok", locale).format(diagnosis_id=result_id))
+
+    @router.message(Command("treatment_set"))
+    async def treatment_set(message: Message) -> None:
+        if not await _guard_doctor(message) or not message.text:
+            return
+        doctor_id, locale, clinic_id = await _resolve_doctor_context(message)
+        if doctor_id is None or clinic_id is None or operations is None:
+            await message.answer(i18n.t("doctor.surface.unavailable", locale))
+            return
+        parts = message.text.split(maxsplit=2)
+        if len(parts) != 3 or "|" not in parts[2]:
+            await message.answer(i18n.t("doctor.treatment.set.usage", locale))
+            return
+        title, plan_text = [x.strip() for x in parts[2].split("|", 1)]
+        plan_id = await operations.set_chart_treatment_plan(
+            doctor_id=doctor_id,
+            clinic_id=clinic_id,
+            patient_id=parts[1].strip(),
+            title=title,
+            plan_text=plan_text,
+        )
+        if plan_id is None:
+            await message.answer(i18n.t("doctor.chart.open.denied_or_missing", locale))
+            return
+        await message.answer(i18n.t("doctor.treatment.set.ok", locale).format(treatment_plan_id=plan_id))
+
+    @router.message(Command("imaging_attach"))
+    async def imaging_attach(message: Message) -> None:
+        if not await _guard_doctor(message) or not message.text:
+            return
+        doctor_id, locale, clinic_id = await _resolve_doctor_context(message)
+        if doctor_id is None or clinic_id is None or operations is None:
+            await message.answer(i18n.t("doctor.surface.unavailable", locale))
+            return
+        parts = message.text.split(maxsplit=3)
+        if len(parts) < 4:
+            await message.answer(i18n.t("doctor.imaging.attach.usage", locale))
+            return
+        patient_id = parts[1].strip()
+        imaging_type = parts[2].strip()
+        ref_token = parts[3].strip()
+        media_asset_id = None
+        external_url = None
+        if ref_token.startswith("media:"):
+            media_asset_id = ref_token.split("media:", 1)[1].strip()
+        elif ref_token.startswith("url:"):
+            external_url = ref_token.split("url:", 1)[1].strip()
+        else:
+            await message.answer(i18n.t("doctor.imaging.attach.usage", locale))
+            return
+        try:
+            ref = await operations.attach_chart_imaging(
+                doctor_id=doctor_id,
+                clinic_id=clinic_id,
+                patient_id=patient_id,
+                imaging_type=imaging_type,
+                media_asset_id=media_asset_id,
+                external_url=external_url,
+            )
+        except ValueError:
+            await message.answer(i18n.t("doctor.imaging.attach.invalid", locale))
+            return
+        if ref is None:
+            await message.answer(i18n.t("doctor.chart.open.denied_or_missing", locale))
+            return
+        await message.answer(i18n.t("doctor.imaging.attach.ok", locale).format(imaging_ref_id=ref.imaging_ref_id))
+
+    @router.message(Command("odontogram_save"))
+    async def odontogram_save(message: Message) -> None:
+        if not await _guard_doctor(message) or not message.text:
+            return
+        doctor_id, locale, clinic_id = await _resolve_doctor_context(message)
+        if doctor_id is None or clinic_id is None or operations is None:
+            await message.answer(i18n.t("doctor.surface.unavailable", locale))
+            return
+        parts = message.text.split(maxsplit=2)
+        if len(parts) != 3:
+            await message.answer(i18n.t("doctor.odontogram.save.usage", locale))
+            return
+        try:
+            payload = json.loads(parts[2])
+            if not isinstance(payload, dict):
+                raise ValueError("payload")
+        except (json.JSONDecodeError, ValueError):
+            await message.answer(i18n.t("doctor.odontogram.save.invalid", locale))
+            return
+        snapshot = await operations.save_chart_odontogram(
+            doctor_id=doctor_id,
+            clinic_id=clinic_id,
+            patient_id=parts[1].strip(),
+            snapshot_payload_json=payload,
+        )
+        if snapshot is None:
+            await message.answer(i18n.t("doctor.chart.open.denied_or_missing", locale))
+            return
+        await message.answer(i18n.t("doctor.odontogram.save.ok", locale).format(snapshot_id=snapshot.odontogram_snapshot_id))
 
     @router.message(Command("today_queue"))
     async def today_queue(message: Message) -> None:
         if not await _guard_doctor(message):
             return
-        doctor_id, locale = await _resolve_doctor_context(message)
+        doctor_id, locale, _ = await _resolve_doctor_context(message)
         if doctor_id is None:
             return
         if operations is None:
@@ -125,7 +313,7 @@ def make_router(
     async def next_patient(message: Message) -> None:
         if not await _guard_doctor(message):
             return
-        doctor_id, locale = await _resolve_doctor_context(message)
+        doctor_id, locale, _ = await _resolve_doctor_context(message)
         if doctor_id is None:
             return
         if operations is None:
@@ -149,7 +337,7 @@ def make_router(
     async def booking_open(message: Message) -> None:
         if not await _guard_doctor(message) or not message.text:
             return
-        doctor_id, locale = await _resolve_doctor_context(message)
+        doctor_id, locale, _ = await _resolve_doctor_context(message)
         if doctor_id is None:
             return
         if operations is None:
@@ -182,7 +370,7 @@ def make_router(
     async def patient_open(message: Message) -> None:
         if not await _guard_doctor(message) or not message.text:
             return
-        doctor_id, locale = await _resolve_doctor_context(message)
+        doctor_id, locale, _ = await _resolve_doctor_context(message)
         if doctor_id is None:
             return
         if operations is None:
@@ -212,7 +400,7 @@ def make_router(
     async def booking_action(message: Message) -> None:
         if not await _guard_doctor(message) or not message.text:
             return
-        doctor_id, locale = await _resolve_doctor_context(message)
+        doctor_id, locale, _ = await _resolve_doctor_context(message)
         if doctor_id is None:
             return
         if operations is None:
@@ -259,7 +447,7 @@ def make_router(
             )
         )
         if query.startswith("id:") and operations:
-            doctor_id, _ = await _resolve_doctor_context(message)
+            doctor_id, _, _ = await _resolve_doctor_context(message)
             patient_id = query.split("id:", 1)[1].strip()
             if doctor_id and patient_id:
                 card = await operations.build_patient_quick_card(patient_id=patient_id, doctor_id=doctor_id)

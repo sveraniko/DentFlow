@@ -20,6 +20,7 @@ from app.application.booking import (
     WaitlistService,
 )
 from app.application.clinic_reference import ClinicReferenceService
+from app.application.clinical import ClinicalChartService
 from app.application.communication import BookingReminderPlanner, BookingReminderService, ReminderActionService
 from app.application.policy import PolicyResolver
 from app.application.search.service import HybridSearchService
@@ -29,6 +30,7 @@ from app.common.i18n import I18nService
 from app.config.settings import Settings, SpeechToTextConfig
 from app.infrastructure.db.booking_repository import DbBookingRepository
 from app.infrastructure.db.communication_repository import DbReminderJobRepository
+from app.infrastructure.db.clinical_repository import DbClinicalRepository
 from app.infrastructure.db.patient_repository import (
     DbCanonicalPatientCreator,
     DbDoctorPatientReader,
@@ -64,9 +66,11 @@ class RuntimeRegistry:
         self.patient_preference_reader = DbPatientPreferenceReader(settings.db)
         self.doctor_patient_reader = DbDoctorPatientReader(settings.db)
         self.patient_registry_repository = asyncio.run(DbPatientRegistryRepository.load(settings.db))
+        self.clinical_repository = DbClinicalRepository(settings.db)
         self.patient_registry_service = DbPatientRegistryService(self.patient_registry_repository)
 
         self.reference_service = ClinicReferenceService(self.clinic_reference_repository)
+        self.clinical_chart_service = ClinicalChartService(self.clinical_repository)
         self.access_resolver = AccessResolver(self.access_repository)
         self.policy_resolver = PolicyResolver(self.policy_repository)
         self.booking_session_service = BookingSessionService(self.booking_repository)
@@ -174,6 +178,7 @@ class RuntimeRegistry:
                 booking_orchestration=self.booking_orchestration_service,
                 reference_service=self.reference_service,
                 patient_reader=self.doctor_patient_reader,
+                clinical_service=self.clinical_chart_service,
                 default_locale=self.settings.app.default_locale,
                 max_voice_duration_sec=self.settings.stt.max_voice_duration_sec,
                 max_voice_file_size_bytes=self.settings.stt.max_voice_file_size_bytes,
