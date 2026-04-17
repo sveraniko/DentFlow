@@ -13,6 +13,7 @@ from app.domain.access_identity.models import (
     ActorStatus,
     ActorType,
     ClinicRoleAssignment,
+    DoctorProfile,
     RoleCode,
     StaffMember,
     StaffStatus,
@@ -229,6 +230,29 @@ class DbAccessRepository(InMemoryAccessRepository):
                         granted_at=row["granted_at"],
                         revoked_at=row["revoked_at"],
                         is_active=row["is_active"],
+                    )
+                )
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT doctor_profile_id, doctor_id, staff_id, clinic_id, branch_id, specialty_code,
+                               active_for_booking, active_for_clinical_work
+                        FROM access_identity.doctor_profiles
+                        """
+                    )
+                )
+            ).mappings():
+                repo.upsert_doctor_profile(
+                    DoctorProfile(
+                        doctor_profile_id=row["doctor_profile_id"],
+                        doctor_id=row["doctor_id"],
+                        staff_id=row["staff_id"],
+                        clinic_id=row["clinic_id"],
+                        branch_id=row["branch_id"],
+                        specialty_code=row["specialty_code"],
+                        active_for_booking=row["active_for_booking"],
+                        active_for_clinical_work=row["active_for_clinical_work"],
                     )
                 )
         await engine.dispose()
