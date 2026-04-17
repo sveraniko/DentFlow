@@ -5,8 +5,7 @@ from aiogram.types import Message
 from app.application.access import AccessResolver
 from app.application.booking import BookingOrchestrationService, BookingService, BookingStateService
 from app.application.clinic_reference import ClinicReferenceService
-from app.application.doctor import DOCTOR_ALLOWED_ACTIONS, DoctorOperationsService
-from app.application.patient.registry import PatientRegistryService
+from app.application.doctor import DOCTOR_ALLOWED_ACTIONS, DoctorOperationsService, DoctorPatientReader
 from app.application.search.service import HybridSearchService
 from app.application.voice import SpeechToTextService, VoiceSearchModeStore
 from app.common.i18n import I18nService
@@ -26,13 +25,14 @@ def make_router(
     booking_state_service: BookingStateService | None = None,
     booking_orchestration: BookingOrchestrationService | None = None,
     reference_service: ClinicReferenceService | None = None,
-    patient_registry: PatientRegistryService | None = None,
+    patient_reader: DoctorPatientReader | None = None,
     *,
     default_locale: str,
     max_voice_duration_sec: int,
     max_voice_file_size_bytes: int,
     voice_mode_ttl_sec: int,
 ) -> Router:
+    search_backend = search_service
     router = build_role_router(
         role_key="doctor",
         i18n=i18n,
@@ -62,9 +62,9 @@ def make_router(
             booking_state_service=booking_state_service,
             booking_orchestration=booking_orchestration,
             reference_service=reference_service,
-            patient_registry=patient_registry,
+            patient_reader=patient_reader,
         )
-        if booking_service and booking_state_service and booking_orchestration and reference_service and patient_registry
+        if booking_service and booking_state_service and booking_orchestration and reference_service and patient_reader
         else None
     )
 
@@ -194,7 +194,7 @@ def make_router(
             return
         card = await operations.build_patient_quick_card(patient_id=parts[1].strip(), doctor_id=doctor_id)
         if card is None:
-            await message.answer(i18n.t("doctor.patient.open.missing", locale))
+            await message.answer(i18n.t("doctor.patient.open.denied_or_missing", locale))
             return
         await message.answer(
             i18n.t("doctor.patient.quick.card", locale).format(
@@ -251,7 +251,7 @@ def make_router(
             return
         await message.answer(
             await run_patient_search(
-                service=search_service,
+                service=search_backend,
                 i18n=i18n,
                 locale=locale,
                 clinic_id=actor.clinic_id,
@@ -286,7 +286,7 @@ def make_router(
             return
         await message.answer(
             await run_doctor_search(
-                service=search_service,
+                service=search_backend,
                 i18n=i18n,
                 locale=locale,
                 clinic_id=actor.clinic_id,
@@ -308,7 +308,7 @@ def make_router(
             return
         await message.answer(
             await run_service_search(
-                service=search_service,
+                service=search_backend,
                 i18n=i18n,
                 locale=locale,
                 clinic_id=actor.clinic_id,

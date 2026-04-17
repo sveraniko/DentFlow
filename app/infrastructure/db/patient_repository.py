@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import text
 
 from app.application.patient import InMemoryPatientRegistryRepository, PatientRegistryService, normalize_contact_value
+from app.application.doctor.patient_read import DoctorPatientSnapshot
 from app.application.booking.telegram_flow import CanonicalPatientCreator
 from app.domain.patient_registry.models import (
     Patient,
@@ -642,6 +643,82 @@ class DbPatientPreferenceReader:
             marketing_opt_in=row["marketing_opt_in"],
             contact_time_window=row["contact_time_window"],
         )
+
+
+class DbDoctorPatientReader:
+    def __init__(self, db_config) -> None:
+        self._db_config = db_config
+
+    async def read_snapshot(self, *, patient_id: str) -> DoctorPatientSnapshot | None:
+        engine = create_engine(self._db_config)
+        async with engine.connect() as conn:
+            patient_row = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT patient_id, display_name, patient_number
+                        FROM core_patient.patients
+                        WHERE patient_id=:patient_id
+                        """
+                    ),
+                    {"patient_id": patient_id},
+                )
+            ).mappings().first()
+            if patient_row is None:
+                result = None
+            else:
+                phone_row = (
+                    await conn.execute(
+                        text(
+                            """
+                            SELECT contact_value
+                            FROM core_patient.patient_contacts
+                            WHERE patient_id=:patient_id
+                              AND contact_type='phone'
+                              AND is_primary=TRUE
+                              AND is_active=TRUE
+                            LIMIT 1
+                            """
+                        ),
+                        {"patient_id": patient_id},
+                    )
+                ).mappings().first()
+                flags_rows = (
+                    await conn.execute(
+                        text(
+                            """
+                            SELECT DISTINCT flag_type
+                            FROM core_patient.patient_flags
+                            WHERE patient_id=:patient_id AND is_active=TRUE
+                            ORDER BY flag_type ASC
+                            """
+                        ),
+                        {"patient_id": patient_id},
+                    )
+                ).mappings().all()
+                has_photo = (
+                    await conn.execute(
+                        text(
+                            """
+                            SELECT 1
+                            FROM core_patient.patient_photos
+                            WHERE patient_id=:patient_id AND is_primary=TRUE
+                            LIMIT 1
+                            """
+                        ),
+                        {"patient_id": patient_id},
+                    )
+                ).scalar_one_or_none() is not None
+                result = DoctorPatientSnapshot(
+                    patient_id=patient_row["patient_id"],
+                    display_name=patient_row["display_name"],
+                    patient_number=patient_row["patient_number"],
+                    phone_raw=phone_row["contact_value"] if phone_row else None,
+                    has_photo=has_photo,
+                    active_flags_summary=", ".join(row["flag_type"] for row in flags_rows) if flags_rows else None,
+                )
+        await engine.dispose()
+        return result
 
 
 async def _fetch_preference_row(db_config, *, patient_id: str) -> dict | None:

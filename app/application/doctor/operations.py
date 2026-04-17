@@ -11,7 +11,7 @@ from app.domain.booking.errors import InvalidBookingTransitionError
 from app.application.booking.state_services import BookingStateService
 from app.application.booking.services import BookingService
 from app.application.clinic_reference import ClinicReferenceService
-from app.application.patient.registry import PatientRegistryService
+from app.application.doctor.patient_read import DoctorPatientReader
 from app.domain.booking import Booking
 
 LIVE_QUEUE_STATUSES = {"pending_confirmation", "confirmed", "reschedule_requested", "checked_in", "in_service"}
@@ -65,7 +65,7 @@ class DoctorOperationsService:
     booking_state_service: BookingStateService
     booking_orchestration: BookingOrchestrationService
     reference_service: ClinicReferenceService
-    patient_registry: PatientRegistryService
+    patient_reader: DoctorPatientReader
 
     def resolve_doctor_identity(self, telegram_user_id: int) -> tuple[str | None, str | None]:
         return self.access_resolver.resolve_doctor_id(telegram_user_id)
@@ -95,24 +95,26 @@ class DoctorOperationsService:
             return None
         return await self._build_booking_detail(booking)
 
-    async def build_patient_quick_card(self, *, patient_id: str, doctor_id: str) -> DoctorPatientQuickCard | None:
-        patient = self.patient_registry.get_patient(patient_id)
+    async def build_patient_quick_card(
+        self,
+        *,
+        patient_id: str,
+        doctor_id: str,
+        require_visibility_guard: bool = True,
+    ) -> DoctorPatientQuickCard | None:
+        if require_visibility_guard and not await self._doctor_can_view_patient(doctor_id=doctor_id, patient_id=patient_id):
+            return None
+        patient = await self.patient_reader.read_snapshot(patient_id=patient_id)
         if patient is None:
             return None
-        primary_phone = next(
-            (c for c in self.patient_registry.repository.contacts.values() if c.patient_id == patient_id and c.contact_type == "phone" and c.is_primary and c.is_active),
-            None,
-        )
-        has_photo = self.patient_registry.get_primary_photo(patient_id) is not None
-        flags = self.patient_registry.active_flags(patient_id)
         upcoming = await self._upcoming_booking_snippet(patient_id=patient_id, doctor_id=doctor_id)
         return DoctorPatientQuickCard(
             patient_id=patient.patient_id,
             display_name=patient.display_name,
             patient_number=patient.patient_number,
-            phone_hint=self._mask_phone(primary_phone.contact_value if primary_phone else None),
-            has_photo=has_photo,
-            active_flags_summary=", ".join(sorted({f.flag_type for f in flags})) if flags else None,
+            phone_hint=self._mask_phone(patient.phone_raw),
+            has_photo=patient.has_photo,
+            active_flags_summary=patient.active_flags_summary,
             upcoming_booking_snippet=upcoming,
         )
 
@@ -135,7 +137,11 @@ class DoctorOperationsService:
         return OrchestrationSuccess(kind="success", entity=changed.entity)
 
     async def _build_queue_item(self, booking: Booking) -> DoctorQueueItem:
-        patient_card = await self.build_patient_quick_card(patient_id=booking.patient_id, doctor_id=booking.doctor_id)
+        patient_card = await self.build_patient_quick_card(
+            patient_id=booking.patient_id,
+            doctor_id=booking.doctor_id,
+            require_visibility_guard=False,
+        )
         service = self.reference_service.list_services(booking.clinic_id)
         services_by_id = {row.service_id: row for row in service}
         service_row = services_by_id.get(booking.service_id)
@@ -156,7 +162,11 @@ class DoctorOperationsService:
         )
 
     async def _build_booking_detail(self, booking: Booking) -> DoctorBookingDetail:
-        card = await self.build_patient_quick_card(patient_id=booking.patient_id, doctor_id=booking.doctor_id)
+        card = await self.build_patient_quick_card(
+            patient_id=booking.patient_id,
+            doctor_id=booking.doctor_id,
+            require_visibility_guard=False,
+        )
         if card is None:
             card = DoctorPatientQuickCard(
                 patient_id=booking.patient_id,
@@ -185,6 +195,10 @@ class DoctorOperationsService:
             return None
         row = future[0]
         return f"{row.scheduled_start_at.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} · {row.status}"
+
+    async def _doctor_can_view_patient(self, *, doctor_id: str, patient_id: str) -> bool:
+        rows = await self.booking_service.list_by_patient(patient_id=patient_id)
+        return any(row.doctor_id == doctor_id for row in rows)
 
     def _mask_phone(self, raw: str | None) -> str | None:
         if not raw:
