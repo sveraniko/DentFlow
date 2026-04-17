@@ -150,6 +150,7 @@ class DbReminderJobRepository:
             status="sent",
             extra_set=", sent_at=:now, queued_at=NULL, last_error_code=NULL, last_error_text=NULL",
             extra_params={},
+            event_name="reminder.sent",
         )
 
     async def mark_reminder_failed(self, *, reminder_id: str, failed_at: datetime, error_text: str) -> bool:
@@ -159,6 +160,7 @@ class DbReminderJobRepository:
             status="failed",
             extra_set=", queued_at=NULL, delivery_attempts_count=delivery_attempts_count + 1, last_error_code=:error_code, last_error_text=:error_text, last_failed_at=:now",
             extra_params={"error_text": error_text, "error_code": error_text[:64]},
+            event_name="reminder.failed",
         )
 
     async def schedule_queued_reminder_retry(
@@ -378,6 +380,7 @@ class DbReminderJobRepository:
         status: str,
         extra_set: str,
         extra_params: dict[str, object],
+        event_name: str | None = None,
     ) -> bool:
         engine = create_engine(self._db_config)
         async with engine.begin() as conn:
@@ -388,12 +391,34 @@ class DbReminderJobRepository:
                     SET status=:status, updated_at=:now{extra_set}
                     WHERE reminder_id=:reminder_id
                       AND status='queued'
+                    RETURNING reminder_id, clinic_id, booking_id, reminder_type, status
                     """
                 ),
                 {"reminder_id": reminder_id, "now": now, "status": status, **extra_params},
             )
+            row = result.mappings().first()
+            if row and event_name:
+                payload = {
+                    "booking_id": row["booking_id"],
+                    "reminder_type": row["reminder_type"],
+                    "status": row["status"],
+                }
+                if status == "failed":
+                    payload["error_code"] = str(extra_params.get("error_code") or "")[:64]
+                await OutboxRepository(self._db_config).append_on_connection(
+                    conn,
+                    build_event(
+                        event_name=event_name,
+                        producer_context="communication.delivery",
+                        clinic_id=row["clinic_id"],
+                        entity_type="reminder",
+                        entity_id=row["reminder_id"],
+                        occurred_at=now,
+                        payload=payload,
+                    ),
+                )
         await engine.dispose()
-        return bool(result.rowcount)
+        return bool(row)
 
 
 async def _insert_reminder_on_conn(conn: Any, payload: dict[str, object]) -> None:
