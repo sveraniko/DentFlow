@@ -19,6 +19,7 @@ from app.application.communication.actions import (
     ReminderActionService,
     ReminderActionTransactionRepository,
 )
+from app.application.communication.recovery import ReminderRecoveryService, ReminderRecoveryStats
 
 __all__ = [
     "ReminderJobRepository",
@@ -41,4 +42,6 @@ __all__ = [
     "ReminderActionRepository",
     "ReminderActionTransactionRepository",
     "ReminderActionService",
+    "ReminderRecoveryService",
+    "ReminderRecoveryStats",
 ]

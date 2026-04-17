@@ -204,6 +204,74 @@ def make_router(
             )
         )
 
+    @router.message(Command("booking_escalation_take"))
+    async def booking_escalation_take(message: Message) -> None:
+        allowed = await guard_roles(
+            message,
+            i18n=i18n,
+            access_resolver=access_resolver,
+            allowed_roles={RoleCode.ADMIN},
+            fallback_locale=default_locale,
+        )
+        if not allowed or not message.from_user or not message.text:
+            return
+        actor_context = access_resolver.resolve_actor_context(message.from_user.id)
+        if not actor_context:
+            return
+        locale = await resolve_locale(
+            message,
+            access_resolver=access_resolver,
+            fallback_locale=default_locale,
+            clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
+        )
+        parts = message.text.strip().split(maxsplit=1)
+        if len(parts) != 2:
+            await message.answer(i18n.t("admin.booking.escalation.take.usage", locale))
+            return
+        escalation = await booking_flow.take_admin_escalation(
+            clinic_id=actor_context.clinic_id,
+            escalation_id=parts[1],
+            actor_id=actor_context.actor_id,
+        )
+        if escalation is None:
+            await message.answer(i18n.t("admin.booking.escalation.open.missing", locale))
+            return
+        await message.answer(i18n.t("admin.booking.escalation.take.ok", locale).format(escalation_id=escalation.admin_escalation_id))
+
+    @router.message(Command("booking_escalation_resolve"))
+    async def booking_escalation_resolve(message: Message) -> None:
+        allowed = await guard_roles(
+            message,
+            i18n=i18n,
+            access_resolver=access_resolver,
+            allowed_roles={RoleCode.ADMIN},
+            fallback_locale=default_locale,
+        )
+        if not allowed or not message.from_user or not message.text:
+            return
+        actor_context = access_resolver.resolve_actor_context(message.from_user.id)
+        if not actor_context:
+            return
+        locale = await resolve_locale(
+            message,
+            access_resolver=access_resolver,
+            fallback_locale=default_locale,
+            clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
+        )
+        parts = message.text.strip().split(maxsplit=1)
+        if len(parts) != 2:
+            await message.answer(i18n.t("admin.booking.escalation.resolve.usage", locale))
+            return
+        escalation = await booking_flow.resolve_admin_escalation(
+            clinic_id=actor_context.clinic_id,
+            escalation_id=parts[1],
+            actor_id=actor_context.actor_id,
+        )
+        if escalation is None:
+            await message.answer(i18n.t("admin.booking.escalation.open.missing", locale))
+            return
+        await message.answer(i18n.t("admin.booking.escalation.resolve.ok", locale).format(escalation_id=escalation.admin_escalation_id))
+
     @router.message(Command("booking_open"))
     async def booking_open(message: Message) -> None:
         allowed = await guard_roles(

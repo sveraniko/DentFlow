@@ -30,7 +30,7 @@ class _ReminderRepo:
         )[:limit]
         claimed: list[ReminderJob] = []
         for job in due:
-            updated = ReminderJob(**{**asdict(job), "status": "queued", "updated_at": now})
+            updated = ReminderJob(**{**asdict(job), "status": "queued", "updated_at": now, "queued_at": now})
             self.jobs[job.reminder_id] = updated
             claimed.append(updated)
         return claimed
@@ -49,7 +49,45 @@ class _ReminderRepo:
         current = self.jobs[reminder_id]
         if current.status != "queued":
             return False
-        self.jobs[reminder_id] = ReminderJob(**{**asdict(current), "status": "failed", "updated_at": failed_at})
+        self.jobs[reminder_id] = ReminderJob(
+            **{
+                **asdict(current),
+                "status": "failed",
+                "updated_at": failed_at,
+                "queued_at": None,
+                "delivery_attempts_count": current.delivery_attempts_count + 1,
+                "last_error_code": error_text,
+                "last_error_text": error_text,
+                "last_failed_at": failed_at,
+            }
+        )
+        return True
+
+    async def schedule_queued_reminder_retry(
+        self,
+        *,
+        reminder_id: str,
+        retry_at: datetime,
+        failed_at: datetime,
+        error_code: str,
+        error_text: str,
+    ) -> bool:
+        current = self.jobs[reminder_id]
+        if current.status != "queued":
+            return False
+        self.jobs[reminder_id] = ReminderJob(
+            **{
+                **asdict(current),
+                "status": "scheduled",
+                "scheduled_for": retry_at,
+                "updated_at": failed_at,
+                "queued_at": None,
+                "delivery_attempts_count": current.delivery_attempts_count + 1,
+                "last_error_code": error_code,
+                "last_error_text": error_text,
+                "last_failed_at": failed_at,
+            }
+        )
         return True
 
     async def mark_reminder_canceled(self, *, reminder_id: str, canceled_at: datetime, reason_code: str) -> bool:
@@ -179,7 +217,7 @@ def test_delivery_success_persists_message_and_marks_sent() -> None:
     assert service.sender.sent[0][2] == ("confirm", "reschedule", "cancel")
 
 
-def test_delivery_failure_persists_message_and_marks_failed() -> None:
+def test_delivery_failure_persists_message_and_marks_retry_scheduled() -> None:
     now = datetime(2026, 4, 17, 9, 0, tzinfo=timezone.utc)
     reminder = _job(reminder_id="r1", patient_id="pat_1")
     repo = _ReminderRepo([reminder])
@@ -190,7 +228,8 @@ def test_delivery_failure_persists_message_and_marks_failed() -> None:
         sender=_Sender(fail=True),
     )
     asyncio.run(service.deliver_due_reminders(now=now, batch_limit=10))
-    assert repo.jobs["r1"].status == "failed"
+    assert repo.jobs["r1"].status == "scheduled"
+    assert repo.jobs["r1"].delivery_attempts_count == 1
     assert repo.message_deliveries[0].delivery_status == "failed"
     assert "telegram_send_failed" in (repo.message_deliveries[0].error_text or "")
 

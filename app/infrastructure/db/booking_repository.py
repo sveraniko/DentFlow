@@ -99,6 +99,23 @@ class DbBookingRepository(BookingRepository):
         )
         return [BookingSession(**row) for row in rows]
 
+    async def find_latest_session_for_patient(self, *, clinic_id: str, patient_id: str) -> BookingSession | None:
+        row = await _fetch_one(
+            self._db_config,
+            """
+            SELECT booking_session_id, clinic_id, branch_id, telegram_user_id, resolved_patient_id, status, route_type, service_id,
+                   urgency_type, requested_date_type, requested_date, time_window, doctor_preference_type, doctor_id, doctor_code_raw,
+                   selected_slot_id, selected_hold_id, contact_phone_snapshot, notes, expires_at, created_at, updated_at
+            FROM booking.booking_sessions
+            WHERE clinic_id=:clinic_id
+              AND resolved_patient_id=:patient_id
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            {"clinic_id": clinic_id, "patient_id": patient_id},
+        )
+        return BookingSession(**row) if row else None
+
     async def get_booking_session_for_update(self, booking_session_id: str) -> BookingSession | None:
         async with self.transaction() as tx:
             return await tx.get_booking_session_for_update(booking_session_id)
@@ -795,12 +812,14 @@ class DbBookingUnitOfWork:
                 INSERT INTO communication.reminder_jobs (
                   reminder_id, clinic_id, patient_id, booking_id, care_order_id, recommendation_id,
                   reminder_type, channel, status, scheduled_for, payload_key, locale_at_send_time,
-                  planning_group, supersedes_reminder_id, created_at, updated_at, sent_at, acknowledged_at,
+                  planning_group, supersedes_reminder_id, created_at, updated_at, queued_at,
+                  delivery_attempts_count, last_error_code, last_error_text, last_failed_at, sent_at, acknowledged_at,
                   canceled_at, cancel_reason_code
                 ) VALUES (
                   :reminder_id, :clinic_id, :patient_id, :booking_id, :care_order_id, :recommendation_id,
                   :reminder_type, :channel, :status, :scheduled_for, :payload_key, :locale_at_send_time,
-                  :planning_group, :supersedes_reminder_id, :created_at, :updated_at, :sent_at, :acknowledged_at,
+                  :planning_group, :supersedes_reminder_id, :created_at, :updated_at, :queued_at,
+                  :delivery_attempts_count, :last_error_code, :last_error_text, :last_failed_at, :sent_at, :acknowledged_at,
                   :canceled_at, :cancel_reason_code
                 )
                 ON CONFLICT (reminder_id) DO UPDATE SET
@@ -812,6 +831,11 @@ class DbBookingUnitOfWork:
                   planning_group=EXCLUDED.planning_group,
                   supersedes_reminder_id=EXCLUDED.supersedes_reminder_id,
                   updated_at=EXCLUDED.updated_at,
+                  queued_at=EXCLUDED.queued_at,
+                  delivery_attempts_count=EXCLUDED.delivery_attempts_count,
+                  last_error_code=EXCLUDED.last_error_code,
+                  last_error_text=EXCLUDED.last_error_text,
+                  last_failed_at=EXCLUDED.last_failed_at,
                   sent_at=EXCLUDED.sent_at,
                   acknowledged_at=EXCLUDED.acknowledged_at,
                   canceled_at=EXCLUDED.canceled_at,
@@ -846,7 +870,8 @@ class DbBookingUnitOfWork:
                     """
                     SELECT reminder_id, clinic_id, patient_id, booking_id, care_order_id, recommendation_id,
                            reminder_type, channel, status, scheduled_for, payload_key, locale_at_send_time,
-                           planning_group, supersedes_reminder_id, created_at, updated_at, sent_at,
+                           planning_group, supersedes_reminder_id, created_at, updated_at, queued_at,
+                           delivery_attempts_count, last_error_code, last_error_text, last_failed_at, sent_at,
                            acknowledged_at, canceled_at, cancel_reason_code
                     FROM communication.reminder_jobs
                     WHERE reminder_id=:reminder_id

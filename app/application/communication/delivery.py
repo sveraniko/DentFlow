@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
 from uuid import uuid4
 
 from app.domain.booking import Booking
 from app.domain.communication import MessageDelivery, ReminderJob
+from app.application.policy import PolicyResolver
 
 
 @dataclass(slots=True, frozen=True)
@@ -45,6 +46,15 @@ class ReminderDeliveryRepository(Protocol):
     async def create_message_delivery(self, item: MessageDelivery) -> None: ...
     async def mark_reminder_sent(self, *, reminder_id: str, sent_at: datetime) -> bool: ...
     async def mark_reminder_failed(self, *, reminder_id: str, failed_at: datetime, error_text: str) -> bool: ...
+    async def schedule_queued_reminder_retry(
+        self,
+        *,
+        reminder_id: str,
+        retry_at: datetime,
+        failed_at: datetime,
+        error_code: str,
+        error_text: str,
+    ) -> bool: ...
     async def mark_reminder_canceled(self, *, reminder_id: str, canceled_at: datetime, reason_code: str) -> bool: ...
     async def next_delivery_attempt_no(self, *, reminder_id: str) -> int: ...
 
@@ -67,6 +77,7 @@ class ReminderDeliveryService:
     booking_reader: BookingReader
     recipient_resolver: TelegramRecipientResolver
     sender: TelegramReminderSender
+    policy_resolver: PolicyResolver | None = None
 
     async def deliver_due_reminders(self, *, now: datetime, batch_limit: int) -> int:
         claimed = await self.repository.claim_due_reminders(now=now, limit=batch_limit)
@@ -82,6 +93,7 @@ class ReminderDeliveryService:
                 attempt_no=attempt_no,
                 now=now,
                 error_text="unsupported_channel",
+                retryable=False,
             )
             return
 
@@ -135,6 +147,7 @@ class ReminderDeliveryService:
                 attempt_no=attempt_no,
                 now=now,
                 error_text=resolution.reason_code or resolution.kind,
+                retryable=False,
             )
             return
 
@@ -142,7 +155,7 @@ class ReminderDeliveryService:
         try:
             send_result = await self.sender.send_reminder(target=resolution.target, text=rendered.text, actions=rendered.actions)
         except Exception as exc:  # noqa: BLE001
-            await self._persist_failure(reminder=reminder, attempt_no=attempt_no, now=now, error_text=str(exc) or "send_failed")
+            await self._persist_failure(reminder=reminder, attempt_no=attempt_no, now=now, error_text=str(exc) or "send_failed", retryable=True)
             return
 
         await self.repository.create_message_delivery(
@@ -160,7 +173,7 @@ class ReminderDeliveryService:
         )
         await self.repository.mark_reminder_sent(reminder_id=reminder.reminder_id, sent_at=now)
 
-    async def _persist_failure(self, *, reminder: ReminderJob, attempt_no: int, now: datetime, error_text: str) -> None:
+    async def _persist_failure(self, *, reminder: ReminderJob, attempt_no: int, now: datetime, error_text: str, retryable: bool) -> None:
         await self.repository.create_message_delivery(
             MessageDelivery(
                 message_delivery_id=f"md_{uuid4().hex}",
@@ -174,7 +187,33 @@ class ReminderDeliveryService:
                 created_at=now,
             )
         )
+        if retryable and self._retry_enabled(reminder=reminder):
+            retry_after = timedelta(minutes=self._retry_delay_minutes(reminder=reminder))
+            if reminder.delivery_attempts_count + 1 < self._retry_max_attempts(reminder=reminder):
+                await self.repository.schedule_queued_reminder_retry(
+                    reminder_id=reminder.reminder_id,
+                    retry_at=now + retry_after,
+                    failed_at=now,
+                    error_code="transient_delivery_error",
+                    error_text=error_text,
+                )
+                return
         await self.repository.mark_reminder_failed(reminder_id=reminder.reminder_id, failed_at=now, error_text=error_text)
+
+    def _retry_enabled(self, *, reminder: ReminderJob) -> bool:
+        if self.policy_resolver is None:
+            return True
+        return bool(self.policy_resolver.resolve_policy("communication.reminder_retry_enabled", clinic_id=reminder.clinic_id))
+
+    def _retry_max_attempts(self, *, reminder: ReminderJob) -> int:
+        if self.policy_resolver is None:
+            return 3
+        return int(self.policy_resolver.resolve_policy("communication.reminder_retry_max_attempts", clinic_id=reminder.clinic_id) or 3)
+
+    def _retry_delay_minutes(self, *, reminder: ReminderJob) -> int:
+        if self.policy_resolver is None:
+            return 5
+        return int(self.policy_resolver.resolve_policy("communication.reminder_retry_delay_minutes", clinic_id=reminder.clinic_id) or 5)
 
 
 def render_booking_reminder_message(*, reminder: ReminderJob, booking: Booking | None) -> RenderedReminderMessage:

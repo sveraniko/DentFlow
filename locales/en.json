@@ -72,5 +72,9 @@
   "admin.booking.escalation.open.panel": "Escalation {escalation_id}\nSession: {session_id}\nReason: {reason}\nPriority: {priority}\nStatus: {status}",
   "admin.booking.open.usage": "Usage: /booking_open <booking_id>",
   "admin.booking.open.missing": "Booking not found.",
-  "admin.booking.open.panel": "Booking {booking_id}\nDoctor: {doctor}\nService: {service}\nTime: {datetime}\nBranch: {branch}\nStatus: {status}\nNext: {next_step}"
+  "admin.booking.open.panel": "Booking {booking_id}\nDoctor: {doctor}\nService: {service}\nTime: {datetime}\nBranch: {branch}\nStatus: {status}\nNext: {next_step}",
+  "admin.booking.escalation.take.usage": "Usage: /booking_escalation_take <escalation_id>",
+  "admin.booking.escalation.take.ok": "Escalation {escalation_id} is now in progress.",
+  "admin.booking.escalation.resolve.usage": "Usage: /booking_escalation_resolve <escalation_id>",
+  "admin.booking.escalation.resolve.ok": "Escalation {escalation_id} resolved."
 }
