@@ -145,6 +145,12 @@ def _reminder(*, status: str, reminder_type: str = "booking_previsit", queued_de
     )
 
 
+def _policy_set(repo: InMemoryPolicyRepository, *, scope_ref: str) -> str:
+    policy_set_id = f"ps_{scope_ref}"
+    repo.upsert_policy_set(PolicySet(policy_set_id=policy_set_id, policy_family="booking", scope_type="clinic", scope_ref=scope_ref))
+    return policy_set_id
+
+
 def test_stale_queued_recovery_requeues_and_is_idempotent() -> None:
     now = datetime(2026, 4, 17, 10, 0, tzinfo=timezone.utc)
     reminder_repo = _ReminderRepo([_reminder(status="queued", queued_delta_min=40, attempts=0)])
@@ -189,9 +195,9 @@ def test_failed_delivery_escalation_for_non_retryable_failure() -> None:
 def test_no_response_escalation_single_upsert_and_terminal_skip() -> None:
     now = datetime(2026, 4, 17, 10, 0, tzinfo=timezone.utc)
     policy_repo = InMemoryPolicyRepository()
-    policy_repo.upsert_policy_set(PolicySet(policy_set_id="ps1", policy_family="booking", scope_type="clinic", scope_ref="default"))
-    policy_repo.add_policy_value(PolicyValue(policy_value_id="pv1", policy_set_id="ps1", policy_key="booking.non_response_escalation_enabled", value_type="bool", value_json=True))
-    policy_repo.add_policy_value(PolicyValue(policy_value_id="pv2", policy_set_id="ps1", policy_key="booking.non_response_escalation_after_minutes", value_type="int", value_json=30))
+    policy_set_id = _policy_set(policy_repo, scope_ref="clinic_main")
+    policy_repo.add_policy_value(PolicyValue(policy_value_id="pv1", policy_set_id=policy_set_id, policy_key="booking.non_response_escalation_enabled", value_type="bool", value_json=True))
+    policy_repo.add_policy_value(PolicyValue(policy_value_id="pv2", policy_set_id=policy_set_id, policy_key="booking.non_response_escalation_after_minutes", value_type="int", value_json=30))
 
     reminder_repo = _ReminderRepo([_reminder(status="sent", reminder_type="booking_confirmation", sent_delta_min=90)])
     booking_repo = _BookingRepo([_booking(status="pending_confirmation")], [_session()])
@@ -207,6 +213,85 @@ def test_no_response_escalation_single_upsert_and_terminal_skip() -> None:
     service_terminal = ReminderRecoveryService(reminder_repo, booking_repo_terminal, PolicyResolver(policy_repo))
     terminal_stats = asyncio.run(service_terminal.detect_confirmation_no_response(now=now, limit=10))
     assert terminal_stats.no_response_escalated == 0
+
+
+def test_no_response_escalation_respects_per_clinic_policy_scope() -> None:
+    now = datetime(2026, 4, 17, 10, 0, tzinfo=timezone.utc)
+    policy_repo = InMemoryPolicyRepository()
+    enabled_set = _policy_set(policy_repo, scope_ref="clinic_enabled")
+    disabled_set = _policy_set(policy_repo, scope_ref="clinic_disabled")
+    policy_repo.add_policy_value(
+        PolicyValue(
+            policy_value_id="pv_enabled_1",
+            policy_set_id=enabled_set,
+            policy_key="booking.non_response_escalation_enabled",
+            value_type="bool",
+            value_json=True,
+        )
+    )
+    policy_repo.add_policy_value(
+        PolicyValue(
+            policy_value_id="pv_enabled_2",
+            policy_set_id=enabled_set,
+            policy_key="booking.non_response_escalation_after_minutes",
+            value_type="int",
+            value_json=20,
+        )
+    )
+    policy_repo.add_policy_value(
+        PolicyValue(
+            policy_value_id="pv_disabled_1",
+            policy_set_id=disabled_set,
+            policy_key="booking.non_response_escalation_enabled",
+            value_type="bool",
+            value_json=False,
+        )
+    )
+
+    enabled_booking = Booking(**{**asdict(_booking()), "booking_id": "b_enabled", "clinic_id": "clinic_enabled"})
+    disabled_booking = Booking(**{**asdict(_booking()), "booking_id": "b_disabled", "clinic_id": "clinic_disabled"})
+    session_enabled = BookingSession(**{**asdict(_session()), "booking_session_id": "s_enabled", "clinic_id": "clinic_enabled"})
+    session_disabled = BookingSession(**{**asdict(_session()), "booking_session_id": "s_disabled", "clinic_id": "clinic_disabled"})
+
+    reminder_enabled = ReminderJob(**{**asdict(_reminder(status="sent", reminder_type="booking_confirmation", sent_delta_min=30)), "reminder_id": "r_enabled", "clinic_id": "clinic_enabled", "booking_id": "b_enabled"})
+    reminder_disabled = ReminderJob(**{**asdict(_reminder(status="sent", reminder_type="booking_confirmation", sent_delta_min=30)), "reminder_id": "r_disabled", "clinic_id": "clinic_disabled", "booking_id": "b_disabled"})
+
+    service = ReminderRecoveryService(
+        _ReminderRepo([reminder_enabled, reminder_disabled]),
+        _BookingRepo([enabled_booking, disabled_booking], [session_enabled, session_disabled]),
+        PolicyResolver(policy_repo),
+    )
+    stats = asyncio.run(service.detect_confirmation_no_response(now=now, limit=10))
+
+    assert stats.no_response_escalated == 1
+
+
+def test_stale_recovery_uses_clinic_specific_stale_and_retry_policies() -> None:
+    now = datetime(2026, 4, 17, 10, 0, tzinfo=timezone.utc)
+    policy_repo = InMemoryPolicyRepository()
+    strict_set = _policy_set(policy_repo, scope_ref="clinic_strict")
+    relaxed_set = _policy_set(policy_repo, scope_ref="clinic_relaxed")
+    policy_repo.add_policy_value(PolicyValue(policy_value_id="pv_s1", policy_set_id=strict_set, policy_key="communication.reminder_stale_queued_after_minutes", value_type="int", value_json=10))
+    policy_repo.add_policy_value(PolicyValue(policy_value_id="pv_s2", policy_set_id=strict_set, policy_key="communication.reminder_retry_max_attempts", value_type="int", value_json=1))
+    policy_repo.add_policy_value(PolicyValue(policy_value_id="pv_r1", policy_set_id=relaxed_set, policy_key="communication.reminder_stale_queued_after_minutes", value_type="int", value_json=45))
+    policy_repo.add_policy_value(PolicyValue(policy_value_id="pv_r2", policy_set_id=relaxed_set, policy_key="communication.reminder_retry_max_attempts", value_type="int", value_json=5))
+
+    strict_reminder = ReminderJob(**{**asdict(_reminder(status="queued", queued_delta_min=20, attempts=1)), "reminder_id": "r_strict", "clinic_id": "clinic_strict", "booking_id": "b_strict"})
+    relaxed_reminder = ReminderJob(**{**asdict(_reminder(status="queued", queued_delta_min=20, attempts=1)), "reminder_id": "r_relaxed", "clinic_id": "clinic_relaxed", "booking_id": "b_relaxed"})
+    strict_booking = Booking(**{**asdict(_booking()), "booking_id": "b_strict", "clinic_id": "clinic_strict"})
+    relaxed_booking = Booking(**{**asdict(_booking()), "booking_id": "b_relaxed", "clinic_id": "clinic_relaxed"})
+    strict_session = BookingSession(**{**asdict(_session()), "booking_session_id": "s_strict", "clinic_id": "clinic_strict"})
+    relaxed_session = BookingSession(**{**asdict(_session()), "booking_session_id": "s_relaxed", "clinic_id": "clinic_relaxed"})
+
+    reminder_repo = _ReminderRepo([strict_reminder, relaxed_reminder])
+    booking_repo = _BookingRepo([strict_booking, relaxed_booking], [strict_session, relaxed_session])
+    service = ReminderRecoveryService(reminder_repo, booking_repo, PolicyResolver(policy_repo))
+
+    stats = asyncio.run(service.recover_stale_queued_reminders(now=now, limit=10))
+
+    assert stats.stale_failed == 1
+    assert reminder_repo.jobs["r_strict"].status == "failed"
+    assert reminder_repo.jobs["r_relaxed"].status == "queued"
 
 
 def test_admin_recovery_actions_take_and_resolve() -> None:
