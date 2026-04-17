@@ -37,8 +37,12 @@ class RedisConfig(BaseSettings):
 class SearchConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="SEARCH_", extra="ignore")
 
-    endpoint: str = "http://localhost:9200"
     enabled: bool = False
+    meili_endpoint: str = "http://localhost:7700"
+    meili_api_key: str | None = None
+    meili_index_prefix: str = "dentflow"
+    meili_timeout_sec: float = 2.0
+    meili_batch_size: int = 500
 
 
 class StorageConfig(BaseSettings):
