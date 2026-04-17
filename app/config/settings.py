@@ -56,6 +56,9 @@ class SpeechToTextConfig(BaseSettings):
     max_voice_duration_sec: int = 30
     max_voice_file_size_bytes: int = 2_000_000
     mode_ttl_sec: int = 45
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-4o-mini-transcribe"
+    openai_endpoint: str = "https://api.openai.com/v1/audio/transcriptions"
 
 class StorageConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="STORAGE_", extra="ignore")

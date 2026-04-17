@@ -18,6 +18,9 @@ class SpeechToTextOutcome(str, Enum):
     TOO_LONG = "too_long"
     TOO_LARGE = "too_large"
     MODE_NOT_ACTIVE = "mode_not_active"
+    DOWNLOAD_FAILED = "download_failed"
+    PROVIDER_TIMEOUT = "provider_timeout"
+    PROVIDER_ERROR = "provider_error"
 
 
 @dataclass(frozen=True)

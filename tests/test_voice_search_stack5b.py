@@ -5,7 +5,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.application.access import AccessDecision, ActorContext
-from app.application.voice import SpeechToTextService, VoiceSearchMode, VoiceSearchModeStore
+from app.application.voice import SpeechToTextOutcome, SpeechToTextService, VoiceSearchMode, VoiceSearchModeStore
+from app.application.voice.models import SpeechToTextResult
+from app.application.voice.provider import SpeechToTextInput, SpeechToTextProvider
 from app.common.i18n import I18nService
 from app.domain.access_identity.models import RoleCode
 from app.infrastructure.speech.fake_provider import FakeSpeechToTextProvider
@@ -58,6 +60,17 @@ class _BotStub:
         Path(destination).write_bytes(self.payload)
 
 
+class _GetFileFailingBot(_BotStub):
+    async def get_file(self, file_id: str):
+        raise RuntimeError("telegram_get_file_failed")
+
+
+class _DownloadFailingBot(_BotStub):
+    async def download_file(self, file_path: str, destination: str):
+        self.downloaded_to.append(destination)
+        raise RuntimeError("telegram_download_failed")
+
+
 class _Message:
     def __init__(self, *, user_id: int = 11, bot: _BotStub | None = None, duration: int = 1, file_size: int = 16):
         self.from_user = SimpleNamespace(id=user_id)
@@ -69,13 +82,38 @@ class _Message:
         self.answers.append(text)
 
 
-def _handler(*, roles: set[RoleCode], confidence_threshold: float = 0.7) -> VoiceSearchHandler:
+class _ProviderRaises(SpeechToTextProvider):
+    async def transcribe(self, payload: SpeechToTextInput, *, timeout_sec: float) -> SpeechToTextResult:
+        raise RuntimeError("provider_failed")
+
+
+class _ProviderTimeout(SpeechToTextProvider):
+    async def transcribe(self, payload: SpeechToTextInput, *, timeout_sec: float) -> SpeechToTextResult:
+        raise TimeoutError
+
+
+class _ProviderMalformedSuccess(SpeechToTextProvider):
+    async def transcribe(self, payload: SpeechToTextInput, *, timeout_sec: float) -> SpeechToTextResult:
+        return SpeechToTextResult(outcome=SpeechToTextOutcome.SUCCESS, transcript="  ")
+
+
+class _ProviderSuccess(SpeechToTextProvider):
+    async def transcribe(self, payload: SpeechToTextInput, *, timeout_sec: float) -> SpeechToTextResult:
+        return SpeechToTextResult(outcome=SpeechToTextOutcome.SUCCESS, transcript="john smith", confidence=0.99)
+
+
+def _handler(
+    *,
+    roles: set[RoleCode],
+    confidence_threshold: float = 0.7,
+    provider: SpeechToTextProvider | None = None,
+) -> VoiceSearchHandler:
     return VoiceSearchHandler(
         i18n=I18nService(locales_path=Path("locales"), default_locale="en"),
         access_resolver=_AccessResolverStub(roles=roles),
         search_service=_SearchStub(),
         stt_service=SpeechToTextService(
-            provider=FakeSpeechToTextProvider(),
+            provider=provider or FakeSpeechToTextProvider(),
             timeout_sec=2.0,
             confidence_threshold=confidence_threshold,
             language_hint="auto",
@@ -104,9 +142,9 @@ def test_voice_unauthorized_role_cannot_use_mode_or_search() -> None:
 
 
 def test_voice_patient_search_success_uses_patient_search_path_and_cleans_temp_file() -> None:
-    h = _handler(roles={RoleCode.ADMIN})
+    h = _handler(roles={RoleCode.ADMIN}, provider=_ProviderSuccess())
     search = h._search_service
-    bot = _BotStub(b"0.91|john smith")
+    bot = _BotStub(b"ignored")
     message = _Message(bot=bot)
     h._mode_store.activate(actor_telegram_id=message.from_user.id, mode=VoiceSearchMode.PATIENT, ttl_sec=60)
 
@@ -162,3 +200,61 @@ def test_voice_stale_mode_rejected_safely() -> None:
     h._mode_store.activate(actor_telegram_id=41, mode=VoiceSearchMode.PATIENT, ttl_sec=-1)
     asyncio.run(h._handle_voice(message))
     assert "not active" in message.answers[0].lower()
+
+
+def test_voice_get_file_failure_becomes_safe_fallback() -> None:
+    h = _handler(roles={RoleCode.ADMIN})
+    message = _Message(bot=_GetFileFailingBot(b"irrelevant"), user_id=51)
+    h._mode_store.activate(actor_telegram_id=51, mode=VoiceSearchMode.PATIENT, ttl_sec=60)
+
+    asyncio.run(h._handle_voice(message))
+
+    assert message.answers
+    assert "could not process the telegram voice file" in message.answers[0].lower()
+
+
+def test_voice_download_failure_becomes_safe_fallback_and_cleans_temp_file() -> None:
+    h = _handler(roles={RoleCode.ADMIN})
+    bot = _DownloadFailingBot(b"irrelevant")
+    message = _Message(bot=bot, user_id=52)
+    h._mode_store.activate(actor_telegram_id=52, mode=VoiceSearchMode.PATIENT, ttl_sec=60)
+
+    asyncio.run(h._handle_voice(message))
+
+    assert message.answers
+    assert "could not process the telegram voice file" in message.answers[0].lower()
+    assert bot.downloaded_to
+    assert all(not Path(path).exists() for path in bot.downloaded_to)
+
+
+def test_voice_provider_exception_becomes_safe_fallback() -> None:
+    h = _handler(roles={RoleCode.ADMIN}, provider=_ProviderRaises())
+    message = _Message(bot=_BotStub(b"whatever"), user_id=53)
+    h._mode_store.activate(actor_telegram_id=53, mode=VoiceSearchMode.PATIENT, ttl_sec=60)
+
+    asyncio.run(h._handle_voice(message))
+
+    assert message.answers
+    assert "provider failed" in message.answers[0].lower()
+
+
+def test_voice_provider_timeout_becomes_safe_fallback() -> None:
+    h = _handler(roles={RoleCode.ADMIN}, provider=_ProviderTimeout())
+    message = _Message(bot=_BotStub(b"whatever"), user_id=54)
+    h._mode_store.activate(actor_telegram_id=54, mode=VoiceSearchMode.PATIENT, ttl_sec=60)
+
+    asyncio.run(h._handle_voice(message))
+
+    assert message.answers
+    assert "timed out" in message.answers[0].lower()
+
+
+def test_voice_malformed_provider_success_becomes_safe_fallback() -> None:
+    h = _handler(roles={RoleCode.ADMIN}, provider=_ProviderMalformedSuccess())
+    message = _Message(bot=_BotStub(b"whatever"), user_id=55)
+    h._mode_store.activate(actor_telegram_id=55, mode=VoiceSearchMode.PATIENT, ttl_sec=60)
+
+    asyncio.run(h._handle_voice(message))
+
+    assert message.answers
+    assert "transcribe" in message.answers[0].lower()

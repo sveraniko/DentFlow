@@ -24,8 +24,9 @@ from app.application.communication import BookingReminderPlanner, BookingReminde
 from app.application.policy import PolicyResolver
 from app.application.search.service import HybridSearchService
 from app.application.voice import SpeechToTextService, VoiceSearchModeStore
+from app.application.voice.provider import SpeechToTextProvider
 from app.common.i18n import I18nService
-from app.config.settings import Settings
+from app.config.settings import Settings, SpeechToTextConfig
 from app.infrastructure.db.booking_repository import DbBookingRepository
 from app.infrastructure.db.communication_repository import DbReminderJobRepository
 from app.infrastructure.db.patient_repository import (
@@ -40,6 +41,7 @@ from app.infrastructure.search.meili_client import HttpMeiliClient
 from app.infrastructure.search.postgres_backend import PostgresSearchBackend
 from app.infrastructure.speech.disabled_provider import DisabledSpeechToTextProvider
 from app.infrastructure.speech.fake_provider import FakeSpeechToTextProvider
+from app.infrastructure.speech.openai_provider import OpenAITranscriptionConfig, OpenAISpeechToTextProvider
 from app.interfaces.bots.admin.router import make_router as make_admin_router
 from app.interfaces.bots.doctor.router import make_router as make_doctor_router
 from app.interfaces.bots.owner.router import make_router as make_owner_router
@@ -100,9 +102,7 @@ class RuntimeRegistry:
             booking_orchestration=self.booking_orchestration_service,
         )
         self.voice_mode_store = VoiceSearchModeStore()
-        stt_provider = DisabledSpeechToTextProvider()
-        if settings.stt.enabled and settings.stt.provider == "fake":
-            stt_provider = FakeSpeechToTextProvider()
+        stt_provider = build_speech_to_text_provider(settings.stt)
         self.speech_to_text_service = SpeechToTextService(
             provider=stt_provider,
             timeout_sec=settings.stt.timeout_sec,
@@ -182,3 +182,23 @@ class _RuntimePatientFinder:
 
     async def find_patients_by_external_id(self, *, external_system: str, external_id: str) -> list[dict]:
         return await find_patients_by_external_id(self._db, external_system=external_system, external_id=external_id)
+
+
+def build_speech_to_text_provider(stt: SpeechToTextConfig) -> SpeechToTextProvider:
+    if not stt.enabled:
+        return DisabledSpeechToTextProvider()
+    if stt.provider == "disabled":
+        return DisabledSpeechToTextProvider()
+    if stt.provider == "fake":
+        return FakeSpeechToTextProvider()
+    if stt.provider == "openai":
+        if not stt.openai_api_key:
+            raise RuntimeError("STT_OPENAI_API_KEY must be configured when STT_PROVIDER=openai")
+        return OpenAISpeechToTextProvider(
+            config=OpenAITranscriptionConfig(
+                api_key=stt.openai_api_key,
+                model=stt.openai_model,
+                endpoint=stt.openai_endpoint,
+            )
+        )
+    raise RuntimeError(f"Unsupported STT provider: {stt.provider}")
