@@ -40,13 +40,28 @@ class ReminderRecoveryService:
     policy_resolver: PolicyResolver
 
     async def recover_stale_queued_reminders(self, *, now: datetime, limit: int = 100) -> ReminderRecoveryStats:
-        stale_minutes = int(self.policy_resolver.resolve_policy("communication.reminder_stale_queued_after_minutes", clinic_id="default") or 15)
-        retry_max_attempts = int(self.policy_resolver.resolve_policy("communication.reminder_retry_max_attempts", clinic_id="default") or 3)
-        queued_before = now - timedelta(minutes=max(stale_minutes, 1))
+        queued_before = now - timedelta(minutes=1)
         stale = await self.reminder_repository.list_stale_queued_reminders(queued_before=queued_before, limit=limit)
+        stale_minutes_by_clinic: dict[str, int] = {}
+        retry_max_by_clinic: dict[str, int] = {}
         requeued = 0
         failed = 0
         for reminder in stale:
+            stale_minutes = self._resolve_int_policy(
+                key="communication.reminder_stale_queued_after_minutes",
+                clinic_id=reminder.clinic_id,
+                fallback=15,
+                cache=stale_minutes_by_clinic,
+            )
+            stale_before = now - timedelta(minutes=max(stale_minutes, 1))
+            if reminder.queued_at is None or reminder.queued_at > stale_before:
+                continue
+            retry_max_attempts = self._resolve_int_policy(
+                key="communication.reminder_retry_max_attempts",
+                clinic_id=reminder.clinic_id,
+                fallback=3,
+                cache=retry_max_by_clinic,
+            )
             if reminder.delivery_attempts_count >= retry_max_attempts:
                 if await self.reminder_repository.mark_reminder_failed(
                     reminder_id=reminder.reminder_id,
@@ -70,14 +85,32 @@ class ReminderRecoveryService:
         return ReminderRecoveryStats(failed_escalated=escalated)
 
     async def detect_confirmation_no_response(self, *, now: datetime, limit: int = 100) -> ReminderRecoveryStats:
-        enabled = bool(self.policy_resolver.resolve_policy("booking.non_response_escalation_enabled", clinic_id="default"))
-        if not enabled:
-            return ReminderRecoveryStats()
-        threshold_minutes = int(self.policy_resolver.resolve_policy("booking.non_response_escalation_after_minutes", clinic_id="default") or 30)
-        sent_before = now - timedelta(minutes=max(threshold_minutes, 1))
+        sent_before = now - timedelta(minutes=1)
         candidates = await self.reminder_repository.list_confirmation_no_response_candidates(sent_before=sent_before, limit=limit)
+        enabled_by_clinic: dict[str, bool] = {}
+        threshold_by_clinic: dict[str, int] = {}
         escalated = 0
         for reminder in candidates:
+            enabled = self._resolve_bool_policy(
+                key="booking.non_response_escalation_enabled",
+                clinic_id=reminder.clinic_id,
+                fallback=False,
+                cache=enabled_by_clinic,
+            )
+            if not enabled:
+                continue
+            threshold_minutes = self._resolve_int_policy(
+                key="booking.non_response_escalation_after_minutes",
+                clinic_id=reminder.clinic_id,
+                fallback=30,
+                cache=threshold_by_clinic,
+            )
+            sent_at = reminder.sent_at
+            if sent_at is None:
+                continue
+            sent_cutoff = now - timedelta(minutes=max(threshold_minutes, 1))
+            if sent_at > sent_cutoff:
+                continue
             if reminder.booking_id is None:
                 continue
             booking = await self.booking_repository.get_booking(reminder.booking_id)
@@ -125,3 +158,18 @@ class ReminderRecoveryService:
     async def list_open_reminder_escalations(self, *, clinic_id: str, limit: int = 50) -> list[AdminEscalation]:
         items = await self.booking_repository.list_open_admin_escalations(clinic_id=clinic_id, limit=limit)
         return [item for item in items if item.reason_code.startswith("reminder") or item.reason_code == "booking_confirmation_no_response"]
+
+    def _resolve_int_policy(self, *, key: str, clinic_id: str, fallback: int, cache: dict[str, int]) -> int:
+        if clinic_id in cache:
+            return cache[clinic_id]
+        value = int(self.policy_resolver.resolve_policy(key, clinic_id=clinic_id) or fallback)
+        cache[clinic_id] = value
+        return value
+
+    def _resolve_bool_policy(self, *, key: str, clinic_id: str, fallback: bool, cache: dict[str, bool]) -> bool:
+        if clinic_id in cache:
+            return cache[clinic_id]
+        raw = self.policy_resolver.resolve_policy(key, clinic_id=clinic_id)
+        value = fallback if raw is None else bool(raw)
+        cache[clinic_id] = value
+        return value
