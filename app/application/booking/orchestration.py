@@ -579,57 +579,84 @@ class BookingOrchestrationService:
 
     async def request_booking_reschedule(self, *, booking_id: str, reason_code: str | None = None) -> BookingOutcome:
         async with self.repository.transaction() as tx:
-            booking = await tx.get_booking_for_update(booking_id)
-            if booking is None:
-                return InvalidStateOutcome(kind="invalid_state", reason="booking not found")
-            try:
-                transitioned = await self.booking_state_service.transition_booking_in_transaction(
-                    tx=tx, current=booking, to_status="reschedule_requested", reason_code=reason_code
-                )
-            except InvalidBookingTransitionError:
-                return InvalidStateOutcome(kind="invalid_state", reason="booking cannot transition to reschedule_requested")
-            transitioned_booking = transitioned.entity
-            await self._cancel_reminders_for_booking_in_transaction(
-                tx=tx,
-                booking_id=booking_id,
-                reason_code="booking_reschedule_requested",
+            return await self.request_booking_reschedule_in_transaction(tx=tx, booking_id=booking_id, reason_code=reason_code)
+
+    async def request_booking_reschedule_in_transaction(
+        self,
+        *,
+        tx: BookingOrchestrationTransaction,
+        booking_id: str,
+        reason_code: str | None = None,
+    ) -> BookingOutcome:
+        booking = await tx.get_booking_for_update(booking_id)
+        if booking is None:
+            return InvalidStateOutcome(kind="invalid_state", reason="booking not found")
+        try:
+            transitioned = await self.booking_state_service.transition_booking_in_transaction(
+                tx=tx, current=booking, to_status="reschedule_requested", reason_code=reason_code
             )
-            return OrchestrationSuccess(kind="success", entity=transitioned_booking)
+        except InvalidBookingTransitionError:
+            return InvalidStateOutcome(kind="invalid_state", reason="booking cannot transition to reschedule_requested")
+        transitioned_booking = transitioned.entity
+        await self._cancel_reminders_for_booking_in_transaction(
+            tx=tx,
+            booking_id=booking_id,
+            reason_code="booking_reschedule_requested",
+        )
+        return OrchestrationSuccess(kind="success", entity=transitioned_booking)
 
     async def confirm_booking(self, *, booking_id: str, reason_code: str | None = None) -> BookingOutcome:
         async with self.repository.transaction() as tx:
-            booking = await tx.get_booking_for_update(booking_id)
-            if booking is None:
-                return InvalidStateOutcome(kind="invalid_state", reason="booking not found")
-            try:
-                transitioned = await self.booking_state_service.transition_booking_in_transaction(
-                    tx=tx,
-                    current=booking,
-                    to_status="confirmed",
-                    reason_code=reason_code,
-                )
-            except InvalidBookingTransitionError:
-                return InvalidStateOutcome(kind="invalid_state", reason="booking cannot transition to confirmed")
-            return OrchestrationSuccess(kind="success", entity=transitioned.entity)
+            return await self.confirm_booking_in_transaction(tx=tx, booking_id=booking_id, reason_code=reason_code)
+
+    async def confirm_booking_in_transaction(
+        self,
+        *,
+        tx: BookingOrchestrationTransaction,
+        booking_id: str,
+        reason_code: str | None = None,
+    ) -> BookingOutcome:
+        booking = await tx.get_booking_for_update(booking_id)
+        if booking is None:
+            return InvalidStateOutcome(kind="invalid_state", reason="booking not found")
+        try:
+            transitioned = await self.booking_state_service.transition_booking_in_transaction(
+                tx=tx,
+                current=booking,
+                to_status="confirmed",
+                reason_code=reason_code,
+            )
+        except InvalidBookingTransitionError:
+            return InvalidStateOutcome(kind="invalid_state", reason="booking cannot transition to confirmed")
+        return OrchestrationSuccess(kind="success", entity=transitioned.entity)
 
     async def cancel_booking(self, *, booking_id: str, reason_code: str | None = None) -> BookingOutcome:
         async with self.repository.transaction() as tx:
-            booking = await tx.get_booking_for_update(booking_id)
-            if booking is None:
-                return InvalidStateOutcome(kind="invalid_state", reason="booking not found")
-            try:
-                transitioned = await self.booking_state_service.transition_booking_in_transaction(
-                    tx=tx, current=booking, to_status="canceled", reason_code=reason_code
-                )
-            except InvalidBookingTransitionError:
-                return InvalidStateOutcome(kind="invalid_state", reason="booking cannot transition to canceled")
-            transitioned_booking = transitioned.entity
-            await self._cancel_reminders_for_booking_in_transaction(
-                tx=tx,
-                booking_id=booking_id,
-                reason_code="booking_canceled",
+            return await self.cancel_booking_in_transaction(tx=tx, booking_id=booking_id, reason_code=reason_code)
+
+    async def cancel_booking_in_transaction(
+        self,
+        *,
+        tx: BookingOrchestrationTransaction,
+        booking_id: str,
+        reason_code: str | None = None,
+    ) -> BookingOutcome:
+        booking = await tx.get_booking_for_update(booking_id)
+        if booking is None:
+            return InvalidStateOutcome(kind="invalid_state", reason="booking not found")
+        try:
+            transitioned = await self.booking_state_service.transition_booking_in_transaction(
+                tx=tx, current=booking, to_status="canceled", reason_code=reason_code
             )
-            return OrchestrationSuccess(kind="success", entity=transitioned_booking)
+        except InvalidBookingTransitionError:
+            return InvalidStateOutcome(kind="invalid_state", reason="booking cannot transition to canceled")
+        transitioned_booking = transitioned.entity
+        await self._cancel_reminders_for_booking_in_transaction(
+            tx=tx,
+            booking_id=booking_id,
+            reason_code="booking_canceled",
+        )
+        return OrchestrationSuccess(kind="success", entity=transitioned_booking)
 
     async def reschedule_booking(
         self,

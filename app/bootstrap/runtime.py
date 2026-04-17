@@ -89,7 +89,7 @@ class RuntimeRegistry:
         )
         self.reminder_action_service = ReminderActionService(
             repository=self.reminder_repository,
-            booking_reader=self.booking_repository,
+            transaction_repository=self.booking_repository,
             booking_orchestration=self.booking_orchestration_service,
         )
 
