@@ -46,6 +46,9 @@ class ClinicalChartService:
     repository: ClinicalRepository
 
     async def open_or_get_chart(self, *, patient_id: str, clinic_id: str, primary_doctor_id: str | None = None) -> PatientChart:
+        repo_open_or_get = getattr(self.repository, "open_or_get_chart_with_event", None)
+        if callable(repo_open_or_get):
+            return await repo_open_or_get(patient_id=patient_id, clinic_id=clinic_id, primary_doctor_id=primary_doctor_id)
         existing = await self.repository.get_active_chart(patient_id=patient_id, clinic_id=clinic_id)
         if existing:
             return existing
@@ -93,6 +96,9 @@ class ClinicalChartService:
         )
 
     async def open_or_get_encounter(self, *, chart_id: str, doctor_id: str, booking_id: str | None = None) -> ClinicalEncounter:
+        repo_open_or_get = getattr(self.repository, "open_or_get_encounter_with_event", None)
+        if callable(repo_open_or_get):
+            return await repo_open_or_get(chart_id=chart_id, doctor_id=doctor_id, booking_id=booking_id)
         existing = await self.repository.get_open_encounter(chart_id=chart_id, doctor_id=doctor_id, booking_id=booking_id)
         if existing:
             return existing
@@ -135,6 +141,16 @@ class ClinicalChartService:
         return note
 
     async def set_diagnosis(self, *, chart_id: str, diagnosis_text: str, encounter_id: str | None = None, diagnosis_code: str | None = None, is_primary: bool = True, recorded_by_actor_id: str | None = None) -> Diagnosis:
+        repo_set_diagnosis = getattr(self.repository, "set_diagnosis_with_event", None)
+        if callable(repo_set_diagnosis):
+            return await repo_set_diagnosis(
+                chart_id=chart_id,
+                diagnosis_text=diagnosis_text,
+                encounter_id=encounter_id,
+                diagnosis_code=diagnosis_code,
+                is_primary=is_primary,
+                recorded_by_actor_id=recorded_by_actor_id,
+            )
         now = datetime.now(timezone.utc)
         current = await self.repository.get_current_primary_diagnosis(chart_id=chart_id) if is_primary else None
         if current is not None:
@@ -169,6 +185,16 @@ class ClinicalChartService:
         return diagnosis
 
     async def set_treatment_plan(self, *, chart_id: str, title: str, plan_text: str, encounter_id: str | None = None, estimated_cost_amount: float | None = None, currency_code: str | None = None) -> TreatmentPlan:
+        repo_set_plan = getattr(self.repository, "set_treatment_plan_with_event", None)
+        if callable(repo_set_plan):
+            return await repo_set_plan(
+                chart_id=chart_id,
+                title=title,
+                plan_text=plan_text,
+                encounter_id=encounter_id,
+                estimated_cost_amount=estimated_cost_amount,
+                currency_code=currency_code,
+            )
         now = datetime.now(timezone.utc)
         current = await self.repository.get_current_treatment_plan(chart_id=chart_id)
         if current is not None:
@@ -207,6 +233,18 @@ class ClinicalChartService:
             raise ValueError("Either media_asset_id or external_url must be provided")
         if external_url and not (external_url.startswith("http://") or external_url.startswith("https://")):
             raise ValueError("External imaging URL must start with http:// or https://")
+        repo_attach_imaging = getattr(self.repository, "attach_imaging_reference_with_event", None)
+        if callable(repo_attach_imaging):
+            return await repo_attach_imaging(
+                chart_id=chart_id,
+                imaging_type=imaging_type,
+                media_asset_id=media_asset_id,
+                external_url=external_url,
+                encounter_id=encounter_id,
+                description=description,
+                uploaded_by_actor_id=uploaded_by_actor_id,
+                is_primary_for_case=is_primary_for_case,
+            )
         now = datetime.now(timezone.utc)
         ref = ImagingReference(
             imaging_ref_id=f"img_{uuid4().hex[:12]}",
