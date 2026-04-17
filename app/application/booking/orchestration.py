@@ -30,6 +30,7 @@ from app.application.communication import BookingReminderService
 from app.application.policy import PolicyResolver
 from app.domain.booking import AdminEscalation, Booking, BookingSession, BookingStatusHistory, SlotHold, WaitlistEntry
 from app.domain.communication import ReminderJob
+from app.domain.events import build_event
 from app.domain.booking.errors import InvalidBookingTransitionError, InvalidSessionTransitionError, InvalidSlotHoldTransitionError
 
 LIVE_SLOT_BOOKING_STATUSES: tuple[str, ...] = (
@@ -62,6 +63,7 @@ class BookingOrchestrationTransaction(Protocol):
     async def cancel_scheduled_reminders_for_booking_in_transaction(
         self, *, booking_id: str, canceled_at: datetime, reason_code: str
     ) -> int: ...
+    async def append_outbox_event(self, event) -> None: ...
 
 
 class BookingOrchestrationRepository(Protocol):
@@ -472,6 +474,17 @@ class BookingOrchestrationService:
                 updated_at=now,
             )
             await tx.upsert_booking(booking)
+            await tx.append_outbox_event(
+                build_event(
+                    event_name="booking.created",
+                    producer_context="booking.orchestration",
+                    clinic_id=booking.clinic_id,
+                    entity_type="booking",
+                    entity_id=booking.booking_id,
+                    occurred_at=now,
+                    payload={"status": booking.status, "doctor_id": booking.doctor_id, "service_id": booking.service_id},
+                )
+            )
             await tx.append_booking_status_history(
                 BookingStatusHistory(
                     booking_status_history_id=f"bsh_{uuid4().hex}",

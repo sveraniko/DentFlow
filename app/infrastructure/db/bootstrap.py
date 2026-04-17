@@ -19,6 +19,7 @@ SCHEMAS: tuple[str, ...] = (
     "analytics_raw",
     "owner_views",
     "platform",
+    "system_runtime",
 )
 
 STACK1_TABLES: tuple[str, ...] = (
@@ -823,6 +824,63 @@ STACK1_TABLES: tuple[str, ...] = (
     CREATE INDEX IF NOT EXISTS idx_message_deliveries_reminder
     ON communication.message_deliveries (reminder_id, created_at DESC)
     """,
+    """
+    CREATE TABLE IF NOT EXISTS system_runtime.event_outbox (
+      outbox_event_id BIGSERIAL PRIMARY KEY,
+      event_id TEXT NOT NULL UNIQUE,
+      event_name TEXT NOT NULL,
+      event_version INTEGER NOT NULL DEFAULT 1,
+      producer_context TEXT NOT NULL,
+      clinic_id TEXT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      actor_type TEXT NULL,
+      actor_id TEXT NULL,
+      correlation_id TEXT NULL,
+      causation_id TEXT NULL,
+      payload_json JSONB NOT NULL,
+      occurred_at TIMESTAMPTZ NOT NULL,
+      produced_at TIMESTAMPTZ NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      last_error_text TEXT NULL,
+      dispatched_at TIMESTAMPTZ NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CHECK (status IN ('pending','processing','processed','failed'))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS system_runtime.projector_checkpoints (
+      projector_name TEXT PRIMARY KEY,
+      last_outbox_event_id BIGINT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS system_runtime.projector_failures (
+      projector_failure_id BIGSERIAL PRIMARY KEY,
+      projector_name TEXT NOT NULL,
+      outbox_event_id BIGINT NOT NULL,
+      event_id TEXT NOT NULL,
+      error_text TEXT NOT NULL,
+      failed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS analytics_raw.event_ledger (
+      ledger_event_id BIGSERIAL PRIMARY KEY,
+      event_id TEXT NOT NULL UNIQUE,
+      event_name TEXT NOT NULL,
+      clinic_id TEXT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      actor_type TEXT NULL,
+      actor_id TEXT NULL,
+      occurred_at TIMESTAMPTZ NOT NULL,
+      payload_summary_json JSONB NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+
 )
 
 

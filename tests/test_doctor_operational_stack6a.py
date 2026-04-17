@@ -27,7 +27,7 @@ from app.domain.access_identity.models import (
     TelegramBinding,
 )
 from app.domain.booking import Booking, BookingStatusHistory
-from app.domain.clinic_reference.models import Branch, Doctor, RecordStatus, Service
+from app.domain.clinic_reference.models import Branch, Clinic, Doctor, RecordStatus, Service
 from app.infrastructure.speech.fake_provider import FakeSpeechToTextProvider
 from app.interfaces.bots.doctor.router import make_router as make_doctor_router
 
@@ -57,6 +57,9 @@ class _FakeTx(AbstractAsyncContextManager):
 
     async def cancel_scheduled_reminders_for_booking_in_transaction(self, *, booking_id: str, canceled_at: datetime, reason_code: str) -> int:
         return 0
+
+    async def append_outbox_event(self, event) -> None:
+        return None
 
 
 class _FakeBookingRepo:
@@ -131,6 +134,7 @@ def _access_with_doctor(*, include_profile: bool = True, role: RoleCode = RoleCo
 
 def _reference() -> ClinicReferenceService:
     repo = InMemoryClinicReferenceRepository()
+    repo.upsert_clinic(Clinic(clinic_id="c1", code="main", display_name="Main", timezone="UTC", default_locale="en", status=RecordStatus.ACTIVE))
     repo.upsert_branch(Branch(branch_id="b1", clinic_id="c1", display_name="Main", address_text="-", timezone="UTC", status=RecordStatus.ACTIVE))
     repo.upsert_doctor(Doctor(doctor_id="d1", clinic_id="c1", branch_id="b1", display_name="Doctor X", specialty_code="gen", public_booking_enabled=True, status=RecordStatus.ACTIVE))
     repo.upsert_service(Service(service_id="svc1", clinic_id="c1", code="CONS", title_key="service.consult", duration_minutes=30, specialty_required=False, status=RecordStatus.ACTIVE))
@@ -339,3 +343,32 @@ def test_patient_open_id_hint_respects_visibility_guard() -> None:
     asyncio.run(search_handler(msg))
     assert msg.answers
     assert not any("/patient_open pat2" in ans for ans in msg.answers)
+
+
+def test_today_queue_uses_branch_local_day_not_raw_utc() -> None:
+    ops = _ops([
+        _booking("b0", patient_id="pat1", doctor_id="d1", minutes=-60, status="confirmed"),
+        _booking("b1", patient_id="pat1", doctor_id="d1", minutes=60, status="confirmed"),
+    ])
+    # branch is UTC in fixture, so both same day for UTC; swap to Pacific to ensure boundary behavior
+    ops.reference_service.repository.branches["b1"] = Branch(
+        branch_id="b1", clinic_id="c1", display_name="Main", address_text="-", timezone="America/Los_Angeles", status=RecordStatus.ACTIVE
+    )
+    rows = asyncio.run(ops.list_today_queue(doctor_id="d1", now=datetime(2026, 4, 17, 1, 0, tzinfo=timezone.utc)))
+    assert rows == []
+    later = asyncio.run(ops.list_today_queue(doctor_id="d1", now=datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc)))
+    assert [r.booking_id for r in later] == ["b0", "b1"]
+
+
+def test_today_queue_timezone_fallbacks_clinic_then_default() -> None:
+    ops = _ops([_booking("b1", patient_id="pat1", doctor_id="d1", minutes=60, status="confirmed")])
+    ops.reference_service.repository.branches["b1"] = Branch(
+        branch_id="b1", clinic_id="c1", display_name="Main", address_text="-", timezone="", status=RecordStatus.ACTIVE
+    )
+    ops.reference_service.repository.clinics["c1"] = SimpleNamespace(clinic_id="c1", timezone="Europe/Berlin")
+    rows = asyncio.run(ops.list_today_queue(doctor_id="d1", now=datetime(2026, 4, 17, 0, 30, tzinfo=timezone.utc)))
+    assert rows
+    ops.reference_service.repository.clinics["c1"] = SimpleNamespace(clinic_id="c1", timezone="")
+    ops.app_default_timezone = "UTC"
+    rows2 = asyncio.run(ops.list_today_queue(doctor_id="d1", now=datetime(2026, 4, 17, 0, 30, tzinfo=timezone.utc)))
+    assert rows2

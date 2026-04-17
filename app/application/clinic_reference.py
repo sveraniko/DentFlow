@@ -36,6 +36,15 @@ class ClinicReferenceService:
     def get_clinic(self, clinic_id: str) -> Clinic | None:
         return self.repository.clinics.get(clinic_id)
 
+    def list_clinics(self) -> list[Clinic]:
+        return list(self.repository.clinics.values())
+
+    def get_doctor(self, clinic_id: str, doctor_id: str) -> Doctor | None:
+        doctor = self.repository.doctors.get(doctor_id)
+        if doctor is None or doctor.clinic_id != clinic_id:
+            return None
+        return doctor
+
     def list_branches(self, clinic_id: str) -> list[Branch]:
         return [b for b in self.repository.branches.values() if b.clinic_id == clinic_id]
 
