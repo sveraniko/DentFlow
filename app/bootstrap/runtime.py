@@ -31,6 +31,7 @@ from app.infrastructure.db.booking_repository import DbBookingRepository
 from app.infrastructure.db.communication_repository import DbReminderJobRepository
 from app.infrastructure.db.patient_repository import (
     DbCanonicalPatientCreator,
+    DbDoctorPatientReader,
     DbPatientRegistryRepository,
     DbPatientRegistryService,
     DbPatientPreferenceReader,
@@ -61,6 +62,7 @@ class RuntimeRegistry:
         self.booking_repository = DbBookingRepository(settings.db)
         self.reminder_repository = DbReminderJobRepository(settings.db)
         self.patient_preference_reader = DbPatientPreferenceReader(settings.db)
+        self.doctor_patient_reader = DbDoctorPatientReader(settings.db)
         self.patient_registry_repository = asyncio.run(DbPatientRegistryRepository.load(settings.db))
         self.patient_registry_service = DbPatientRegistryService(self.patient_registry_repository)
 
@@ -171,7 +173,7 @@ class RuntimeRegistry:
                 booking_state_service=self.booking_state_service,
                 booking_orchestration=self.booking_orchestration_service,
                 reference_service=self.reference_service,
-                patient_registry=self.patient_registry_service,
+                patient_reader=self.doctor_patient_reader,
                 default_locale=self.settings.app.default_locale,
                 max_voice_duration_sec=self.settings.stt.max_voice_duration_sec,
                 max_voice_file_size_bytes=self.settings.stt.max_voice_file_size_bytes,

@@ -113,6 +113,7 @@
   "doctor.booking.open.card": "Запись {booking_id}\nПациент: {patient}\nНомер пациента: {patient_number}\nТелефон: {phone_hint}\nУслуга: {service}\nВремя: {datetime}\nФилиал: {branch}\nСтатус: {status}\nФлаги: {flags}\nДействия: {actions}",
   "doctor.patient.open.usage": "Формат: /patient_open <patient_id>",
   "doctor.patient.open.missing": "Пациент не найден.",
+  "doctor.patient.open.denied_or_missing": "Пациент не найден или недоступен этому врачу.",
   "doctor.patient.quick.card": "Пациент {patient_id}\nИмя: {display_name}\nНомер пациента: {patient_number}\nТелефон: {phone_hint}\nФото: {has_photo}\nФлаги: {flags}\nБлижайшая запись: {next_booking}",
   "doctor.booking.action.usage": "Формат: /booking_action <booking_id> <checked_in|in_service|completed>",
   "doctor.booking.action.invalid": "Действие отклонено для текущего состояния записи.",

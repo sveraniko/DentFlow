@@ -12,7 +12,7 @@ from app.application.booking.services import BookingService
 from app.application.booking.state_services import BookingStateService
 from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
 from app.application.doctor.operations import DoctorOperationsService
-from app.application.patient.registry import InMemoryPatientRegistryRepository, PatientRegistryService
+from app.application.doctor.patient_read import DoctorPatientSnapshot
 from app.application.voice import SpeechToTextService, VoiceSearchModeStore
 from app.common.i18n import I18nService
 from app.domain.access_identity.models import (
@@ -110,6 +110,14 @@ class _SearchStub:
         return []
 
 
+class _SnapshotReader:
+    def __init__(self, data: dict[str, DoctorPatientSnapshot]) -> None:
+        self.data = data
+
+    async def read_snapshot(self, *, patient_id: str) -> DoctorPatientSnapshot | None:
+        return self.data.get(patient_id)
+
+
 def _access_with_doctor(*, include_profile: bool = True, role: RoleCode = RoleCode.DOCTOR) -> AccessResolver:
     repo = InMemoryAccessRepository()
     repo.upsert_actor_identity(ActorIdentity(actor_id="a1", actor_type=ActorType.STAFF, display_name="Dr. X", status=ActorStatus.ACTIVE, locale="en"))
@@ -129,16 +137,25 @@ def _reference() -> ClinicReferenceService:
     return ClinicReferenceService(repo)
 
 
-def _patient_registry() -> PatientRegistryService:
-    repo = InMemoryPatientRegistryRepository()
-    svc = PatientRegistryService(repo)
-    p1 = svc.create_patient(clinic_id="c1", patient_id="pat1", first_name="Ann", last_name="One", full_name_legal="Ann One", display_name="Ann One", patient_number="P-001")
-    svc.upsert_contact(patient_id=p1.patient_id, contact_type="phone", contact_value="+1 555 123 4567", is_primary=True, is_active=True)
-    svc.add_flag(patient_id=p1.patient_id, flag_type="allergy", flag_severity="high")
-    svc.add_photo(patient_id=p1.patient_id, source_type="telegram", is_primary=True)
-    p2 = svc.create_patient(clinic_id="c1", patient_id="pat2", first_name="Bob", last_name="Two", full_name_legal="Bob Two", display_name="Bob Two", patient_number="P-002")
-    svc.upsert_contact(patient_id=p2.patient_id, contact_type="phone", contact_value="+1 555 999 0000", is_primary=True, is_active=True)
-    return svc
+def _snapshot_data() -> dict[str, DoctorPatientSnapshot]:
+    return {
+        "pat1": DoctorPatientSnapshot(
+            patient_id="pat1",
+            display_name="Ann One",
+            patient_number="P-001",
+            phone_raw="+1 555 123 4567",
+            has_photo=True,
+            active_flags_summary="allergy",
+        ),
+        "pat2": DoctorPatientSnapshot(
+            patient_id="pat2",
+            display_name="Bob Two",
+            patient_number="P-002",
+            phone_raw="+1 555 999 0000",
+            has_photo=False,
+            active_flags_summary=None,
+        ),
+    }
 
 
 def _booking(booking_id: str, *, patient_id: str, doctor_id: str, minutes: int, status: str) -> Booking:
@@ -162,7 +179,7 @@ def _booking(booking_id: str, *, patient_id: str, doctor_id: str, minutes: int, 
     )
 
 
-def _ops(bookings: list[Booking]) -> DoctorOperationsService:
+def _ops(bookings: list[Booking], *, snapshot_data: dict[str, DoctorPatientSnapshot] | None = None) -> DoctorOperationsService:
     repo = _FakeBookingRepo(bookings)
     booking_service = BookingService(repo)
     booking_state = BookingStateService(repo)
@@ -172,7 +189,7 @@ def _ops(bookings: list[Booking]) -> DoctorOperationsService:
         booking_state_service=booking_state,
         booking_orchestration=_OrchestrationStub(booking_state),
         reference_service=_reference(),
-        patient_registry=_patient_registry(),
+        patient_reader=_SnapshotReader(snapshot_data or _snapshot_data()),
     )
 
 
@@ -221,7 +238,7 @@ def test_identity_safety_for_missing_profile_and_wrong_role() -> None:
 
 def test_doctor_router_today_queue_empty_and_patient_open_search_path() -> None:
     i18n = I18nService(locales_path=Path("locales"), default_locale="en")
-    ops = _ops([])
+    ops = _ops([_booking("b1", patient_id="pat1", doctor_id="d1", minutes=60, status="confirmed")])
     router = make_doctor_router(
         i18n=i18n,
         access_resolver=ops.access_resolver,
@@ -232,7 +249,7 @@ def test_doctor_router_today_queue_empty_and_patient_open_search_path() -> None:
         booking_state_service=ops.booking_state_service,
         booking_orchestration=ops.booking_orchestration,
         reference_service=ops.reference_service,
-        patient_registry=ops.patient_registry,
+        patient_reader=ops.patient_reader,
         default_locale="en",
         max_voice_duration_sec=30,
         max_voice_file_size_bytes=1000,
@@ -241,9 +258,84 @@ def test_doctor_router_today_queue_empty_and_patient_open_search_path() -> None:
     today_handler = next(h.callback for h in router.message.handlers if h.callback.__name__ == "today_queue")
     m1 = _Message("/today_queue")
     asyncio.run(today_handler(m1))
-    assert m1.answers and "No bookings" in m1.answers[0]
+    assert m1.answers and "Today's queue" in m1.answers[0]
 
     patient_handler = next(h.callback for h in router.message.handlers if h.callback.__name__ == "patient_open")
     m2 = _Message("/patient_open pat1")
     asyncio.run(patient_handler(m2))
     assert m2.answers and "Patient pat1" in m2.answers[0]
+
+
+def test_patient_open_blocks_unrelated_patient_id() -> None:
+    ops = _ops([_booking("b1", patient_id="pat1", doctor_id="d1", minutes=60, status="confirmed")])
+    denied = asyncio.run(ops.build_patient_quick_card(patient_id="pat2", doctor_id="d1"))
+    assert denied is None
+
+
+def test_patient_open_router_denies_unrelated_raw_patient_id() -> None:
+    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+    ops = _ops([_booking("b1", patient_id="pat1", doctor_id="d1", minutes=60, status="confirmed")])
+    router = make_doctor_router(
+        i18n=i18n,
+        access_resolver=ops.access_resolver,
+        search_service=_SearchStub(),
+        stt_service=SpeechToTextService(provider=FakeSpeechToTextProvider(), timeout_sec=2.0, confidence_threshold=0.7, language_hint="auto"),
+        voice_mode_store=VoiceSearchModeStore(),
+        booking_service=ops.booking_service,
+        booking_state_service=ops.booking_state_service,
+        booking_orchestration=ops.booking_orchestration,
+        reference_service=ops.reference_service,
+        patient_reader=ops.patient_reader,
+        default_locale="en",
+        max_voice_duration_sec=30,
+        max_voice_file_size_bytes=1000,
+        voice_mode_ttl_sec=45,
+    )
+    patient_handler = next(h.callback for h in router.message.handlers if h.callback.__name__ == "patient_open")
+    msg = _Message("/patient_open pat2")
+    asyncio.run(patient_handler(msg))
+    assert msg.answers and "unavailable for this doctor" in msg.answers[0]
+
+
+def test_patient_quick_card_reads_fresh_snapshot_not_startup_registry() -> None:
+    snapshots = _snapshot_data()
+    ops = _ops([_booking("b1", patient_id="pat1", doctor_id="d1", minutes=60, status="confirmed")], snapshot_data=snapshots)
+    snapshots["pat1"] = DoctorPatientSnapshot(
+        patient_id="pat1",
+        display_name="Ann Renamed",
+        patient_number="P-001",
+        phone_raw="+1 555 123 7777",
+        has_photo=True,
+        active_flags_summary="allergy",
+    )
+    card = asyncio.run(ops.build_patient_quick_card(patient_id="pat1", doctor_id="d1"))
+    assert card is not None
+    assert card.display_name == "Ann Renamed"
+    assert card.phone_hint == "***7777"
+
+
+def test_patient_open_id_hint_respects_visibility_guard() -> None:
+    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+    ops = _ops([_booking("b1", patient_id="pat1", doctor_id="d1", minutes=60, status="confirmed")])
+
+    router = make_doctor_router(
+        i18n=i18n,
+        access_resolver=ops.access_resolver,
+        search_service=_SearchStub(),
+        stt_service=SpeechToTextService(provider=FakeSpeechToTextProvider(), timeout_sec=2.0, confidence_threshold=0.7, language_hint="auto"),
+        voice_mode_store=VoiceSearchModeStore(),
+        booking_service=ops.booking_service,
+        booking_state_service=ops.booking_state_service,
+        booking_orchestration=ops.booking_orchestration,
+        reference_service=ops.reference_service,
+        patient_reader=ops.patient_reader,
+        default_locale="en",
+        max_voice_duration_sec=30,
+        max_voice_file_size_bytes=1000,
+        voice_mode_ttl_sec=45,
+    )
+    search_handler = next(h.callback for h in router.message.handlers if h.callback.__name__ == "search_patient")
+    msg = _Message("/search_patient id:pat2")
+    asyncio.run(search_handler(msg))
+    assert msg.answers
+    assert not any("/patient_open pat2" in ans for ans in msg.answers)
