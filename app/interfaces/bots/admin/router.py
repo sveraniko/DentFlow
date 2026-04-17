@@ -7,9 +7,11 @@ from aiogram.types import Message
 from app.application.access import AccessResolver
 from app.application.booking.telegram_flow import BookingPatientFlowService
 from app.application.clinic_reference import ClinicReferenceService
+from app.application.search.service import HybridSearchService
 from app.common.i18n import I18nService
 from app.domain.access_identity.models import RoleCode
 from app.interfaces.bots.common import guard_roles, resolve_locale
+from app.interfaces.bots.search_handlers import run_doctor_search, run_patient_search, run_service_search
 
 
 def _clinic_locale(reference_service: ClinicReferenceService, clinic_id: str) -> str | None:
@@ -17,11 +19,35 @@ def _clinic_locale(reference_service: ClinicReferenceService, clinic_id: str) ->
     return clinic.default_locale if clinic else None
 
 
+async def _run_search(
+    message: Message,
+    *,
+    access_resolver: AccessResolver,
+    i18n: I18nService,
+    default_locale: str,
+) -> str | None:
+    allowed = await guard_roles(
+        message,
+        i18n=i18n,
+        access_resolver=access_resolver,
+        allowed_roles={RoleCode.ADMIN},
+        fallback_locale=default_locale,
+    )
+    if not allowed:
+        return None
+    return await resolve_locale(
+        message,
+        access_resolver=access_resolver,
+        fallback_locale=default_locale,
+    )
+
+
 def make_router(
     i18n: I18nService,
     access_resolver: AccessResolver,
     reference_service: ClinicReferenceService,
     booking_flow: BookingPatientFlowService,
+    search_service: HybridSearchService,
     *,
     default_locale: str,
 ) -> Router:
@@ -45,6 +71,50 @@ def make_router(
             clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
         )
         await message.answer(i18n.t("role.admin.home", locale))
+
+    @router.message(Command("search_patient"))
+    async def search_patient(message: Message) -> None:
+        await _run_search(message, access_resolver=access_resolver, i18n=i18n, default_locale=default_locale)
+        if not message.from_user or not message.text:
+            return
+        actor_context = access_resolver.resolve_actor_context(message.from_user.id)
+        if not actor_context:
+            return
+        query = message.text.replace("/search_patient", "", 1).strip()
+        if not query:
+            await message.answer("Usage: /search_patient <query>")
+            return
+        await message.answer(await run_patient_search(service=search_service, clinic_id=actor_context.clinic_id, query=query))
+
+    @router.message(Command("search_doctor"))
+    async def search_doctor(message: Message) -> None:
+        locale = await _run_search(message, access_resolver=access_resolver, i18n=i18n, default_locale=default_locale)
+        if not message.from_user or not message.text:
+            return
+        actor_context = access_resolver.resolve_actor_context(message.from_user.id)
+        if not actor_context:
+            return
+        query = message.text.replace("/search_doctor", "", 1).strip()
+        if not query:
+            await message.answer("Usage: /search_doctor <query>")
+            return
+        await message.answer(await run_doctor_search(service=search_service, clinic_id=actor_context.clinic_id, query=query))
+
+    @router.message(Command("search_service"))
+    async def search_service(message: Message) -> None:
+        locale = await _run_search(message, access_resolver=access_resolver, i18n=i18n, default_locale=default_locale)
+        if not message.from_user or not message.text:
+            return
+        actor_context = access_resolver.resolve_actor_context(message.from_user.id)
+        if not actor_context:
+            return
+        query = message.text.replace("/search_service", "", 1).strip()
+        if not query:
+            await message.answer("Usage: /search_service <query>")
+            return
+        await message.answer(
+            await run_service_search(service=search_service, clinic_id=actor_context.clinic_id, query=query, locale=locale)
+        )
 
     @router.message(Command("clinic"))
     async def clinic_summary(message: Message) -> None:

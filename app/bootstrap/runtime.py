@@ -22,6 +22,7 @@ from app.application.booking import (
 from app.application.clinic_reference import ClinicReferenceService
 from app.application.communication import BookingReminderPlanner, BookingReminderService, ReminderActionService
 from app.application.policy import PolicyResolver
+from app.application.search.service import HybridSearchService
 from app.common.i18n import I18nService
 from app.config.settings import Settings
 from app.infrastructure.db.booking_repository import DbBookingRepository
@@ -33,6 +34,9 @@ from app.infrastructure.db.patient_repository import (
     find_patients_by_external_id,
 )
 from app.infrastructure.db.repositories import DbAccessRepository, DbClinicReferenceRepository, DbPolicyRepository
+from app.infrastructure.search.meili_backend import MeiliSearchBackend
+from app.infrastructure.search.meili_client import HttpMeiliClient
+from app.infrastructure.search.postgres_backend import PostgresSearchBackend
 from app.interfaces.bots.admin.router import make_router as make_admin_router
 from app.interfaces.bots.doctor.router import make_router as make_doctor_router
 from app.interfaces.bots.owner.router import make_router as make_owner_router
@@ -92,6 +96,25 @@ class RuntimeRegistry:
             transaction_repository=self.booking_repository,
             booking_orchestration=self.booking_orchestration_service,
         )
+        self.postgres_search_backend = PostgresSearchBackend(settings.db)
+        self.meili_search_backend = None
+        if settings.search.enabled:
+            meili_client = HttpMeiliClient(
+                endpoint=settings.search.meili_endpoint,
+                api_key=settings.search.meili_api_key,
+                timeout_sec=settings.search.meili_timeout_sec,
+            )
+            self.meili_search_backend = MeiliSearchBackend(
+                client=meili_client,
+                patient_index=f"{settings.search.meili_index_prefix}_patients",
+                doctor_index=f"{settings.search.meili_index_prefix}_doctors",
+                service_index=f"{settings.search.meili_index_prefix}_services",
+            )
+        self.search_service = HybridSearchService(
+            strict_backend=self.postgres_search_backend,
+            meili_backend=self.meili_search_backend,
+            postgres_backend=self.postgres_search_backend,
+        )
 
     def build_dispatcher(self) -> Dispatcher:
         dispatcher = Dispatcher()
@@ -110,10 +133,18 @@ class RuntimeRegistry:
                 self.access_resolver,
                 self.reference_service,
                 self.booking_patient_flow_service,
+                search_service=self.search_service,
                 default_locale=self.settings.app.default_locale,
             )
         )
-        dispatcher.include_router(make_doctor_router(self.i18n, self.access_resolver, default_locale=self.settings.app.default_locale))
+        dispatcher.include_router(
+            make_doctor_router(
+                self.i18n,
+                self.access_resolver,
+                search_service=self.search_service,
+                default_locale=self.settings.app.default_locale,
+            )
+        )
         dispatcher.include_router(make_owner_router(self.i18n, self.access_resolver, default_locale=self.settings.app.default_locale))
         return dispatcher
 
