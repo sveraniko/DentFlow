@@ -11,7 +11,7 @@ from app.infrastructure.db.engine import create_engine
 from app.infrastructure.outbox.repository import OutboxRepository
 
 _EVENT_BY_STATUS = {
-    "prepared": "recommendation.created",
+    "prepared": "recommendation.prepared",
     "issued": "recommendation.issued",
     "viewed": "recommendation.viewed",
     "acknowledged": "recommendation.acknowledged",
@@ -135,6 +135,29 @@ class DbRecommendationRepository:
                     ),
                     asdict(item),
                 )
+                if previous is None:
+                    await OutboxRepository(self._db_config).append_on_connection(
+                        conn,
+                        build_event(
+                            event_name="recommendation.created",
+                            producer_context="recommendation.lifecycle",
+                            clinic_id=item.clinic_id,
+                            entity_type="recommendation",
+                            entity_id=item.recommendation_id,
+                            actor_type="staff" if item.issued_by_actor_id else None,
+                            actor_id=item.issued_by_actor_id,
+                            occurred_at=item.created_at,
+                            payload={
+                                "patient_id": item.patient_id,
+                                "booking_id": item.booking_id,
+                                "encounter_id": item.encounter_id,
+                                "chart_id": item.chart_id,
+                                "status": item.status,
+                                "recommendation_type": item.recommendation_type,
+                                "source_kind": item.source_kind,
+                            },
+                        ),
+                    )
                 if previous == item.status:
                     return
                 event_name = _EVENT_BY_STATUS.get(item.status)
@@ -166,7 +189,13 @@ class DbRecommendationRepository:
             await engine.dispose()
 
     async def find_patient_id_by_telegram_user(self, *, clinic_id: str, telegram_user_id: int) -> str | None:
-        row = await _fetch_one(
+        rows = await self.find_patient_ids_by_telegram_user(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
+        if len(rows) != 1:
+            return None
+        return rows[0]
+
+    async def find_patient_ids_by_telegram_user(self, *, clinic_id: str, telegram_user_id: int) -> list[str]:
+        rows = await _fetch_all(
             self._db_config,
             """
             SELECT p.patient_id
@@ -176,11 +205,10 @@ class DbRecommendationRepository:
               AND p.contact_type='telegram'
               AND p.normalized_value=:telegram_user_id
               AND p.is_active=TRUE
-            LIMIT 1
             """,
             {"clinic_id": clinic_id, "telegram_user_id": str(telegram_user_id)},
         )
-        return str(row["patient_id"]) if row else None
+        return [str(row["patient_id"]) for row in rows]
 
 
 async def _fetch_one(db_config: Any, sql: str, params: dict[str, object]) -> dict[str, object] | None:

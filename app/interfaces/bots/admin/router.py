@@ -5,6 +5,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 
 from app.application.access import AccessResolver
+from app.application.care_commerce import CareCommerceService
 from app.application.booking.telegram_flow import BookingPatientFlowService
 from app.application.clinic_reference import ClinicReferenceService
 from app.application.search.service import HybridSearchService
@@ -52,6 +53,7 @@ def make_router(
     search_service: HybridSearchService,
     stt_service: SpeechToTextService,
     voice_mode_store: VoiceSearchModeStore,
+    care_commerce_service: CareCommerceService | None = None,
     *,
     default_locale: str,
     max_voice_duration_sec: int,
@@ -284,6 +286,62 @@ def make_router(
                 )
             )
         await message.answer("\n".join(lines))
+
+    @router.message(Command("care_orders"))
+    async def care_orders(message: Message) -> None:
+        if care_commerce_service is None:
+            return
+        locale = await _run_search(message, access_resolver=access_resolver, i18n=i18n, default_locale=default_locale)
+        if locale is None or not message.from_user:
+            return
+        actor_context = access_resolver.resolve_actor_context(message.from_user.id)
+        if not actor_context:
+            return
+        rows = await care_commerce_service.list_admin_orders(
+            clinic_id=actor_context.clinic_id,
+            statuses=("created", "awaiting_confirmation", "confirmed", "awaiting_payment", "paid", "ready_for_pickup"),
+            limit=15,
+        )
+        if not rows:
+            await message.answer(i18n.t("admin.care.orders.empty", locale))
+            return
+        lines = [i18n.t("admin.care.orders.title", locale)]
+        for row in rows:
+            lines.append(i18n.t("admin.care.orders.item", locale).format(care_order_id=row.care_order_id, patient_id=row.patient_id, status=row.status, amount=row.total_amount, currency=row.currency_code))
+        await message.answer("\n".join(lines))
+
+    @router.message(Command("care_order_action"))
+    async def care_order_action(message: Message) -> None:
+        if care_commerce_service is None:
+            return
+        locale = await _run_search(message, access_resolver=access_resolver, i18n=i18n, default_locale=default_locale)
+        if locale is None or not message.text:
+            return
+        parts = message.text.split(maxsplit=2)
+        if len(parts) != 3:
+            await message.answer(i18n.t("admin.care.order.action.usage", locale))
+            return
+        action, care_order_id = parts[1], parts[2]
+        target = {
+            "ready": "ready_for_pickup",
+            "issue": "issued",
+            "fulfill": "fulfilled",
+            "cancel": "canceled",
+            "pay_required": "awaiting_payment",
+            "paid": "paid",
+        }.get(action)
+        if not target:
+            await message.answer(i18n.t("admin.care.order.action.usage", locale))
+            return
+        try:
+            updated = await care_commerce_service.transition_order(care_order_id=care_order_id, to_status=target)
+        except ValueError:
+            await message.answer(i18n.t("admin.care.order.action.invalid", locale))
+            return
+        if updated is None:
+            await message.answer(i18n.t("admin.care.order.action.missing", locale))
+            return
+        await message.answer(i18n.t("admin.care.order.action.ok", locale).format(care_order_id=updated.care_order_id, status=updated.status))
 
     @router.message(Command("booking_escalation_open"))
     async def booking_escalation_open(message: Message) -> None:

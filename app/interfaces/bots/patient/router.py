@@ -8,6 +8,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, Message, ReplyKeyboardMarkup
 
 from app.application.communication import ReminderActionService
+from app.application.care_commerce import CareCommerceService
 from app.application.booking.orchestration_outcomes import ConflictOutcome, InvalidStateOutcome, OrchestrationSuccess, SlotUnavailableOutcome
 from app.application.booking.telegram_flow import BookingCardView, BookingControlResolutionResult, BookingPatientFlowService
 from app.application.clinic_reference import ClinicReferenceService
@@ -27,6 +28,7 @@ def make_router(
     reference: ClinicReferenceService,
     reminder_actions: ReminderActionService,
     recommendation_service: RecommendationService | None = None,
+    care_commerce_service: CareCommerceService | None = None,
     recommendation_repository=None,
     *,
     default_locale: str,
@@ -133,6 +135,12 @@ def make_router(
         clinic_id = _primary_clinic_id()
         if clinic_id is None or recommendation_repository is None:
             return None
+        list_finder = getattr(recommendation_repository, "find_patient_ids_by_telegram_user", None)
+        if callable(list_finder):
+            rows = await list_finder(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
+            if len(rows) != 1:
+                return None
+            return rows[0]
         finder = getattr(recommendation_repository, "find_patient_id_by_telegram_user", None)
         if not callable(finder):
             return None
@@ -144,7 +152,7 @@ def make_router(
             return
         patient_id = await _resolve_patient_id_for_user(message.from_user.id)
         if not patient_id:
-            await message.answer(i18n.t("patient.recommendations.unavailable", _locale()))
+            await message.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()))
             return
         rows = await recommendation_service.list_for_patient(patient_id=patient_id)
         if not rows:
@@ -209,6 +217,85 @@ def make_router(
             await message.answer(i18n.t("patient.recommendations.action.invalid_state", _locale()))
             return
         await message.answer(i18n.t("patient.recommendations.action.ok", _locale()).format(status=(updated.status if updated else recommendation.status)))
+
+    @router.message(Command("recommendation_products"))
+    async def recommendation_products(message: Message) -> None:
+        if not message.from_user or not message.text or recommendation_service is None or care_commerce_service is None:
+            return
+        parts = message.text.split(maxsplit=1)
+        if len(parts) != 2:
+            await message.answer(i18n.t("patient.care.products.open.usage", _locale()))
+            return
+        patient_id = await _resolve_patient_id_for_user(message.from_user.id)
+        if not patient_id:
+            await message.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()))
+            return
+        recommendation = await recommendation_service.get(parts[1].strip())
+        if recommendation is None or recommendation.patient_id != patient_id:
+            await message.answer(i18n.t("patient.recommendations.not_found", _locale()))
+            return
+        rows = await care_commerce_service.list_products_by_recommendation(recommendation_id=recommendation.recommendation_id)
+        if not rows:
+            await message.answer(i18n.t("patient.care.products.empty", _locale()))
+            return
+        lines = [i18n.t("patient.care.products.title", _locale())]
+        for link, product in rows:
+            lines.append(i18n.t("patient.care.products.item", _locale()).format(product_id=product.care_product_id, title=i18n.t(product.title_key, _locale()), price=product.price_amount, currency=product.currency_code, rank=link.relevance_rank))
+        await message.answer("\n".join(lines))
+
+    @router.message(Command("care_order_create"))
+    async def care_order_create(message: Message) -> None:
+        if not message.from_user or not message.text or recommendation_service is None or care_commerce_service is None:
+            return
+        parts = message.text.split(maxsplit=2)
+        if len(parts) != 3:
+            await message.answer(i18n.t("patient.care.order.create.usage", _locale()))
+            return
+        recommendation_id, care_product_id = parts[1], parts[2]
+        patient_id = await _resolve_patient_id_for_user(message.from_user.id)
+        clinic_id = _primary_clinic_id()
+        if not patient_id or clinic_id is None:
+            await message.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()))
+            return
+        recommendation = await recommendation_service.get(recommendation_id)
+        if recommendation is None or recommendation.patient_id != patient_id:
+            await message.answer(i18n.t("patient.recommendations.not_found", _locale()))
+            return
+        linked = await care_commerce_service.list_products_by_recommendation(recommendation_id=recommendation_id)
+        match = next((product for _, product in linked if product.care_product_id == care_product_id), None)
+        if match is None:
+            await message.answer(i18n.t("patient.care.order.product_not_linked", _locale()))
+            return
+        order = await care_commerce_service.create_order(
+            clinic_id=clinic_id,
+            patient_id=patient_id,
+            payment_mode="pay_at_pickup",
+            currency_code=match.currency_code,
+            pickup_branch_id=None,
+            recommendation_id=recommendation_id,
+            booking_id=recommendation.booking_id,
+            items=[(match, 1)],
+        )
+        await care_commerce_service.transition_order(care_order_id=order.care_order_id, to_status="confirmed")
+        await message.answer(i18n.t("patient.care.order.created", _locale()).format(care_order_id=order.care_order_id, status="confirmed"))
+
+    @router.message(Command("care_orders"))
+    async def care_orders(message: Message) -> None:
+        if not message.from_user or care_commerce_service is None:
+            return
+        patient_id = await _resolve_patient_id_for_user(message.from_user.id)
+        clinic_id = _primary_clinic_id()
+        if not patient_id or clinic_id is None:
+            await message.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()))
+            return
+        rows = await care_commerce_service.list_patient_orders(clinic_id=clinic_id, patient_id=patient_id)
+        if not rows:
+            await message.answer(i18n.t("patient.care.orders.empty", _locale()))
+            return
+        lines = [i18n.t("patient.care.orders.title", _locale())]
+        for row in rows[:8]:
+            lines.append(i18n.t("patient.care.orders.item", _locale()).format(care_order_id=row.care_order_id, status=row.status, amount=row.total_amount, currency=row.currency_code))
+        await message.answer("\n".join(lines))
 
     @router.message(Command("book"))
     async def book_entry(message: Message) -> None:

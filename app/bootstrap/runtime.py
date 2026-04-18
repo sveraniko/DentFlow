@@ -20,6 +20,7 @@ from app.application.booking import (
     WaitlistService,
 )
 from app.application.clinic_reference import ClinicReferenceService
+from app.application.care_commerce import CareCommerceService
 from app.application.owner import OwnerAnalyticsService
 from app.application.clinical import ClinicalChartService
 from app.application.communication import BookingReminderPlanner, BookingReminderService, ReminderActionService
@@ -32,6 +33,7 @@ from app.common.i18n import I18nService
 from app.config.settings import Settings, SpeechToTextConfig
 from app.infrastructure.db.booking_repository import DbBookingRepository
 from app.infrastructure.db.communication_repository import DbReminderJobRepository
+from app.infrastructure.db.care_commerce_repository import DbCareCommerceRepository
 from app.infrastructure.db.clinical_repository import DbClinicalRepository
 from app.infrastructure.db.patient_repository import (
     DbCanonicalPatientCreator,
@@ -71,12 +73,14 @@ class RuntimeRegistry:
         self.patient_registry_repository = asyncio.run(DbPatientRegistryRepository.load(settings.db))
         self.clinical_repository = DbClinicalRepository(settings.db)
         self.recommendation_repository = DbRecommendationRepository(settings.db)
+        self.care_commerce_repository = DbCareCommerceRepository(settings.db)
         self.patient_registry_service = DbPatientRegistryService(self.patient_registry_repository)
 
         self.reference_service = ClinicReferenceService(self.clinic_reference_repository)
         self.clinical_chart_service = ClinicalChartService(self.clinical_repository)
         self.access_resolver = AccessResolver(self.access_repository)
         self.recommendation_service = RecommendationService(self.recommendation_repository)
+        self.care_commerce_service = CareCommerceService(self.care_commerce_repository)
         self.policy_resolver = PolicyResolver(self.policy_repository)
         self.booking_session_service = BookingSessionService(self.booking_repository)
         self.availability_slot_service = AvailabilitySlotService(self.booking_repository)
@@ -155,6 +159,7 @@ class RuntimeRegistry:
                 self.reference_service,
                 reminder_actions=self.reminder_action_service,
                 recommendation_service=self.recommendation_service,
+                care_commerce_service=self.care_commerce_service,
                 recommendation_repository=self.recommendation_repository,
                 default_locale=self.settings.app.default_locale,
             )
@@ -168,6 +173,7 @@ class RuntimeRegistry:
                 search_service=self.search_service,
                 stt_service=self.speech_to_text_service,
                 voice_mode_store=self.voice_mode_store,
+                care_commerce_service=self.care_commerce_service,
                 default_locale=self.settings.app.default_locale,
                 max_voice_duration_sec=self.settings.stt.max_voice_duration_sec,
                 max_voice_file_size_bytes=self.settings.stt.max_voice_file_size_bytes,

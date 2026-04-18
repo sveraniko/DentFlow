@@ -797,6 +797,108 @@ STACK1_TABLES: tuple[str, ...] = (
     ON recommendation.recommendations (chart_id, created_at DESC)
     """,
     """
+    CREATE TABLE IF NOT EXISTS care_commerce.products (
+      care_product_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      sku TEXT NOT NULL,
+      title_key TEXT NOT NULL,
+      description_key TEXT NULL,
+      category TEXT NOT NULL,
+      use_case_tag TEXT NULL,
+      price_amount INTEGER NOT NULL,
+      currency_code TEXT NOT NULL,
+      status TEXT NOT NULL,
+      pickup_supported BOOLEAN NOT NULL DEFAULT TRUE,
+      delivery_supported BOOLEAN NOT NULL DEFAULT FALSE,
+      sort_order INTEGER NULL,
+      available_qty INTEGER NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (clinic_id, sku)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_care_products_clinic_status
+    ON care_commerce.products (clinic_id, status, sort_order)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS care_commerce.recommendation_product_links (
+      recommendation_product_link_id TEXT PRIMARY KEY,
+      recommendation_id TEXT NOT NULL REFERENCES recommendation.recommendations(recommendation_id) ON DELETE CASCADE,
+      care_product_id TEXT NOT NULL REFERENCES care_commerce.products(care_product_id) ON DELETE CASCADE,
+      relevance_rank INTEGER NOT NULL DEFAULT 100,
+      justification_key TEXT NULL,
+      justification_text_key TEXT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(recommendation_id, care_product_id)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_recommendation_product_links_recommendation
+    ON care_commerce.recommendation_product_links (recommendation_id, relevance_rank, created_at)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS care_commerce.care_orders (
+      care_order_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      patient_id TEXT NOT NULL REFERENCES core_patient.patients(patient_id),
+      booking_id TEXT NULL REFERENCES booking.bookings(booking_id) ON DELETE SET NULL,
+      recommendation_id TEXT NULL REFERENCES recommendation.recommendations(recommendation_id) ON DELETE SET NULL,
+      status TEXT NOT NULL,
+      payment_mode TEXT NOT NULL,
+      pickup_branch_id TEXT NULL REFERENCES core_reference.branches(branch_id) ON DELETE SET NULL,
+      total_amount INTEGER NOT NULL,
+      currency_code TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      confirmed_at TIMESTAMPTZ NULL,
+      paid_at TIMESTAMPTZ NULL,
+      ready_for_pickup_at TIMESTAMPTZ NULL,
+      issued_at TIMESTAMPTZ NULL,
+      fulfilled_at TIMESTAMPTZ NULL,
+      canceled_at TIMESTAMPTZ NULL,
+      expired_at TIMESTAMPTZ NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_care_orders_patient_created
+    ON care_commerce.care_orders (clinic_id, patient_id, created_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_care_orders_status_created
+    ON care_commerce.care_orders (clinic_id, status, created_at)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS care_commerce.care_order_items (
+      care_order_item_id TEXT PRIMARY KEY,
+      care_order_id TEXT NOT NULL REFERENCES care_commerce.care_orders(care_order_id) ON DELETE CASCADE,
+      care_product_id TEXT NOT NULL REFERENCES care_commerce.products(care_product_id),
+      quantity INTEGER NOT NULL CHECK (quantity > 0),
+      unit_price INTEGER NOT NULL,
+      line_total INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS care_commerce.care_reservations (
+      care_reservation_id TEXT PRIMARY KEY,
+      care_order_id TEXT NOT NULL REFERENCES care_commerce.care_orders(care_order_id) ON DELETE CASCADE,
+      care_product_id TEXT NOT NULL REFERENCES care_commerce.products(care_product_id),
+      branch_id TEXT NOT NULL REFERENCES core_reference.branches(branch_id),
+      status TEXT NOT NULL,
+      reserved_qty INTEGER NOT NULL CHECK (reserved_qty > 0),
+      expires_at TIMESTAMPTZ NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      released_at TIMESTAMPTZ NULL,
+      consumed_at TIMESTAMPTZ NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_care_reservations_order_status
+    ON care_commerce.care_reservations (care_order_id, status, created_at)
+    """,
+    """
     CREATE TABLE IF NOT EXISTS policy_config.feature_flags (
       feature_flag_id TEXT PRIMARY KEY,
       scope_type TEXT NOT NULL,

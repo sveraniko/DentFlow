@@ -189,6 +189,7 @@ Key consumers:
 ## 10. Recommendation events
 
 - `recommendation.created`
+- `recommendation.prepared`
 - `recommendation.issued`
 - `recommendation.viewed`
 - `recommendation.acknowledged`

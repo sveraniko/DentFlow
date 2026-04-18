@@ -291,4 +291,15 @@ def test_db_recommendation_repository_emits_events(monkeypatch: pytest.MonkeyPat
     asyncio.run(repo.save(item))
     asyncio.run(repo.save(Recommendation(**{**item.__dict__, "status": "issued", "issued_at": now, "updated_at": now})))
     assert "recommendation.created" in appended
+    assert "recommendation.prepared" in appended
     assert "recommendation.issued" in appended
+
+
+def test_db_patient_resolution_ambiguity_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fake_fetch_all(_db, _sql, _params):
+        return [{"patient_id": "p1"}, {"patient_id": "p2"}]
+
+    monkeypatch.setattr("app.infrastructure.db.recommendation_repository._fetch_all", _fake_fetch_all)
+    repo = DbRecommendationRepository(db_config=object())
+    resolved = asyncio.run(repo.find_patient_id_by_telegram_user(clinic_id="c1", telegram_user_id=100))
+    assert resolved is None
