@@ -148,7 +148,7 @@
   "owner.alert.open.usage": "Использование: /owner_alert_open <owner_alert_id>",
   "owner.alert.open.missing": "Алерт владельца не найден.",
   "owner.alert.open.card": "Алерт {owner_alert_id}\nТип: {alert_type}\nСерьезность: {severity}\nСтатус: {status}\nДата: {alert_date}\nСводка: {summary}\nДетали: {details}",
-  "doctor.recommend.issue.usage": "Формат: /recommend_issue <patient_id> <type> <booking_id|-> <title|body>",
+  "doctor.recommend.issue.usage": "Формат: /recommend_issue <patient_id> <type> <booking_id|-> <title|body> [product:<sku_или_code>|set:<set_code>]",
   "doctor.recommend.issue.invalid_type": "Неподдерживаемый тип рекомендации.",
   "doctor.recommend.issue.denied_or_missing": "Нельзя выдать рекомендацию для этого контекста.",
   "doctor.recommend.issue.ok": "Рекомендация выдана: {recommendation_id}",

@@ -980,6 +980,16 @@ STACK1_TABLES: tuple[str, ...] = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS care_commerce.recommendation_manual_targets (
+      recommendation_id TEXT PRIMARY KEY REFERENCES recommendation.recommendations(recommendation_id) ON DELETE CASCADE,
+      target_kind TEXT NOT NULL,
+      target_code TEXT NOT NULL,
+      justification_text TEXT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS care_commerce.catalog_settings (
       care_catalog_setting_id TEXT PRIMARY KEY,
       clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),

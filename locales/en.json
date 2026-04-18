@@ -148,7 +148,7 @@
   "owner.alert.open.usage": "Usage: /owner_alert_open <owner_alert_id>",
   "owner.alert.open.missing": "Owner alert not found.",
   "owner.alert.open.card": "Alert {owner_alert_id}\nType: {alert_type}\nSeverity: {severity}\nStatus: {status}\nDate: {alert_date}\nSummary: {summary}\nDetails: {details}",
-  "doctor.recommend.issue.usage": "Usage: /recommend_issue <patient_id> <type> <booking_id|-> <title|body>",
+  "doctor.recommend.issue.usage": "Usage: /recommend_issue <patient_id> <type> <booking_id|-> <title|body> [product:<sku_or_code>|set:<set_code>]",
   "doctor.recommend.issue.invalid_type": "Unsupported recommendation type.",
   "doctor.recommend.issue.denied_or_missing": "Cannot issue recommendation for this context.",
   "doctor.recommend.issue.ok": "Recommendation issued: {recommendation_id}",

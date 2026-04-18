@@ -119,7 +119,7 @@ def make_router(
         if doctor_id is None or clinic_id is None or operations is None:
             await message.answer(i18n.t("doctor.surface.unavailable", locale))
             return
-        parts = message.text.split(maxsplit=4)
+        parts = message.text.split(maxsplit=5)
         if len(parts) < 5 or "|" not in parts[4]:
             await message.answer(i18n.t("doctor.recommend.issue.usage", locale))
             return
@@ -127,6 +127,10 @@ def make_router(
         recommendation_type = parts[2].strip()
         booking_token = parts[3].strip()
         title, body = [x.strip() for x in parts[4].split("|", 1)]
+        target_kind = None
+        target_code = None
+        if len(parts) > 5 and ":" in parts[5]:
+            target_kind, target_code = [x.strip() for x in parts[5].split(":", 1)]
         booking_id = None if booking_token == "-" else booking_token
         try:
             recommendation = await operations.issue_recommendation(
@@ -137,6 +141,8 @@ def make_router(
                 title=title,
                 body_text=body,
                 booking_id=booking_id,
+                target_kind=target_kind,
+                target_code=target_code,
             )
         except ValueError:
             await message.answer(i18n.t("doctor.recommend.issue.invalid_type", locale))

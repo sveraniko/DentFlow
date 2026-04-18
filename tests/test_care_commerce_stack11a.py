@@ -22,6 +22,10 @@ class InMemoryCareRepo:
         self.product_i18n: dict[tuple[str, str], dict[str, str | None]] = {}
         self.catalog_settings: dict[str, str] = {}
         self.links: dict[str, list[RecommendationProductLink]] = {}
+        self.recommendation_links: list[dict[str, object]] = []
+        self.recommendation_sets: dict[str, dict[str, object]] = {}
+        self.recommendation_set_items: dict[str, list[dict[str, object]]] = {}
+        self.manual_targets: dict[str, dict[str, object]] = {}
         self.orders: dict[str, CareOrder] = {}
         self.order_items: dict[str, list[CareOrderItem]] = {}
         self.reservations: dict[str, list[CareReservation]] = {}
@@ -48,6 +52,46 @@ class InMemoryCareRepo:
 
     async def list_catalog_products_by_recommendation_type(self, *, clinic_id: str, recommendation_type: str) -> list[tuple[RecommendationProductLink, CareProduct]]:
         return []
+
+    async def get_product_by_code(self, *, clinic_id: str, target_code: str) -> CareProduct | None:
+        for product in self.products.values():
+            if product.clinic_id == clinic_id and product.sku == target_code:
+                return product
+        return None
+
+    async def list_recommendation_links_by_type(self, *, clinic_id: str, recommendation_type: str) -> list[dict[str, object]]:
+        return [
+            row for row in sorted(self.recommendation_links, key=lambda row: int(row["relevance_rank"]))
+            if row["clinic_id"] == clinic_id and row["recommendation_type"] == recommendation_type
+        ]
+
+    async def get_recommendation_set(self, *, clinic_id: str, set_code: str) -> dict[str, object] | None:
+        row = self.recommendation_sets.get(set_code)
+        if row and row["clinic_id"] == clinic_id:
+            return row
+        return None
+
+    async def list_recommendation_set_items(self, *, clinic_id: str, set_code: str) -> list[dict[str, object]]:
+        _ = clinic_id
+        return sorted(self.recommendation_set_items.get(set_code, []), key=lambda row: int(row["position"]))
+
+    async def upsert_manual_recommendation_target(
+        self,
+        *,
+        recommendation_id: str,
+        target_kind: str,
+        target_code: str,
+        justification_text: str | None,
+    ) -> None:
+        self.manual_targets[recommendation_id] = {
+            "recommendation_id": recommendation_id,
+            "target_kind": target_kind,
+            "target_code": target_code,
+            "justification_text": justification_text,
+        }
+
+    async def get_manual_recommendation_target(self, *, recommendation_id: str) -> dict[str, object] | None:
+        return self.manual_targets.get(recommendation_id)
 
     async def create_order(self, order: CareOrder, items: list[CareOrderItem]) -> CareOrder:
         self.orders[order.care_order_id] = order
@@ -127,6 +171,70 @@ def test_product_link_order_and_metadata() -> None:
     rows = asyncio.run(service.list_products_by_recommendation(recommendation_id="r1"))
     assert [product.care_product_id for _, product in rows] == [p1.care_product_id, p2.care_product_id]
     assert rows[0][0].justification_text_key == "just.1"
+
+
+def test_recommendation_product_target_resolution_skips_inactive_product() -> None:
+    repo = InMemoryCareRepo()
+    service = CareCommerceService(repo)
+    active = asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-A", title_key="a", description_key=None, category="h", price_amount=1000, currency_code="RUB", status="active"))
+    asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-I", title_key="i", description_key=None, category="h", price_amount=900, currency_code="RUB", status="inactive"))
+    repo.recommendation_links.extend(
+        [
+            {
+                "clinic_id": "c1",
+                "recommendation_type": "aftercare",
+                "target_kind": "product",
+                "target_code": "SKU-I",
+                "relevance_rank": 1,
+                "active": True,
+                "justification_text_en": "inactive should not show",
+                "justification_text_ru": None,
+            },
+            {
+                "clinic_id": "c1",
+                "recommendation_type": "aftercare",
+                "target_kind": "product",
+                "target_code": "SKU-A",
+                "relevance_rank": 2,
+                "active": True,
+                "justification_text_en": "post-care support",
+                "justification_text_ru": None,
+            },
+        ]
+    )
+    rows = asyncio.run(service.resolve_recommendation_targets(clinic_id="c1", recommendation_id="r1", recommendation_type="aftercare", locale="en"))
+    assert [row.care_product_id for row in rows] == [active.care_product_id]
+    assert rows[0].explanation_text == "post-care support"
+
+
+def test_recommendation_set_target_resolution_preserves_order_and_handles_inactive_item() -> None:
+    repo = InMemoryCareRepo()
+    service = CareCommerceService(repo)
+    p1 = asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-1", title_key="a", description_key=None, category="h", price_amount=1000, currency_code="RUB", status="active"))
+    asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-2", title_key="b", description_key=None, category="h", price_amount=1000, currency_code="RUB", status="inactive"))
+    p3 = asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-3", title_key="c", description_key=None, category="h", price_amount=1000, currency_code="RUB", status="active"))
+    repo.recommendation_sets["set-aftercare"] = {"clinic_id": "c1", "set_code": "set-aftercare", "status": "active", "description_en": "aftercare kit", "description_ru": None}
+    repo.recommendation_set_items["set-aftercare"] = [
+        {"position": 2, "quantity": 1, "product": p3},
+        {"position": 1, "quantity": 2, "product": p1},
+        {"position": 3, "quantity": 1, "product": CareProduct(**{**p1.__dict__, "care_product_id": "tmp", "sku": "SKU-2", "status": "inactive"})},
+    ]
+    repo.recommendation_links.append(
+        {
+            "clinic_id": "c1",
+            "recommendation_type": "aftercare",
+            "target_kind": "set",
+            "target_code": "set-aftercare",
+            "relevance_rank": 10,
+            "active": True,
+            "justification_text_en": None,
+            "justification_text_ru": None,
+        }
+    )
+    rows = asyncio.run(service.resolve_recommendation_targets(clinic_id="c1", recommendation_id="r-set", recommendation_type="aftercare", locale="en"))
+    assert [row.care_product_id for row in rows] == [p1.care_product_id, p3.care_product_id]
+    assert [row.quantity for row in rows] == [2, 1]
+    assert all(row.explanation_text == "aftercare kit" for row in rows)
 
 
 def test_branch_product_availability_create_update_and_free_qty() -> None:
@@ -384,3 +492,97 @@ def test_product_content_resolution_prefers_synced_i18n_and_fallback_locale() ->
     fallback = asyncio.run(service.resolve_product_content(clinic_id="c1", product=product, locale="ru"))
     assert fallback.title == "Synced Brush"
     assert fallback.locale == "en"
+
+
+def test_manual_override_target_precedence_over_rule_mapping() -> None:
+    repo = InMemoryCareRepo()
+    service = CareCommerceService(repo)
+    manual_product = asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-MAN", title_key="m", description_key=None, category="h", price_amount=1000, currency_code="RUB", status="active"))
+    rule_product = asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-RULE", title_key="r", description_key=None, category="h", price_amount=1000, currency_code="RUB", status="active"))
+    repo.recommendation_links.append(
+        {
+            "clinic_id": "c1",
+            "recommendation_type": "aftercare",
+            "target_kind": "product",
+            "target_code": "SKU-RULE",
+            "relevance_rank": 1,
+            "active": True,
+            "justification_text_en": "rule text",
+            "justification_text_ru": None,
+        }
+    )
+    asyncio.run(
+        service.set_manual_recommendation_target(
+            recommendation_id="r1",
+            target_kind="product",
+            target_code="SKU-MAN",
+            justification_text="Doctor selected this item",
+        )
+    )
+    rows = asyncio.run(service.resolve_recommendation_targets(clinic_id="c1", recommendation_id="r1", recommendation_type="aftercare", locale="en"))
+    assert [row.care_product_id for row in rows] == [manual_product.care_product_id]
+    assert all(row.care_product_id != rule_product.care_product_id for row in rows)
+    assert rows[0].source_kind == "manual_explicit_target"
+    assert rows[0].explanation_text == "Doctor selected this item"
+
+
+def test_doctor_issue_recommendation_with_set_target_persists_manual_override() -> None:
+    now = datetime.now(timezone.utc)
+    booking = Booking(
+        booking_id="b1",
+        clinic_id="c1",
+        branch_id="br1",
+        patient_id="p1",
+        service_id="s1",
+        doctor_id="d1",
+        slot_id="sl1",
+        booking_mode="manual",
+        source_channel="doctor",
+        status="confirmed",
+        scheduled_start_at=now,
+        scheduled_end_at=now,
+        confirmation_required=True,
+        completed_at=None,
+        canceled_at=None,
+        no_show_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmed_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+    rec_repo = InMemoryRecommendationRepository()
+    care_repo = InMemoryCareRepo()
+    care_service = CareCommerceService(care_repo)
+    ops = DoctorOperationsService(
+        access_resolver=None,
+        booking_service=_BookingRepo(booking),
+        booking_state_service=_BookState(),
+        booking_orchestration=_Orch(),
+        reference_service=_Reference("en"),
+        patient_reader=None,
+        recommendation_service=RecommendationService(rec_repo),
+        care_commerce_service=care_service,
+        i18n=I18nService(locales_path=Path("locales")),
+    )
+    issued = asyncio.run(
+        ops.issue_recommendation(
+            doctor_id="d1",
+            clinic_id="c1",
+            patient_id="p1",
+            recommendation_type="aftercare",
+            title="Aftercare",
+            body_text="Use care set",
+            booking_id="b1",
+            target_kind="set",
+            target_code="aftercare-kit",
+            target_justification_text="Manual set override",
+        )
+    )
+    assert issued is not None
+    manual = asyncio.run(care_repo.get_manual_recommendation_target(recommendation_id=issued.recommendation_id))
+    assert manual is not None
+    assert manual["target_kind"] == "set"
+    assert manual["target_code"] == "aftercare-kit"

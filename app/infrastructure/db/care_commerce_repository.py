@@ -247,6 +247,129 @@ class DbCareCommerceRepository:
             out.append((link, product))
         return out
 
+    async def get_product_by_code(self, *, clinic_id: str, target_code: str) -> CareProduct | None:
+        row = await _fetch_one(
+            self._db_config,
+            """
+            SELECT care_product_id, clinic_id, sku, title_key, description_key, category, use_case_tag,
+                   price_amount, currency_code, status, pickup_supported, delivery_supported, sort_order,
+                   available_qty, created_at, updated_at
+            FROM care_commerce.products
+            WHERE clinic_id=:clinic_id AND (sku=:target_code OR product_code=:target_code)
+            ORDER BY CASE WHEN sku=:target_code THEN 0 ELSE 1 END, updated_at DESC
+            LIMIT 1
+            """,
+            {"clinic_id": clinic_id, "target_code": target_code},
+        )
+        return CareProduct(**row) if row else None
+
+    async def list_recommendation_links_by_type(self, *, clinic_id: str, recommendation_type: str) -> list[dict[str, object]]:
+        rows = await _fetch_all(
+            self._db_config,
+            """
+            SELECT target_kind, target_code, relevance_rank, active, justification_key, justification_text_ru, justification_text_en
+            FROM care_commerce.recommendation_links
+            WHERE clinic_id=:clinic_id AND recommendation_type=:recommendation_type
+            ORDER BY relevance_rank ASC, created_at ASC
+            """,
+            {"clinic_id": clinic_id, "recommendation_type": recommendation_type},
+        )
+        return [dict(row) for row in rows]
+
+    async def get_recommendation_set(self, *, clinic_id: str, set_code: str) -> dict[str, object] | None:
+        row = await _fetch_one(
+            self._db_config,
+            """
+            SELECT set_code, status, title_ru, title_en, description_ru, description_en
+            FROM care_commerce.recommendation_sets
+            WHERE clinic_id=:clinic_id AND set_code=:set_code
+            """,
+            {"clinic_id": clinic_id, "set_code": set_code},
+        )
+        return dict(row) if row else None
+
+    async def list_recommendation_set_items(self, *, clinic_id: str, set_code: str) -> list[dict[str, object]]:
+        rows = await _fetch_all(
+            self._db_config,
+            """
+            SELECT rsi.position, rsi.quantity,
+                   p.care_product_id, p.clinic_id, p.sku, p.title_key, p.description_key,
+                   p.category, p.use_case_tag, p.price_amount, p.currency_code, p.status,
+                   p.pickup_supported, p.delivery_supported, p.sort_order, p.available_qty,
+                   p.created_at, p.updated_at
+            FROM care_commerce.recommendation_set_items rsi
+            JOIN care_commerce.recommendation_sets rs ON rs.care_recommendation_set_id=rsi.care_recommendation_set_id
+            JOIN care_commerce.products p ON p.care_product_id=rsi.care_product_id
+            WHERE rs.clinic_id=:clinic_id AND rs.set_code=:set_code
+            ORDER BY rsi.position ASC, rsi.created_at ASC
+            """,
+            {"clinic_id": clinic_id, "set_code": set_code},
+        )
+        out: list[dict[str, object]] = []
+        for row in rows:
+            product = CareProduct(
+                care_product_id=row["care_product_id"],
+                clinic_id=row["clinic_id"],
+                sku=row["sku"],
+                title_key=row["title_key"],
+                description_key=row["description_key"],
+                category=row["category"],
+                use_case_tag=row["use_case_tag"],
+                price_amount=row["price_amount"],
+                currency_code=row["currency_code"],
+                status=row["status"],
+                pickup_supported=row["pickup_supported"],
+                delivery_supported=row["delivery_supported"],
+                sort_order=row["sort_order"],
+                available_qty=row["available_qty"],
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+            )
+            out.append({"position": row["position"], "quantity": row["quantity"], "product": product})
+        return out
+
+    async def upsert_manual_recommendation_target(
+        self,
+        *,
+        recommendation_id: str,
+        target_kind: str,
+        target_code: str,
+        justification_text: str | None,
+    ) -> None:
+        await _execute(
+            self._db_config,
+            """
+            INSERT INTO care_commerce.recommendation_manual_targets (
+              recommendation_id, target_kind, target_code, justification_text, updated_at, created_at
+            ) VALUES (
+              :recommendation_id, :target_kind, :target_code, :justification_text, NOW(), NOW()
+            )
+            ON CONFLICT (recommendation_id) DO UPDATE SET
+              target_kind=EXCLUDED.target_kind,
+              target_code=EXCLUDED.target_code,
+              justification_text=EXCLUDED.justification_text,
+              updated_at=NOW()
+            """,
+            {
+                "recommendation_id": recommendation_id,
+                "target_kind": target_kind,
+                "target_code": target_code,
+                "justification_text": justification_text,
+            },
+        )
+
+    async def get_manual_recommendation_target(self, *, recommendation_id: str) -> dict[str, object] | None:
+        row = await _fetch_one(
+            self._db_config,
+            """
+            SELECT recommendation_id, target_kind, target_code, justification_text
+            FROM care_commerce.recommendation_manual_targets
+            WHERE recommendation_id=:recommendation_id
+            """,
+            {"recommendation_id": recommendation_id},
+        )
+        return dict(row) if row else None
+
     async def create_order(self, order: CareOrder, items: list[CareOrderItem]) -> CareOrder:
         engine = create_engine(self._db_config)
         try:

@@ -48,6 +48,19 @@ class CareCommerceRepository(Protocol):
     async def upsert_branch_product_availability(self, availability: BranchProductAvailability) -> BranchProductAvailability: ...
     async def get_product_i18n_content(self, *, care_product_id: str, locale: str) -> dict[str, str | None] | None: ...
     async def get_catalog_setting(self, *, clinic_id: str, key: str) -> str | None: ...
+    async def get_product_by_code(self, *, clinic_id: str, target_code: str) -> CareProduct | None: ...
+    async def list_recommendation_links_by_type(self, *, clinic_id: str, recommendation_type: str) -> list[dict[str, object]]: ...
+    async def get_recommendation_set(self, *, clinic_id: str, set_code: str) -> dict[str, object] | None: ...
+    async def list_recommendation_set_items(self, *, clinic_id: str, set_code: str) -> list[dict[str, object]]: ...
+    async def upsert_manual_recommendation_target(
+        self,
+        *,
+        recommendation_id: str,
+        target_kind: str,
+        target_code: str,
+        justification_text: str | None,
+    ) -> None: ...
+    async def get_manual_recommendation_target(self, *, recommendation_id: str) -> dict[str, object] | None: ...
 
 
 @dataclass(frozen=True)
@@ -66,6 +79,17 @@ class CareProductContent:
     short_label: str | None
     justification_text: str | None
     usage_hint: str | None
+
+
+@dataclass(frozen=True)
+class ResolvedRecommendationProduct:
+    recommendation_id: str
+    care_product_id: str
+    product: CareProduct
+    relevance_rank: int
+    quantity: int
+    explanation_text: str | None
+    source_kind: str
 
 
 @dataclass(slots=True)
@@ -137,15 +161,189 @@ class CareCommerceService:
         recommendation_id: str,
         recommendation_type: str,
     ) -> list[tuple[RecommendationProductLink, CareProduct]]:
-        direct = await self.repository.list_products_by_recommendation(recommendation_id=recommendation_id)
-        if direct:
-            return direct
-        if hasattr(self.repository, "list_catalog_products_by_recommendation_type"):
-            return await self.repository.list_catalog_products_by_recommendation_type(
-                clinic_id=clinic_id,
-                recommendation_type=recommendation_type,
+        resolved = await self.resolve_recommendation_targets(
+            clinic_id=clinic_id,
+            recommendation_id=recommendation_id,
+            recommendation_type=recommendation_type,
+        )
+        rows: list[tuple[RecommendationProductLink, CareProduct]] = []
+        for item in resolved:
+            rows.append(
+                (
+                    RecommendationProductLink(
+                        recommendation_product_link_id=f"resolved_{recommendation_id}_{item.care_product_id}_{item.relevance_rank}",
+                        recommendation_id=recommendation_id,
+                        care_product_id=item.care_product_id,
+                        relevance_rank=item.relevance_rank,
+                        justification_key=item.source_kind,
+                        justification_text_key=item.explanation_text,
+                        created_at=item.product.updated_at,
+                    ),
+                    item.product,
+                )
             )
-        return []
+        return rows
+
+    async def set_manual_recommendation_target(
+        self,
+        *,
+        recommendation_id: str,
+        target_kind: str,
+        target_code: str,
+        justification_text: str | None = None,
+    ) -> None:
+        if target_kind not in {"product", "set"}:
+            raise ValueError("unsupported_target_kind")
+        await self.repository.upsert_manual_recommendation_target(
+            recommendation_id=recommendation_id,
+            target_kind=target_kind,
+            target_code=target_code,
+            justification_text=justification_text,
+        )
+
+    async def resolve_recommendation_targets(
+        self,
+        *,
+        clinic_id: str,
+        recommendation_id: str,
+        recommendation_type: str,
+        locale: str = "en",
+    ) -> list[ResolvedRecommendationProduct]:
+        manual = await self.repository.get_manual_recommendation_target(recommendation_id=recommendation_id)
+        if manual:
+            resolved = await self._resolve_target(
+                clinic_id=clinic_id,
+                recommendation_id=recommendation_id,
+                target_kind=str(manual["target_kind"]),
+                target_code=str(manual["target_code"]),
+                relevance_rank=0,
+                source_kind="manual_explicit_target",
+                locale=locale,
+                link_justification=self._clean_text(manual.get("justification_text")),
+            )
+            if resolved:
+                return resolved
+
+        direct = await self.repository.list_products_by_recommendation(recommendation_id=recommendation_id)
+        direct_rows = [
+            ResolvedRecommendationProduct(
+                recommendation_id=recommendation_id,
+                care_product_id=product.care_product_id,
+                product=product,
+                relevance_rank=link.relevance_rank,
+                quantity=1,
+                explanation_text=self._clean_text(link.justification_text_key),
+                source_kind="manual_product_links",
+            )
+            for link, product in direct
+            if product.status == "active"
+        ]
+        if direct_rows:
+            return sorted(direct_rows, key=lambda row: row.relevance_rank)
+
+        links = await self.repository.list_recommendation_links_by_type(
+            clinic_id=clinic_id,
+            recommendation_type=recommendation_type,
+        )
+        resolved: list[ResolvedRecommendationProduct] = []
+        for row in links:
+            if not bool(row.get("active", True)):
+                continue
+            resolved.extend(
+                await self._resolve_target(
+                    clinic_id=clinic_id,
+                    recommendation_id=recommendation_id,
+                    target_kind=str(row.get("target_kind", "")),
+                    target_code=str(row.get("target_code", "")),
+                    relevance_rank=int(row.get("relevance_rank", 100)),
+                    source_kind="rule_recommendation_link",
+                    locale=locale,
+                    link_justification=self._pick_justification_text(row=row, locale=locale),
+                )
+            )
+        return self._dedupe_preserving_priority(sorted(resolved, key=lambda row: row.relevance_rank))
+
+    async def _resolve_target(
+        self,
+        *,
+        clinic_id: str,
+        recommendation_id: str,
+        target_kind: str,
+        target_code: str,
+        relevance_rank: int,
+        source_kind: str,
+        locale: str,
+        link_justification: str | None,
+    ) -> list[ResolvedRecommendationProduct]:
+        if target_kind == "product":
+            product = await self.repository.get_product_by_code(clinic_id=clinic_id, target_code=target_code)
+            if product is None or product.status != "active":
+                return []
+            return [
+                ResolvedRecommendationProduct(
+                    recommendation_id=recommendation_id,
+                    care_product_id=product.care_product_id,
+                    product=product,
+                    relevance_rank=relevance_rank,
+                    quantity=1,
+                    explanation_text=link_justification,
+                    source_kind=source_kind,
+                )
+            ]
+        if target_kind != "set":
+            return []
+        rec_set = await self.repository.get_recommendation_set(clinic_id=clinic_id, set_code=target_code)
+        if not rec_set or rec_set.get("status") != "active":
+            return []
+        set_description = self._set_description(rec_set=rec_set, locale=locale)
+        items = await self.repository.list_recommendation_set_items(clinic_id=clinic_id, set_code=target_code)
+        resolved: list[ResolvedRecommendationProduct] = []
+        for item in items:
+            product = item.get("product")
+            if not isinstance(product, CareProduct) or product.status != "active":
+                continue
+            rank = relevance_rank + int(item.get("position", 0))
+            explanation = link_justification or set_description
+            resolved.append(
+                ResolvedRecommendationProduct(
+                    recommendation_id=recommendation_id,
+                    care_product_id=product.care_product_id,
+                    product=product,
+                    relevance_rank=rank,
+                    quantity=max(1, int(item.get("quantity", 1))),
+                    explanation_text=explanation,
+                    source_kind=source_kind,
+                )
+            )
+        return resolved
+
+    def _pick_justification_text(self, *, row: dict[str, object], locale: str) -> str | None:
+        lang = locale.lower()
+        if lang.startswith("ru"):
+            return self._clean_text(row.get("justification_text_ru")) or self._clean_text(row.get("justification_text_en"))
+        return self._clean_text(row.get("justification_text_en")) or self._clean_text(row.get("justification_text_ru"))
+
+    def _set_description(self, *, rec_set: dict[str, object], locale: str) -> str | None:
+        lang = locale.lower()
+        if lang.startswith("ru"):
+            return self._clean_text(rec_set.get("description_ru")) or self._clean_text(rec_set.get("description_en"))
+        return self._clean_text(rec_set.get("description_en")) or self._clean_text(rec_set.get("description_ru"))
+
+    def _dedupe_preserving_priority(self, rows: list[ResolvedRecommendationProduct]) -> list[ResolvedRecommendationProduct]:
+        seen: set[str] = set()
+        out: list[ResolvedRecommendationProduct] = []
+        for row in rows:
+            if row.care_product_id in seen:
+                continue
+            seen.add(row.care_product_id)
+            out.append(row)
+        return out
+
+    def _clean_text(self, value: object) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
 
     async def resolve_product_content(
         self,
