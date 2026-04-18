@@ -240,7 +240,23 @@ def make_router(
             return
         lines = [i18n.t("patient.care.products.title", _locale())]
         for link, product in rows:
-            lines.append(i18n.t("patient.care.products.item", _locale()).format(recommendation_id=link.recommendation_id, product_id=product.care_product_id, title=i18n.t(product.title_key, _locale()), price=product.price_amount, currency=product.currency_code, rank=link.relevance_rank))
+            content = await care_commerce_service.resolve_product_content(
+                clinic_id=_primary_clinic_id() or recommendation.clinic_id,
+                product=product,
+                locale=_locale(),
+                fallback_locale=_locale(),
+            )
+            title = content.title or i18n.t(product.title_key, _locale())
+            lines.append(
+                i18n.t("patient.care.products.item", _locale()).format(
+                    recommendation_id=link.recommendation_id,
+                    product_id=product.care_product_id,
+                    title=title,
+                    price=product.price_amount,
+                    currency=product.currency_code,
+                    rank=link.relevance_rank,
+                )
+            )
         await message.answer("\n".join(lines))
 
     @router.message(Command("care_order_create"))
@@ -272,10 +288,16 @@ def make_router(
             return
         free_qty = await care_commerce_service.compute_free_qty(branch_id=pickup_branch_id, care_product_id=match.care_product_id)
         if free_qty < 1:
+            content = await care_commerce_service.resolve_product_content(
+                clinic_id=clinic_id,
+                product=match,
+                locale=_locale(),
+                fallback_locale=_locale(),
+            )
             await message.answer(
                 i18n.t("patient.care.order.out_of_stock", _locale()).format(
                     branch_id=pickup_branch_id,
-                    title=i18n.t(match.title_key, _locale()),
+                    title=content.title or i18n.t(match.title_key, _locale()),
                 )
             )
             return

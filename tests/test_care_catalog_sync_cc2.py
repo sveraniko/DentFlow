@@ -7,6 +7,8 @@ from decimal import Decimal
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
+import pytest
+
 from app.application.care_catalog_sync.parser import parse_catalog_workbook
 from app.application.care_catalog_sync.service import CareCatalogSyncService
 
@@ -84,6 +86,25 @@ class InMemoryCatalogRepo:
         if prev is None:
             return "added"
         return "updated" if prev != value else "unchanged"
+
+
+class AtomicFailingCatalogRepo(InMemoryCatalogRepo):
+    async def apply_catalog_sync_transaction(self, *, clinic_id: str, parsed, now: datetime) -> dict[str, dict[str, int]]:
+        staged = {
+            "products": dict(self.products),
+            "product_i18n": dict(self.product_i18n),
+            "availability": dict(self.availability),
+        }
+        stats = {
+            "products": {"added": 0, "updated": 0, "unchanged": 0, "skipped": 0},
+            "product_i18n": {"added": 0, "updated": 0, "unchanged": 0, "skipped": 0},
+        }
+        for row in parsed.products:
+            key = row.sku
+            if key not in staged["products"]:
+                stats["products"]["added"] += 1
+            staged["products"][key] = {"product_code": row.product_code}
+        raise RuntimeError("forced_apply_failure")
 
 
 def _valid_workbook() -> dict[str, list[dict[str, object]]]:
@@ -243,3 +264,14 @@ def test_xlsx_import_baseline_validates_missing_tabs(tmp_path: Path) -> None:
     result = asyncio.run(service.import_xlsx(clinic_id="c1", path=file_path))
     assert not result.ok
     assert any(issue.code == "missing_tab" for issue in result.fatal_errors)
+
+
+def test_atomic_apply_failure_does_not_leave_partial_changes() -> None:
+    repo = AtomicFailingCatalogRepo()
+    service = CareCatalogSyncService(repo)
+    workbook = _valid_workbook()
+
+    with pytest.raises(RuntimeError, match="forced_apply_failure"):
+        asyncio.run(service._validate_and_apply(clinic_id="c1", workbook=workbook, source="xlsx"))
+    assert repo.products == {}
+    assert repo.product_i18n == {}
