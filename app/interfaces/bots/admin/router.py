@@ -322,21 +322,18 @@ def make_router(
             await message.answer(i18n.t("admin.care.order.action.usage", locale))
             return
         action, care_order_id = parts[1], parts[2]
-        target = {
-            "ready": "ready_for_pickup",
-            "issue": "issued",
-            "fulfill": "fulfilled",
-            "cancel": "canceled",
-            "pay_required": "awaiting_payment",
-            "paid": "paid",
-        }.get(action)
-        if not target:
+        if action not in {"ready", "issue", "fulfill", "cancel", "pay_required", "paid"}:
             await message.answer(i18n.t("admin.care.order.action.usage", locale))
             return
         try:
-            updated = await care_commerce_service.transition_order(care_order_id=care_order_id, to_status=target)
+            updated = await care_commerce_service.apply_admin_order_action(care_order_id=care_order_id, action=action)
         except ValueError:
-            await message.answer(i18n.t("admin.care.order.action.invalid", locale))
+            error_key = "admin.care.order.action.invalid"
+            if action == "ready":
+                existing = await care_commerce_service.get_order(care_order_id)
+                if existing is not None and existing.pickup_branch_id is None:
+                    error_key = "admin.care.order.action.pickup_branch_required"
+            await message.answer(i18n.t(error_key, locale))
             return
         if updated is None:
             await message.answer(i18n.t("admin.care.order.action.missing", locale))

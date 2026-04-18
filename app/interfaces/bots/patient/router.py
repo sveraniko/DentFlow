@@ -45,6 +45,10 @@ def make_router(
         clinics = list(reference.repository.clinics.values())
         return clinics[0].clinic_id if clinics else None
 
+    def _default_pickup_branch_id(clinic_id: str) -> str | None:
+        branches = reference.list_branches(clinic_id)
+        return branches[0].branch_id if branches else None
+
     async def _send_or_edit_panel(
         *,
         actor_id: int,
@@ -271,7 +275,7 @@ def make_router(
             patient_id=patient_id,
             payment_mode="pay_at_pickup",
             currency_code=match.currency_code,
-            pickup_branch_id=None,
+            pickup_branch_id=_default_pickup_branch_id(clinic_id),
             recommendation_id=recommendation_id,
             booking_id=recommendation.booking_id,
             items=[(match, 1)],

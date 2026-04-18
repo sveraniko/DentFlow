@@ -71,6 +71,7 @@ def make_router(
             patient_reader=patient_reader,
             clinical_service=clinical_service,
             recommendation_service=recommendation_service,
+            i18n=i18n,
         )
         if booking_service and booking_state_service and booking_orchestration and reference_service and patient_reader
         else None
