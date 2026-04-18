@@ -11,6 +11,7 @@ from app.application.booking.state_services import BookingStateService
 from app.application.booking.services import BookingService
 from app.application.clinic_reference import ClinicReferenceService
 from app.application.clinical import ChartSummary, ClinicalChartService
+from app.application.care_commerce import CareCommerceService
 from app.application.doctor.patient_read import DoctorPatientReader
 from app.common.i18n import I18nService
 from app.application.recommendation import RecommendationService
@@ -88,6 +89,7 @@ class DoctorOperationsService:
     patient_reader: DoctorPatientReader
     clinical_service: ClinicalChartService | None = None
     recommendation_service: RecommendationService | None = None
+    care_commerce_service: CareCommerceService | None = None
     i18n: I18nService | None = None
     app_default_timezone: str = "UTC"
 
@@ -370,6 +372,9 @@ class DoctorOperationsService:
         booking_id: str | None = None,
         encounter_id: str | None = None,
         chart_id: str | None = None,
+        target_kind: str | None = None,
+        target_code: str | None = None,
+        target_justification_text: str | None = None,
     ):
         if self.recommendation_service is None:
             return None
@@ -393,10 +398,23 @@ class DoctorOperationsService:
             issued_by_actor_id=None,
             prepared=True,
         )
-        return await self.recommendation_service.issue(
+        issued_recommendation = await self.recommendation_service.issue(
             recommendation_id=issued.recommendation_id,
             issued_by_actor_id=None,
         )
+        if (
+            issued_recommendation is not None
+            and self.care_commerce_service is not None
+            and target_kind
+            and target_code
+        ):
+            await self.care_commerce_service.set_manual_recommendation_target(
+                recommendation_id=issued_recommendation.recommendation_id,
+                target_kind=target_kind,
+                target_code=target_code,
+                justification_text=target_justification_text,
+            )
+        return issued_recommendation
 
     async def _create_completion_aftercare(self, *, booking: Booking) -> None:
         if self.recommendation_service is None:

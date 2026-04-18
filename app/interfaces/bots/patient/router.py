@@ -234,12 +234,21 @@ def make_router(
         if recommendation is None or recommendation.patient_id != patient_id:
             await message.answer(i18n.t("patient.recommendations.not_found", _locale()))
             return
-        rows = await care_commerce_service.list_products_for_recommendation_context(clinic_id=_primary_clinic_id() or recommendation.clinic_id, recommendation_id=recommendation.recommendation_id, recommendation_type=recommendation.recommendation_type)
-        if not rows:
+        resolved = await care_commerce_service.resolve_recommendation_targets(
+            clinic_id=_primary_clinic_id() or recommendation.clinic_id,
+            recommendation_id=recommendation.recommendation_id,
+            recommendation_type=recommendation.recommendation_type,
+            locale=_locale(),
+        )
+        if not resolved:
             await message.answer(i18n.t("patient.care.products.empty", _locale()))
             return
         lines = [i18n.t("patient.care.products.title", _locale())]
-        for link, product in rows:
+        rec_explanation = recommendation.rationale_text or recommendation.body_text
+        if rec_explanation:
+            lines.append(rec_explanation.strip()[:180])
+        for item in resolved:
+            product = item.product
             content = await care_commerce_service.resolve_product_content(
                 clinic_id=_primary_clinic_id() or recommendation.clinic_id,
                 product=product,
@@ -249,14 +258,17 @@ def make_router(
             title = content.title or i18n.t(product.title_key, _locale())
             lines.append(
                 i18n.t("patient.care.products.item", _locale()).format(
-                    recommendation_id=link.recommendation_id,
+                    recommendation_id=item.recommendation_id,
                     product_id=product.care_product_id,
                     title=title,
                     price=product.price_amount,
                     currency=product.currency_code,
-                    rank=link.relevance_rank,
+                    rank=item.relevance_rank,
                 )
             )
+            explanation = item.explanation_text or content.justification_text
+            if explanation:
+                lines.append(f"  · {explanation[:140]}")
         await message.answer("\n".join(lines))
 
     @router.message(Command("care_order_create"))
@@ -281,8 +293,13 @@ def make_router(
         if not any(branch.branch_id == pickup_branch_id for branch in branches):
             await message.answer(i18n.t("patient.care.order.branch_invalid", _locale()))
             return
-        linked = await care_commerce_service.list_products_for_recommendation_context(clinic_id=clinic_id, recommendation_id=recommendation_id, recommendation_type=recommendation.recommendation_type)
-        match = next((product for _, product in linked if product.care_product_id == care_product_id), None)
+        linked = await care_commerce_service.resolve_recommendation_targets(
+            clinic_id=clinic_id,
+            recommendation_id=recommendation_id,
+            recommendation_type=recommendation.recommendation_type,
+            locale=_locale(),
+        )
+        match = next((item.product for item in linked if item.care_product_id == care_product_id), None)
         if match is None:
             await message.answer(i18n.t("patient.care.order.product_not_linked", _locale()))
             return
