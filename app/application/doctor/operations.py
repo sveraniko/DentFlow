@@ -20,6 +20,16 @@ from app.domain.clinical import ClinicalEncounter, EncounterNote, ImagingReferen
 
 LIVE_QUEUE_STATUSES = {"pending_confirmation", "confirmed", "reschedule_requested", "checked_in", "in_service"}
 DOCTOR_ALLOWED_ACTIONS = {"checked_in", "in_service", "completed"}
+_AFTERCARE_TEMPLATES = {
+    "en": {
+        "title": "Aftercare guidance",
+        "body": "Please follow your dentist aftercare instructions and contact the clinic if discomfort increases.",
+    },
+    "ru": {
+        "title": "Рекомендации после приема",
+        "body": "Пожалуйста, следуйте рекомендациям врача после приема и свяжитесь с клиникой, если дискомфорт усиливается.",
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -397,16 +407,17 @@ class DoctorOperationsService:
     async def _create_completion_aftercare(self, *, booking: Booking) -> None:
         if self.recommendation_service is None:
             return
-        title = "Aftercare guidance"
-        body = "Please follow your dentist aftercare instructions and contact the clinic if discomfort increases."
+        clinic = self.reference_service.get_clinic(booking.clinic_id) if self.reference_service else None
+        locale = clinic.default_locale if clinic and clinic.default_locale in _AFTERCARE_TEMPLATES else "en"
+        template = _AFTERCARE_TEMPLATES[locale]
         created = await self.recommendation_service.create_recommendation(
             clinic_id=booking.clinic_id,
             patient_id=booking.patient_id,
             booking_id=booking.booking_id,
             recommendation_type="aftercare",
             source_kind="booking_trigger",
-            title=title,
-            body_text=body,
+            title=template["title"],
+            body_text=template["body"],
             rationale_text=None,
             prepared=True,
         )
