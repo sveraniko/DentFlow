@@ -252,12 +252,20 @@ async def _refresh_alerts(conn, *, clinic_id: str, metrics_date: date) -> None:
                 """
                 SELECT COUNT(*) AS c
                 FROM booking.bookings
-                WHERE clinic_id=:clinic_id
-                  AND status='pending_confirmation'
-                  AND DATE(scheduled_start_at AT TIME ZONE 'UTC') = :metrics_date
+                JOIN core_reference.clinics ON core_reference.clinics.clinic_id=booking.bookings.clinic_id
+                LEFT JOIN core_reference.branches ON core_reference.branches.branch_id=booking.bookings.branch_id
+                WHERE booking.bookings.clinic_id=:clinic_id
+                  AND booking.bookings.status='pending_confirmation'
+                  AND DATE(
+                    scheduled_start_at AT TIME ZONE COALESCE(
+                      core_reference.branches.timezone,
+                      core_reference.clinics.timezone,
+                      :default_timezone
+                    )
+                  ) = :metrics_date
                 """
             ),
-            {"clinic_id": clinic_id, "metrics_date": metrics_date},
+            {"clinic_id": clinic_id, "metrics_date": metrics_date, "default_timezone": "UTC"},
         )
     ).scalar_one()
     if int(pending) >= 8:

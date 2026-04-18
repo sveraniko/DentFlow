@@ -13,7 +13,7 @@ from app.common.i18n import I18nService
 from app.domain.access_identity.models import ActorIdentity, ActorStatus, ActorType, ClinicRoleAssignment, RoleCode, StaffMember, StaffStatus, TelegramBinding
 from app.domain.events import build_event
 from app.interfaces.bots.owner.router import make_router
-from app.projections.owner.daily_metrics_projector import OwnerDailyMetricsProjector, _upsert_open_alert
+from app.projections.owner.daily_metrics_projector import OwnerDailyMetricsProjector, _refresh_alerts, _upsert_open_alert
 
 
 class _Message:
@@ -284,3 +284,36 @@ def test_owner_snapshot_uses_local_day_window(monkeypatch: pytest.MonkeyPatch) -
     snap = asyncio.run(service.get_today_snapshot(clinic_id="c1", now=datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc)))
     assert snap.local_date == date(2026, 4, 17)
     assert snap.pending_confirmations_today == 2
+
+
+def test_open_confirmation_backlog_uses_local_timezone_semantics() -> None:
+    captured_sql: list[str] = []
+
+    class _Res:
+        def __init__(self, first=None, scalar=0):
+            self._first = first
+            self._scalar = scalar
+
+        def mappings(self):
+            return self
+
+        def first(self):
+            return self._first
+
+        def scalar_one(self):
+            return self._scalar
+
+    class _Conn:
+        async def execute(self, statement, params):
+            sql = str(statement)
+            captured_sql.append(sql)
+            if "FROM owner_views.daily_clinic_metrics" in sql:
+                return _Res(first={"bookings_created_count": 0, "bookings_confirmed_count": 0, "bookings_no_show_count": 0, "reminders_failed_count": 0})
+            if "FROM booking.bookings" in sql:
+                return _Res(scalar=0)
+            return _Res()
+
+    asyncio.run(_refresh_alerts(_Conn(), clinic_id="c1", metrics_date=date(2026, 4, 17)))
+    backlog_sql = next(s for s in captured_sql if "FROM booking.bookings" in s)
+    assert "AT TIME ZONE COALESCE" in backlog_sql
+    assert "AT TIME ZONE 'UTC'" not in backlog_sql

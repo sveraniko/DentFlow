@@ -147,5 +147,18 @@
   "owner.alerts.empty": "Открытых алертов владельца нет.",
   "owner.alert.open.usage": "Использование: /owner_alert_open <owner_alert_id>",
   "owner.alert.open.missing": "Алерт владельца не найден.",
-  "owner.alert.open.card": "Алерт {owner_alert_id}\nТип: {alert_type}\nСерьезность: {severity}\nСтатус: {status}\nДата: {alert_date}\nСводка: {summary}\nДетали: {details}"
+  "owner.alert.open.card": "Алерт {owner_alert_id}\nТип: {alert_type}\nСерьезность: {severity}\nСтатус: {status}\nДата: {alert_date}\nСводка: {summary}\nДетали: {details}",
+  "doctor.recommend.issue.usage": "Формат: /recommend_issue <patient_id> <type> <booking_id|-> <title|body>",
+  "doctor.recommend.issue.invalid_type": "Неподдерживаемый тип рекомендации.",
+  "doctor.recommend.issue.denied_or_missing": "Нельзя выдать рекомендацию для этого контекста.",
+  "doctor.recommend.issue.ok": "Рекомендация выдана: {recommendation_id}",
+  "patient.recommendations.unavailable": "Рекомендации недоступны, пока профиль пациента не привязан.",
+  "patient.recommendations.empty": "Активных рекомендаций нет.",
+  "patient.recommendations.title": "Ваши рекомендации:",
+  "patient.recommendations.open.usage": "Формат: /recommendation_open <recommendation_id>",
+  "patient.recommendations.not_found": "Рекомендация не найдена.",
+  "patient.recommendations.detail": "Рекомендация: {title}\nТип: {recommendation_type}\nСтатус: {status}\n{body}\n\nДействия: /recommendation_action ack|accept|decline {recommendation_id}",
+  "patient.recommendations.action.usage": "Формат: /recommendation_action <ack|accept|decline> <recommendation_id>",
+  "patient.recommendations.action.invalid_state": "Это действие недоступно для текущего состояния рекомендации.",
+  "patient.recommendations.action.ok": "Сохранено. Текущий статус: {status}"
 }
