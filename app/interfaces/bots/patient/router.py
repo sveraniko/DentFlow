@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timezone
+from typing import Any
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
@@ -22,6 +23,15 @@ class _PanelState:
     session_id: str
 
 
+@dataclass(slots=True)
+class _CareViewState:
+    selected_category: str | None = None
+    recommendation_id: str | None = None
+    recommendation_type: str | None = None
+    recommendation_reason: str | None = None
+    selected_branch_by_product: dict[str, str] | None = None
+
+
 def make_router(
     i18n: I18nService,
     booking_flow: BookingPatientFlowService,
@@ -37,6 +47,7 @@ def make_router(
     panel_by_user: dict[int, _PanelState] = {}
     session_by_user: dict[int, str] = {}
     mode_by_user: dict[int, str] = {}
+    care_state_by_user: dict[int, _CareViewState] = {}
 
     def _locale() -> str:
         return default_locale
@@ -44,6 +55,266 @@ def make_router(
     def _primary_clinic_id() -> str | None:
         clinics = list(reference.repository.clinics.values())
         return clinics[0].clinic_id if clinics else None
+
+    def _care_state(actor_id: int) -> _CareViewState:
+        current = care_state_by_user.get(actor_id)
+        if current is None:
+            current = _CareViewState(selected_branch_by_product={})
+            care_state_by_user[actor_id] = current
+        if current.selected_branch_by_product is None:
+            current.selected_branch_by_product = {}
+        return current
+
+    def _is_in_stock(row: Any) -> bool:
+        return row is not None and row.status == "active" and row.free_qty > 0
+
+    def _availability_label(row: Any, *, locale: str) -> str:
+        if row is None or row.status != "active" or row.free_qty <= 0:
+            return i18n.t("patient.care.availability.out", locale)
+        if row.free_qty <= 2:
+            return i18n.t("patient.care.availability.low", locale)
+        return i18n.t("patient.care.availability.in", locale)
+
+    async def _category_label(*, category_code: str, locale: str) -> str:
+        key = f"care.category.{category_code}"
+        resolved = i18n.t(key, locale)
+        if resolved != key:
+            return resolved
+        return category_code.replace("_", " ").replace("-", " ").strip().title()
+
+    async def _resolve_preferred_branch_for_product(*, clinic_id: str, product_id: str) -> str | None:
+        if care_commerce_service is None:
+            return None
+        branches = reference.list_branches(clinic_id)
+        picker_rows: list[tuple[Any, Any]] = []
+        for branch in branches:
+            availability = await care_commerce_service.get_branch_product_availability(branch_id=branch.branch_id, care_product_id=product_id)
+            picker_rows.append((branch, availability))
+        setting_branch = await care_commerce_service.repository.get_catalog_setting(clinic_id=clinic_id, key="care.default_pickup_branch_id")
+        if setting_branch:
+            preferred = next((x for x in picker_rows if x[0].branch_id == setting_branch and _is_in_stock(x[1])), None)
+            if preferred:
+                return preferred[0].branch_id
+        in_stock = [branch.branch_id for branch, availability in picker_rows if _is_in_stock(availability)]
+        return in_stock[0] if in_stock else None
+
+    async def _render_care_categories_panel(message: Message | CallbackQuery, *, actor_id: int, clinic_id: str) -> None:
+        locale = _locale()
+        categories = await care_commerce_service.list_catalog_categories(clinic_id=clinic_id)
+        if not categories:
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id="care",
+                text=i18n.t("patient.care.catalog.empty", locale),
+            )
+            return
+        rows: list[list[InlineKeyboardButton]] = []
+        for category in categories[:8]:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=await _category_label(category_code=category, locale=locale),
+                        callback_data=f"care:cat:{category}",
+                    )
+                ]
+            )
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id="care",
+            text=i18n.t("patient.care.catalog.title", locale),
+            keyboard=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _render_care_product_list(
+        message: Message | CallbackQuery,
+        *,
+        actor_id: int,
+        clinic_id: str,
+        category: str,
+    ) -> None:
+        locale = _locale()
+        products = await care_commerce_service.list_catalog_products_by_category(clinic_id=clinic_id, category=category)
+        if not products:
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id="care",
+                text=i18n.t("patient.care.catalog.category.empty", locale),
+                keyboard=InlineKeyboardMarkup(
+                    inline_keyboard=[[InlineKeyboardButton(text=i18n.t("common.back", locale), callback_data="care:back:categories")]]
+                ),
+            )
+            return
+        lines = [
+            i18n.t("patient.care.catalog.products.title", locale).format(
+                category=await _category_label(category_code=category, locale=locale)
+            )
+        ]
+        rows: list[list[InlineKeyboardButton]] = []
+        for product in products[:8]:
+            content = await care_commerce_service.resolve_product_content(
+                clinic_id=clinic_id,
+                product=product,
+                locale=locale,
+                fallback_locale=locale,
+            )
+            title = content.title or i18n.t(product.title_key, locale)
+            short = content.short_label or await _category_label(category_code=product.category, locale=locale)
+            branch_id = _care_state(actor_id).selected_branch_by_product.get(product.care_product_id) or await _resolve_preferred_branch_for_product(
+                clinic_id=clinic_id,
+                product_id=product.care_product_id,
+            )
+            availability = (
+                await care_commerce_service.get_branch_product_availability(branch_id=branch_id, care_product_id=product.care_product_id)
+                if branch_id
+                else None
+            )
+            lines.append(
+                i18n.t("patient.care.catalog.products.item", locale).format(
+                    title=title,
+                    short_label=short,
+                    price=product.price_amount,
+                    currency=product.currency_code,
+                    availability=_availability_label(availability, locale=locale),
+                )
+            )
+            rows.append([InlineKeyboardButton(text=title[:48], callback_data=f"care:product:{product.care_product_id}")])
+        rows.append([InlineKeyboardButton(text=i18n.t("common.back", locale), callback_data="care:back:categories")])
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id="care",
+            text="\n".join(lines),
+            keyboard=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _render_product_card(
+        message: Message | CallbackQuery,
+        *,
+        actor_id: int,
+        clinic_id: str,
+        product_id: str,
+    ) -> None:
+        locale = _locale()
+        if care_commerce_service is None:
+            return
+        product = await care_commerce_service.repository.get_product(product_id)
+        if product is None or product.status != "active":
+            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id="care", text=i18n.t("patient.care.product.missing", locale))
+            return
+        state = _care_state(actor_id)
+        content = await care_commerce_service.resolve_product_content(clinic_id=clinic_id, product=product, locale=locale, fallback_locale=locale)
+        branch_id = state.selected_branch_by_product.get(product_id) or await _resolve_preferred_branch_for_product(clinic_id=clinic_id, product_id=product_id)
+        if branch_id:
+            state.selected_branch_by_product[product_id] = branch_id
+        availability = await care_commerce_service.get_branch_product_availability(branch_id=branch_id, care_product_id=product_id) if branch_id else None
+        branch = next((b for b in reference.list_branches(clinic_id) if b.branch_id == branch_id), None)
+        lines = [
+            i18n.t("patient.care.product.title", locale).format(title=(content.title or i18n.t(product.title_key, locale))),
+            i18n.t("patient.care.product.description", locale).format(description=(content.description or i18n.t("patient.care.product.description.empty", locale))),
+            i18n.t("patient.care.product.price", locale).format(price=product.price_amount, currency=product.currency_code),
+            i18n.t("patient.care.product.category", locale).format(category=await _category_label(category_code=product.category, locale=locale)),
+            i18n.t("patient.care.product.availability", locale).format(status=_availability_label(availability, locale=locale)),
+            i18n.t("patient.care.product.branch", locale).format(branch=(branch.display_name if branch else i18n.t("patient.care.product.branch.none", locale))),
+        ]
+        if content.usage_hint:
+            lines.append(i18n.t("patient.care.product.usage_hint", locale).format(usage_hint=content.usage_hint))
+        if state.recommendation_reason:
+            lines.append(i18n.t("patient.care.product.recommendation_context", locale).format(reason=state.recommendation_reason[:180]))
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=i18n.t("patient.care.product.reserve", locale), callback_data=f"care:reserve:{product_id}")],
+                [InlineKeyboardButton(text=i18n.t("patient.care.product.change_branch", locale), callback_data=f"care:branch:{product_id}")],
+                [InlineKeyboardButton(text=i18n.t("common.back", locale), callback_data=f"care:back:products:{state.selected_category or '-'}")],
+            ]
+        )
+        await _send_or_edit_panel(actor_id=actor_id, message=message, session_id="care", text="\n".join(lines), keyboard=keyboard)
+
+    async def _render_branch_picker(message: Message | CallbackQuery, *, actor_id: int, clinic_id: str, product_id: str) -> None:
+        locale = _locale()
+        if care_commerce_service is None:
+            return
+        branches = reference.list_branches(clinic_id)
+        rows: list[list[InlineKeyboardButton]] = []
+        for branch in branches[:10]:
+            availability = await care_commerce_service.get_branch_product_availability(branch_id=branch.branch_id, care_product_id=product_id)
+            label = i18n.t("patient.care.branch.option", locale).format(branch=branch.display_name, status=_availability_label(availability, locale=locale))
+            rows.append([InlineKeyboardButton(text=label[:62], callback_data=f"care:branch_select:{product_id}:{branch.branch_id}")])
+        rows.append([InlineKeyboardButton(text=i18n.t("common.back", locale), callback_data=f"care:product:{product_id}")])
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id="care",
+            text=i18n.t("patient.care.branch.prompt", locale),
+            keyboard=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _reserve_product(
+        message: Message | CallbackQuery,
+        *,
+        actor_id: int,
+        clinic_id: str,
+        patient_id: str,
+        product_id: str,
+        recommendation_id: str | None,
+    ) -> None:
+        locale = _locale()
+        if care_commerce_service is None:
+            return
+        product = await care_commerce_service.repository.get_product(product_id)
+        if product is None or product.status != "active":
+            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id="care", text=i18n.t("patient.care.product.missing", locale))
+            return
+        state = _care_state(actor_id)
+        branch_id = state.selected_branch_by_product.get(product_id) or await _resolve_preferred_branch_for_product(clinic_id=clinic_id, product_id=product_id)
+        if not branch_id:
+            await _render_branch_picker(message, actor_id=actor_id, clinic_id=clinic_id, product_id=product_id)
+            return
+        free_qty = await care_commerce_service.compute_free_qty(branch_id=branch_id, care_product_id=product_id)
+        if free_qty < 1:
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id="care",
+                text=i18n.t("patient.care.order.out_of_stock", locale).format(branch_id=branch_id, title=i18n.t(product.title_key, locale)),
+                keyboard=InlineKeyboardMarkup(
+                    inline_keyboard=[[InlineKeyboardButton(text=i18n.t("patient.care.product.change_branch", locale), callback_data=f"care:branch:{product_id}")]]
+                ),
+            )
+            return
+        order = await care_commerce_service.create_order(
+            clinic_id=clinic_id,
+            patient_id=patient_id,
+            payment_mode="pay_at_pickup",
+            currency_code=product.currency_code,
+            pickup_branch_id=branch_id,
+            recommendation_id=recommendation_id,
+            booking_id=None,
+            items=[(product, 1)],
+        )
+        await care_commerce_service.transition_order(care_order_id=order.care_order_id, to_status="confirmed")
+        reservation = await care_commerce_service.create_reservation(
+            care_order_id=order.care_order_id,
+            care_product_id=product.care_product_id,
+            branch_id=branch_id,
+            reserved_qty=1,
+        )
+        next_step = i18n.t("patient.care.order.next_step", locale)
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id="care",
+            text=i18n.t("patient.care.order.result", locale).format(
+                product=i18n.t(product.title_key, locale),
+                branch_id=branch_id,
+                status="confirmed",
+                reservation_status=reservation.status,
+                care_order_id=order.care_order_id,
+                next_step=next_step,
+            ),
+        )
 
     async def _send_or_edit_panel(
         *,
@@ -130,6 +401,21 @@ def make_router(
     @router.message(CommandStart())
     async def start(message: Message) -> None:
         await message.answer(i18n.t("role.patient.home", _locale()))
+
+    @router.message(Command("care"))
+    async def care_catalog(message: Message) -> None:
+        if not message.from_user or care_commerce_service is None:
+            return
+        clinic_id = _primary_clinic_id()
+        if clinic_id is None:
+            await message.answer(i18n.t("patient.booking.unavailable", _locale()))
+            return
+        state = _care_state(message.from_user.id)
+        state.selected_category = None
+        state.recommendation_id = None
+        state.recommendation_type = None
+        state.recommendation_reason = None
+        await _render_care_categories_panel(message, actor_id=message.from_user.id, clinic_id=clinic_id)
 
     async def _resolve_patient_id_for_user(telegram_user_id: int) -> str | None:
         clinic_id = _primary_clinic_id()
@@ -240,10 +526,21 @@ def make_router(
             recommendation_type=recommendation.recommendation_type,
             locale=_locale(),
         )
+        if resolution.status == "manual_target_invalid":
+            await message.answer(
+                i18n.t("patient.care.products.manual_target_invalid", _locale()).format(
+                    recommendation_id=recommendation.recommendation_id
+                )
+            )
+            return
         resolved = resolution.products
         if not resolved:
             await message.answer(i18n.t("patient.care.products.empty", _locale()))
             return
+        state = _care_state(message.from_user.id)
+        state.recommendation_id = recommendation.recommendation_id
+        state.recommendation_type = recommendation.recommendation_type
+        state.recommendation_reason = recommendation.rationale_text or recommendation.body_text
         lines = [i18n.t("patient.care.products.title", _locale())]
         rec_explanation = recommendation.rationale_text or recommendation.body_text
         if rec_explanation:
@@ -270,7 +567,22 @@ def make_router(
             explanation = item.explanation_text or content.justification_text
             if explanation:
                 lines.append(f"  · {explanation[:140]}")
+            lines.append(f"  /care_product_open {product.care_product_id}")
         await message.answer("\n".join(lines))
+
+    @router.message(Command("care_product_open"))
+    async def care_product_open(message: Message) -> None:
+        if not message.from_user or not message.text or care_commerce_service is None:
+            return
+        parts = message.text.split(maxsplit=1)
+        if len(parts) != 2:
+            await message.answer(i18n.t("patient.care.product.open.usage", _locale()))
+            return
+        clinic_id = _primary_clinic_id()
+        if clinic_id is None:
+            await message.answer(i18n.t("patient.booking.unavailable", _locale()))
+            return
+        await _render_product_card(message, actor_id=message.from_user.id, clinic_id=clinic_id, product_id=parts[1].strip())
 
     @router.message(Command("care_order_create"))
     async def care_order_create(message: Message) -> None:
@@ -349,7 +661,66 @@ def make_router(
         lines = [i18n.t("patient.care.orders.title", _locale())]
         for row in rows[:8]:
             lines.append(i18n.t("patient.care.orders.item", _locale()).format(care_order_id=row.care_order_id, status=row.status, amount=row.total_amount, currency=row.currency_code, branch_id=(row.pickup_branch_id or "-")))
+            lines.append(i18n.t("patient.care.orders.repeat.hint", _locale()).format(care_order_id=row.care_order_id))
         await message.answer("\n".join(lines))
+
+    @router.message(Command("care_order_repeat"))
+    async def care_order_repeat(message: Message) -> None:
+        if not message.from_user or not message.text or care_commerce_service is None:
+            return
+        parts = message.text.split(maxsplit=1)
+        if len(parts) != 2:
+            await message.answer(i18n.t("patient.care.orders.repeat.usage", _locale()))
+            return
+        clinic_id = _primary_clinic_id()
+        patient_id = await _resolve_patient_id_for_user(message.from_user.id)
+        if clinic_id is None or patient_id is None:
+            await message.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()))
+            return
+        source = await care_commerce_service.get_order(parts[1].strip())
+        if source is None or source.patient_id != patient_id:
+            await message.answer(i18n.t("patient.care.orders.repeat.not_found", _locale()))
+            return
+        items = await care_commerce_service.repository.list_order_items(source.care_order_id)
+        if not items:
+            await message.answer(i18n.t("patient.care.orders.repeat.not_found", _locale()))
+            return
+        first_item = items[0]
+        product = await care_commerce_service.repository.get_product(first_item.care_product_id)
+        if product is None or product.status != "active":
+            await message.answer(i18n.t("patient.care.orders.repeat.unavailable", _locale()))
+            return
+        branch_id = source.pickup_branch_id or await _resolve_preferred_branch_for_product(clinic_id=clinic_id, product_id=product.care_product_id)
+        if not branch_id:
+            await message.answer(i18n.t("patient.care.orders.repeat.branch_required", _locale()))
+            return
+        free_qty = await care_commerce_service.compute_free_qty(branch_id=branch_id, care_product_id=product.care_product_id)
+        if free_qty < first_item.quantity:
+            await message.answer(i18n.t("patient.care.orders.repeat.out_of_stock", _locale()).format(branch_id=branch_id))
+            return
+        order = await care_commerce_service.create_order(
+            clinic_id=clinic_id,
+            patient_id=patient_id,
+            payment_mode=source.payment_mode,
+            currency_code=source.currency_code,
+            pickup_branch_id=branch_id,
+            recommendation_id=None,
+            booking_id=None,
+            items=[(product, first_item.quantity)],
+        )
+        await care_commerce_service.transition_order(care_order_id=order.care_order_id, to_status="confirmed")
+        await care_commerce_service.create_reservation(
+            care_order_id=order.care_order_id,
+            care_product_id=product.care_product_id,
+            branch_id=branch_id,
+            reserved_qty=first_item.quantity,
+        )
+        await message.answer(
+            i18n.t("patient.care.orders.repeat.ok", _locale()).format(
+                care_order_id=order.care_order_id,
+                branch_id=branch_id,
+            )
+        )
 
     @router.message(Command("book"))
     async def book_entry(message: Message) -> None:
@@ -405,6 +776,94 @@ def make_router(
             clinic_id=session.clinic_id,
             branch_id=session.branch_id,
         )
+
+    @router.callback_query(F.data.startswith("care:cat:"))
+    async def care_category_pick(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        clinic_id = _primary_clinic_id()
+        if clinic_id is None or care_commerce_service is None:
+            return
+        category = callback.data.split(":", 2)[2]
+        state = _care_state(callback.from_user.id)
+        state.selected_category = category
+        await _render_care_product_list(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, category=category)
+
+    @router.callback_query(F.data.startswith("care:product:"))
+    async def care_product_pick(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        clinic_id = _primary_clinic_id()
+        if clinic_id is None:
+            return
+        product_id = callback.data.split(":", 2)[2]
+        await _render_product_card(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, product_id=product_id)
+
+    @router.callback_query(F.data.startswith("care:branch:"))
+    async def care_branch_pick(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        clinic_id = _primary_clinic_id()
+        if clinic_id is None:
+            return
+        product_id = callback.data.split(":", 2)[2]
+        await _render_branch_picker(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, product_id=product_id)
+
+    @router.callback_query(F.data.startswith("care:branch_select:"))
+    async def care_branch_selected(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        clinic_id = _primary_clinic_id()
+        if clinic_id is None:
+            return
+        _, _, _, product_id, branch_id = callback.data.split(":", 4)
+        _care_state(callback.from_user.id).selected_branch_by_product[product_id] = branch_id
+        await _render_product_card(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, product_id=product_id)
+
+    @router.callback_query(F.data.startswith("care:reserve:"))
+    async def care_reserve_pick(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        clinic_id = _primary_clinic_id()
+        if clinic_id is None:
+            return
+        patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
+        if not patient_id:
+            await callback.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()), show_alert=True)
+            return
+        product_id = callback.data.split(":", 2)[2]
+        rec_id = _care_state(callback.from_user.id).recommendation_id
+        await _reserve_product(
+            callback,
+            actor_id=callback.from_user.id,
+            clinic_id=clinic_id,
+            patient_id=patient_id,
+            product_id=product_id,
+            recommendation_id=rec_id,
+        )
+
+    @router.callback_query(F.data.startswith("care:back:categories"))
+    async def care_back_categories(callback: CallbackQuery) -> None:
+        if not callback.from_user:
+            return
+        clinic_id = _primary_clinic_id()
+        if clinic_id is None:
+            return
+        await _render_care_categories_panel(callback, actor_id=callback.from_user.id, clinic_id=clinic_id)
+
+    @router.callback_query(F.data.startswith("care:back:products:"))
+    async def care_back_products(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        clinic_id = _primary_clinic_id()
+        if clinic_id is None:
+            return
+        category = callback.data.split(":", 3)[3]
+        chosen = _care_state(callback.from_user.id).selected_category if category == "-" else category
+        if not chosen:
+            await _render_care_categories_panel(callback, actor_id=callback.from_user.id, clinic_id=clinic_id)
+            return
+        await _render_care_product_list(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, category=chosen)
 
     @router.callback_query(F.data.startswith("book:doc:"))
     async def select_doctor_preference(callback: CallbackQuery) -> None:
