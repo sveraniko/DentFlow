@@ -307,7 +307,7 @@ def make_router(
             return
         lines = [i18n.t("admin.care.orders.title", locale)]
         for row in rows:
-            lines.append(i18n.t("admin.care.orders.item", locale).format(care_order_id=row.care_order_id, patient_id=row.patient_id, status=row.status, amount=row.total_amount, currency=row.currency_code))
+            lines.append(i18n.t("admin.care.orders.item", locale).format(care_order_id=row.care_order_id, patient_id=row.patient_id, status=row.status, amount=row.total_amount, currency=row.currency_code, branch_id=(row.pickup_branch_id or "-")))
         await message.answer("\n".join(lines))
 
     @router.message(Command("care_order_action"))
@@ -333,6 +333,8 @@ def make_router(
                 existing = await care_commerce_service.get_order(care_order_id)
                 if existing is not None and existing.pickup_branch_id is None:
                     error_key = "admin.care.order.action.pickup_branch_required"
+                else:
+                    error_key = "admin.care.order.action.insufficient_stock"
             await message.answer(i18n.t(error_key, locale))
             return
         if updated is None:

@@ -19,6 +19,7 @@ CARE_ORDER_STATUSES = frozenset(
     }
 )
 CARE_RESERVATION_STATUSES = frozenset({"created", "active", "released", "consumed", "expired"})
+BRANCH_PRODUCT_AVAILABILITY_STATUSES = frozenset({"active", "inactive", "unavailable"})
 
 
 @dataclass(frozen=True)
@@ -99,3 +100,20 @@ class CareReservation:
     updated_at: datetime
     released_at: datetime | None
     consumed_at: datetime | None
+
+
+@dataclass(frozen=True)
+class BranchProductAvailability:
+    branch_product_availability_id: str
+    clinic_id: str
+    branch_id: str
+    care_product_id: str
+    available_qty: int
+    reserved_qty: int
+    status: str
+    updated_at: datetime
+    created_at: datetime
+
+    @property
+    def free_qty(self) -> int:
+        return max(0, self.available_qty - self.reserved_qty)
