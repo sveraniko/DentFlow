@@ -113,3 +113,12 @@ def test_stack8a_runtime_event_tables_declared() -> None:
     assert "CREATE TABLE IF NOT EXISTS system_runtime.event_outbox" in ddl
     assert "CREATE TABLE IF NOT EXISTS system_runtime.projector_checkpoints" in ddl
     assert "CREATE TABLE IF NOT EXISTS analytics_raw.event_ledger" in ddl
+
+
+def test_stack9a_owner_projection_tables_declared() -> None:
+    ddl = "\n".join(db_bootstrap.STACK1_TABLES)
+    assert "CREATE TABLE IF NOT EXISTS owner_views.daily_clinic_metrics" in ddl
+    assert "CREATE TABLE IF NOT EXISTS owner_views.daily_doctor_metrics" in ddl
+    assert "CREATE TABLE IF NOT EXISTS owner_views.daily_service_metrics" in ddl
+    assert "CREATE TABLE IF NOT EXISTS owner_views.owner_alerts" in ddl
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_owner_alerts_open_dedupe" in ddl

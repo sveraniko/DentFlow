@@ -20,6 +20,7 @@ from app.application.booking import (
     WaitlistService,
 )
 from app.application.clinic_reference import ClinicReferenceService
+from app.application.owner import OwnerAnalyticsService
 from app.application.clinical import ClinicalChartService
 from app.application.communication import BookingReminderPlanner, BookingReminderService, ReminderActionService
 from app.application.policy import PolicyResolver
@@ -112,6 +113,7 @@ class RuntimeRegistry:
             booking_orchestration=self.booking_orchestration_service,
         )
         self.voice_mode_store = VoiceSearchModeStore()
+        self.owner_analytics_service = OwnerAnalyticsService(settings.db)
         stt_provider = build_speech_to_text_provider(settings.stt)
         self.speech_to_text_service = SpeechToTextService(
             provider=stt_provider,
@@ -185,7 +187,14 @@ class RuntimeRegistry:
                 voice_mode_ttl_sec=self.settings.stt.mode_ttl_sec,
             )
         )
-        dispatcher.include_router(make_owner_router(self.i18n, self.access_resolver, default_locale=self.settings.app.default_locale))
+        dispatcher.include_router(
+            make_owner_router(
+                self.i18n,
+                self.access_resolver,
+                analytics=self.owner_analytics_service,
+                default_locale=self.settings.app.default_locale,
+            )
+        )
         return dispatcher
 
 
