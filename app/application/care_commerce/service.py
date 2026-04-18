@@ -5,7 +5,14 @@ from datetime import datetime, timezone
 from typing import ClassVar, Protocol
 from uuid import uuid4
 
-from app.domain.care_commerce import CareOrder, CareOrderItem, CareProduct, CareReservation, RecommendationProductLink
+from app.domain.care_commerce import (
+    BranchProductAvailability,
+    CareOrder,
+    CareOrderItem,
+    CareProduct,
+    CareReservation,
+    RecommendationProductLink,
+)
 
 _ORDER_TRANSITIONS: dict[str, set[str]] = {
     "created": {"awaiting_confirmation", "confirmed", "awaiting_payment", "canceled", "expired"},
@@ -36,6 +43,16 @@ class CareCommerceRepository(Protocol):
     async def create_reservation(self, reservation: CareReservation) -> CareReservation: ...
     async def save_reservation(self, reservation: CareReservation) -> CareReservation: ...
     async def list_reservations_for_order(self, *, care_order_id: str) -> list[CareReservation]: ...
+    async def get_branch_product_availability(self, *, branch_id: str, care_product_id: str) -> BranchProductAvailability | None: ...
+    async def upsert_branch_product_availability(self, availability: BranchProductAvailability) -> BranchProductAvailability: ...
+
+
+@dataclass(frozen=True)
+class ReservationOutcome:
+    ok: bool
+    reason: str | None
+    reservation: CareReservation | None
+    availability: BranchProductAvailability | None
 
 
 @dataclass(slots=True)
@@ -187,6 +204,40 @@ class CareCommerceService:
     async def list_admin_orders(self, *, clinic_id: str, statuses: tuple[str, ...], limit: int = 30) -> list[CareOrder]:
         return await self.repository.list_orders_for_admin(clinic_id=clinic_id, statuses=statuses, limit=limit)
 
+    async def set_branch_product_availability(
+        self,
+        *,
+        clinic_id: str,
+        branch_id: str,
+        care_product_id: str,
+        available_qty: int,
+        reserved_qty: int = 0,
+        status: str = "active",
+    ) -> BranchProductAvailability:
+        existing = await self.repository.get_branch_product_availability(branch_id=branch_id, care_product_id=care_product_id)
+        now = datetime.now(timezone.utc)
+        availability = BranchProductAvailability(
+            branch_product_availability_id=(existing.branch_product_availability_id if existing else f"bpa_{uuid4().hex[:16]}"),
+            clinic_id=clinic_id,
+            branch_id=branch_id,
+            care_product_id=care_product_id,
+            available_qty=max(0, available_qty),
+            reserved_qty=max(0, reserved_qty),
+            status=status,
+            created_at=(existing.created_at if existing else now),
+            updated_at=now,
+        )
+        return await self.repository.upsert_branch_product_availability(availability)
+
+    async def get_branch_product_availability(self, *, branch_id: str, care_product_id: str) -> BranchProductAvailability | None:
+        return await self.repository.get_branch_product_availability(branch_id=branch_id, care_product_id=care_product_id)
+
+    async def compute_free_qty(self, *, branch_id: str, care_product_id: str) -> int:
+        row = await self.repository.get_branch_product_availability(branch_id=branch_id, care_product_id=care_product_id)
+        if row is None or row.status != "active":
+            return 0
+        return row.free_qty
+
     async def create_reservation(
         self,
         *,
@@ -196,6 +247,34 @@ class CareCommerceService:
         reserved_qty: int,
         expires_at: datetime | None = None,
     ) -> CareReservation:
+        outcome = await self.reserve_if_available(
+            care_order_id=care_order_id,
+            care_product_id=care_product_id,
+            branch_id=branch_id,
+            reserved_qty=reserved_qty,
+            expires_at=expires_at,
+        )
+        if not outcome.ok or outcome.reservation is None:
+            raise ValueError(outcome.reason or "reservation_failed")
+        return outcome.reservation
+
+    async def reserve_if_available(
+        self,
+        *,
+        care_order_id: str,
+        care_product_id: str,
+        branch_id: str,
+        reserved_qty: int,
+        expires_at: datetime | None = None,
+    ) -> ReservationOutcome:
+        row = await self.repository.get_branch_product_availability(branch_id=branch_id, care_product_id=care_product_id)
+        if row is None:
+            return ReservationOutcome(ok=False, reason="availability_missing", reservation=None, availability=None)
+        if row.status != "active":
+            return ReservationOutcome(ok=False, reason="availability_inactive", reservation=None, availability=row)
+        if row.free_qty < reserved_qty:
+            return ReservationOutcome(ok=False, reason="insufficient_stock", reservation=None, availability=row)
+
         now = datetime.now(timezone.utc)
         reservation = CareReservation(
             care_reservation_id=f"cres_{uuid4().hex[:16]}",
@@ -210,7 +289,10 @@ class CareCommerceService:
             released_at=None,
             consumed_at=None,
         )
-        return await self.repository.create_reservation(reservation)
+        updated = BranchProductAvailability(**{**row.__dict__, "reserved_qty": row.reserved_qty + reserved_qty, "updated_at": now})
+        saved_reservation = await self.repository.create_reservation(reservation)
+        saved_availability = await self.repository.upsert_branch_product_availability(updated)
+        return ReservationOutcome(ok=True, reason=None, reservation=saved_reservation, availability=saved_availability)
 
     async def release_reservation(self, *, care_reservation_id: str, care_order_id: str) -> CareReservation | None:
         rows = await self.repository.list_reservations_for_order(care_order_id=care_order_id)
@@ -218,7 +300,11 @@ class CareCommerceService:
         if current is None:
             return None
         now = datetime.now(timezone.utc)
-        return await self.repository.save_reservation(CareReservation(**{**current.__dict__, "status": "released", "updated_at": now, "released_at": now}))
+        released = await self.repository.save_reservation(
+            CareReservation(**{**current.__dict__, "status": "released", "updated_at": now, "released_at": now})
+        )
+        await self._adjust_reservation_stock(branch_id=current.branch_id, care_product_id=current.care_product_id, qty=current.reserved_qty, consume=False)
+        return released
 
     async def consume_reservation(self, *, care_reservation_id: str, care_order_id: str) -> CareReservation | None:
         rows = await self.repository.list_reservations_for_order(care_order_id=care_order_id)
@@ -226,7 +312,11 @@ class CareCommerceService:
         if current is None:
             return None
         now = datetime.now(timezone.utc)
-        return await self.repository.save_reservation(CareReservation(**{**current.__dict__, "status": "consumed", "updated_at": now, "consumed_at": now}))
+        consumed = await self.repository.save_reservation(
+            CareReservation(**{**current.__dict__, "status": "consumed", "updated_at": now, "consumed_at": now})
+        )
+        await self._adjust_reservation_stock(branch_id=current.branch_id, care_product_id=current.care_product_id, qty=current.reserved_qty, consume=True)
+        return consumed
 
     async def apply_admin_order_action(self, *, care_order_id: str, action: str) -> CareOrder | None:
         target = self._ADMIN_ACTION_TARGETS.get(action)
@@ -239,6 +329,7 @@ class CareCommerceService:
         if action == "ready":
             if not order.pickup_branch_id:
                 raise ValueError("pickup_branch_required")
+            await self._assert_order_stock_available(order)
             updated = await self.transition_order(care_order_id=care_order_id, to_status=target)
             if updated is None:
                 return None
@@ -271,12 +362,29 @@ class CareCommerceService:
         for item in items:
             missing_qty = item.quantity - existing_by_product.get(item.care_product_id, 0)
             if missing_qty > 0:
-                await self.create_reservation(
+                outcome = await self.reserve_if_available(
                     care_order_id=order.care_order_id,
                     care_product_id=item.care_product_id,
                     branch_id=order.pickup_branch_id or "",
                     reserved_qty=missing_qty,
                 )
+                if not outcome.ok:
+                    raise ValueError(outcome.reason or "reservation_failed")
+
+    async def _assert_order_stock_available(self, order: CareOrder) -> None:
+        items = await self.repository.list_order_items(order.care_order_id)
+        existing = await self.repository.list_reservations_for_order(care_order_id=order.care_order_id)
+        already_reserved: dict[str, int] = {}
+        for row in existing:
+            if row.status == "created":
+                already_reserved[row.care_product_id] = already_reserved.get(row.care_product_id, 0) + row.reserved_qty
+        for item in items:
+            needed = max(0, item.quantity - already_reserved.get(item.care_product_id, 0))
+            if needed == 0:
+                continue
+            free_qty = await self.compute_free_qty(branch_id=order.pickup_branch_id or "", care_product_id=item.care_product_id)
+            if free_qty < needed:
+                raise ValueError("insufficient_stock")
 
     async def _consume_active_reservations(self, *, care_order_id: str) -> None:
         rows = await self.repository.list_reservations_for_order(care_order_id=care_order_id)
@@ -289,3 +397,16 @@ class CareCommerceService:
         for row in rows:
             if row.status == "created":
                 await self.release_reservation(care_reservation_id=row.care_reservation_id, care_order_id=care_order_id)
+
+    async def _adjust_reservation_stock(self, *, branch_id: str, care_product_id: str, qty: int, consume: bool) -> None:
+        row = await self.repository.get_branch_product_availability(branch_id=branch_id, care_product_id=care_product_id)
+        if row is None:
+            return
+        now = datetime.now(timezone.utc)
+        next_reserved = max(0, row.reserved_qty - qty)
+        next_available = max(0, row.available_qty - qty) if consume else row.available_qty
+        await self.repository.upsert_branch_product_availability(
+            BranchProductAvailability(
+                **{**row.__dict__, "reserved_qty": next_reserved, "available_qty": next_available, "updated_at": now}
+            )
+        )

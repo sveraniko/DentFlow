@@ -5,7 +5,7 @@ from typing import Any
 
 from sqlalchemy import bindparam, text
 
-from app.domain.care_commerce import CareOrder, CareOrderItem, CareProduct, CareReservation, RecommendationProductLink
+from app.domain.care_commerce import BranchProductAvailability, CareOrder, CareOrderItem, CareProduct, CareReservation, RecommendationProductLink
 from app.domain.events import build_event
 from app.infrastructure.db.engine import create_engine
 from app.infrastructure.outbox.repository import OutboxRepository
@@ -26,6 +26,13 @@ _RES_EVENT_BY_STATUS = {
     "released": "care_reservation.released",
     "expired": "care_reservation.expired",
     "consumed": "care_reservation.consumed",
+}
+
+
+_AVAILABILITY_EVENT_BY_STATUS = {
+    "active": "care_availability.updated",
+    "inactive": "care_availability.updated",
+    "unavailable": "care_availability.updated",
 }
 
 
@@ -314,6 +321,46 @@ class DbCareCommerceRepository:
         rows = await _fetch_all(self._db_config, "SELECT * FROM care_commerce.care_reservations WHERE care_order_id=:id ORDER BY created_at ASC", {"id": care_order_id})
         return [CareReservation(**row) for row in rows]
 
+    async def get_branch_product_availability(self, *, branch_id: str, care_product_id: str) -> BranchProductAvailability | None:
+        row = await _fetch_one(
+            self._db_config,
+            """
+            SELECT * FROM care_commerce.branch_product_availability
+            WHERE branch_id=:branch_id AND care_product_id=:care_product_id
+            """,
+            {"branch_id": branch_id, "care_product_id": care_product_id},
+        )
+        return BranchProductAvailability(**row) if row else None
+
+    async def upsert_branch_product_availability(self, availability: BranchProductAvailability) -> BranchProductAvailability:
+        engine = create_engine(self._db_config)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO care_commerce.branch_product_availability (
+                          branch_product_availability_id, clinic_id, branch_id, care_product_id,
+                          available_qty, reserved_qty, status, updated_at, created_at
+                        ) VALUES (
+                          :branch_product_availability_id, :clinic_id, :branch_id, :care_product_id,
+                          :available_qty, :reserved_qty, :status, :updated_at, :created_at
+                        )
+                        ON CONFLICT (branch_id, care_product_id) DO UPDATE SET
+                          clinic_id=EXCLUDED.clinic_id,
+                          available_qty=EXCLUDED.available_qty,
+                          reserved_qty=EXCLUDED.reserved_qty,
+                          status=EXCLUDED.status,
+                          updated_at=EXCLUDED.updated_at
+                        """
+                    ),
+                    asdict(availability),
+                )
+                await self._append_availability_event(conn, availability)
+            return availability
+        finally:
+            await engine.dispose()
+
     async def _append_order_event(self, conn, order: CareOrder) -> None:
         event_name = _ORDER_EVENT_BY_STATUS.get(order.status)
         if not event_name:
@@ -345,6 +392,29 @@ class DbCareCommerceRepository:
                 entity_id=reservation.care_reservation_id,
                 occurred_at=reservation.updated_at,
                 payload={"care_order_id": reservation.care_order_id, "care_product_id": reservation.care_product_id, "status": reservation.status},
+            ),
+        )
+
+    async def _append_availability_event(self, conn, availability: BranchProductAvailability) -> None:
+        event_name = _AVAILABILITY_EVENT_BY_STATUS.get(availability.status)
+        if not event_name:
+            return
+        await OutboxRepository(self._db_config).append_on_connection(
+            conn,
+            build_event(
+                event_name=event_name,
+                producer_context="care_commerce.availability",
+                clinic_id=availability.clinic_id,
+                entity_type="branch_product_availability",
+                entity_id=availability.branch_product_availability_id,
+                occurred_at=availability.updated_at,
+                payload={
+                    "branch_id": availability.branch_id,
+                    "care_product_id": availability.care_product_id,
+                    "available_qty": availability.available_qty,
+                    "reserved_qty": availability.reserved_qty,
+                    "status": availability.status,
+                },
             ),
         )
 

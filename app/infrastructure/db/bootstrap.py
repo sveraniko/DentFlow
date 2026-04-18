@@ -899,6 +899,24 @@ STACK1_TABLES: tuple[str, ...] = (
     ON care_commerce.care_reservations (care_order_id, status, created_at)
     """,
     """
+    CREATE TABLE IF NOT EXISTS care_commerce.branch_product_availability (
+      branch_product_availability_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      branch_id TEXT NOT NULL REFERENCES core_reference.branches(branch_id) ON DELETE CASCADE,
+      care_product_id TEXT NOT NULL REFERENCES care_commerce.products(care_product_id) ON DELETE CASCADE,
+      available_qty INTEGER NOT NULL DEFAULT 0 CHECK (available_qty >= 0),
+      reserved_qty INTEGER NOT NULL DEFAULT 0 CHECK (reserved_qty >= 0),
+      status TEXT NOT NULL DEFAULT 'active',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(branch_id, care_product_id)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_branch_product_availability_branch_status
+    ON care_commerce.branch_product_availability (branch_id, status, updated_at DESC)
+    """,
+    """
     CREATE TABLE IF NOT EXISTS policy_config.feature_flags (
       feature_flag_id TEXT PRIMARY KEY,
       scope_type TEXT NOT NULL,

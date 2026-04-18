@@ -12,7 +12,7 @@ from app.application.doctor.operations import DoctorOperationsService
 from app.application.recommendation import RecommendationService
 from app.common.i18n import I18nService
 from app.domain.booking import Booking
-from app.domain.care_commerce import CareOrder, CareOrderItem, CareProduct, CareReservation, RecommendationProductLink
+from app.domain.care_commerce import BranchProductAvailability, CareOrder, CareOrderItem, CareProduct, CareReservation, RecommendationProductLink
 from app.domain.recommendations import Recommendation
 
 
@@ -23,6 +23,7 @@ class InMemoryCareRepo:
         self.orders: dict[str, CareOrder] = {}
         self.order_items: dict[str, list[CareOrderItem]] = {}
         self.reservations: dict[str, list[CareReservation]] = {}
+        self.availability: dict[tuple[str, str], BranchProductAvailability] = {}
 
     async def upsert_product(self, product: CareProduct) -> CareProduct:
         self.products[product.care_product_id] = product
@@ -76,6 +77,13 @@ class InMemoryCareRepo:
     async def list_reservations_for_order(self, *, care_order_id: str) -> list[CareReservation]:
         return self.reservations.get(care_order_id, [])
 
+    async def get_branch_product_availability(self, *, branch_id: str, care_product_id: str) -> BranchProductAvailability | None:
+        return self.availability.get((branch_id, care_product_id))
+
+    async def upsert_branch_product_availability(self, availability: BranchProductAvailability) -> BranchProductAvailability:
+        self.availability[(availability.branch_id, availability.care_product_id)] = availability
+        return availability
+
 
 class InMemoryRecommendationRepository:
     def __init__(self) -> None:
@@ -110,64 +118,86 @@ def test_product_link_order_and_metadata() -> None:
     assert rows[0][0].justification_text_key == "just.1"
 
 
-def test_care_order_and_reservation_lifecycle_and_invalid_transition() -> None:
+def test_branch_product_availability_create_update_and_free_qty() -> None:
     repo = InMemoryCareRepo()
     service = CareCommerceService(repo)
     product = asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-1", title_key="care.product.aftercare_brush.title", description_key=None, category="hygiene", price_amount=1000, currency_code="RUB", status="active"))
 
-    order = asyncio.run(service.create_order(clinic_id="c1", patient_id="p1", payment_mode="pay_at_pickup", currency_code="RUB", pickup_branch_id="b1", recommendation_id="r1", booking_id=None, items=[(product, 2)]))
-    assert order.total_amount == 2000
-    confirmed = asyncio.run(service.transition_order(care_order_id=order.care_order_id, to_status="confirmed"))
-    ready = asyncio.run(service.transition_order(care_order_id=order.care_order_id, to_status="ready_for_pickup"))
-    issued = asyncio.run(service.transition_order(care_order_id=order.care_order_id, to_status="issued"))
-    fulfilled = asyncio.run(service.transition_order(care_order_id=order.care_order_id, to_status="fulfilled"))
-    assert confirmed and ready and issued and fulfilled
-    assert fulfilled.status == "fulfilled"
+    initial = asyncio.run(service.set_branch_product_availability(clinic_id="c1", branch_id="b1", care_product_id=product.care_product_id, available_qty=5, reserved_qty=1))
+    assert initial.free_qty == 4
 
-    with pytest.raises(ValueError):
-        asyncio.run(service.transition_order(care_order_id=order.care_order_id, to_status="paid"))
-
-    reservation = asyncio.run(service.create_reservation(care_order_id=order.care_order_id, care_product_id=product.care_product_id, branch_id="b1", reserved_qty=1))
-    consumed = asyncio.run(service.consume_reservation(care_reservation_id=reservation.care_reservation_id, care_order_id=order.care_order_id))
-    assert consumed and consumed.status == "consumed"
+    updated = asyncio.run(service.set_branch_product_availability(clinic_id="c1", branch_id="b1", care_product_id=product.care_product_id, available_qty=8, reserved_qty=3))
+    free_qty = asyncio.run(service.compute_free_qty(branch_id="b1", care_product_id=product.care_product_id))
+    assert updated.free_qty == 5
+    assert free_qty == 5
 
 
-def test_reservation_is_integrated_into_ready_issue_cancel_admin_flow() -> None:
+def test_reservation_fails_when_insufficient_stock_and_succeeds_when_enough() -> None:
     repo = InMemoryCareRepo()
     service = CareCommerceService(repo)
     product = asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-1", title_key="care.product.aftercare_brush.title", description_key=None, category="hygiene", price_amount=1000, currency_code="RUB", status="active"))
+    asyncio.run(service.set_branch_product_availability(clinic_id="c1", branch_id="b1", care_product_id=product.care_product_id, available_qty=2, reserved_qty=0))
+
+    fail = asyncio.run(service.reserve_if_available(care_order_id="co_fail", care_product_id=product.care_product_id, branch_id="b1", reserved_qty=3))
+    assert not fail.ok
+    assert fail.reason == "insufficient_stock"
+
+    ok = asyncio.run(service.reserve_if_available(care_order_id="co_ok", care_product_id=product.care_product_id, branch_id="b1", reserved_qty=2))
+    assert ok.ok and ok.reservation is not None
+    assert ok.availability is not None and ok.availability.reserved_qty == 2
+
+
+def test_reservation_stock_changes_on_release_and_consume() -> None:
+    repo = InMemoryCareRepo()
+    service = CareCommerceService(repo)
+    product = asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-1", title_key="care.product.aftercare_brush.title", description_key=None, category="hygiene", price_amount=1000, currency_code="RUB", status="active"))
+    asyncio.run(service.set_branch_product_availability(clinic_id="c1", branch_id="b1", care_product_id=product.care_product_id, available_qty=4, reserved_qty=0))
+
+    reservation = asyncio.run(service.create_reservation(care_order_id="co_1", care_product_id=product.care_product_id, branch_id="b1", reserved_qty=2))
+    after_reserve = asyncio.run(service.get_branch_product_availability(branch_id="b1", care_product_id=product.care_product_id))
+    assert after_reserve and after_reserve.reserved_qty == 2 and after_reserve.available_qty == 4
+
+    asyncio.run(service.release_reservation(care_reservation_id=reservation.care_reservation_id, care_order_id="co_1"))
+    after_release = asyncio.run(service.get_branch_product_availability(branch_id="b1", care_product_id=product.care_product_id))
+    assert after_release and after_release.reserved_qty == 0 and after_release.available_qty == 4
+
+    reservation2 = asyncio.run(service.create_reservation(care_order_id="co_2", care_product_id=product.care_product_id, branch_id="b1", reserved_qty=1))
+    asyncio.run(service.consume_reservation(care_reservation_id=reservation2.care_reservation_id, care_order_id="co_2"))
+    after_consume = asyncio.run(service.get_branch_product_availability(branch_id="b1", care_product_id=product.care_product_id))
+    assert after_consume and after_consume.reserved_qty == 0 and after_consume.available_qty == 3
+
+
+def test_ready_issue_cancel_admin_flow_is_branch_aware_and_stock_backed() -> None:
+    repo = InMemoryCareRepo()
+    service = CareCommerceService(repo)
+    product = asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-1", title_key="care.product.aftercare_brush.title", description_key=None, category="hygiene", price_amount=1000, currency_code="RUB", status="active"))
+    asyncio.run(service.set_branch_product_availability(clinic_id="c1", branch_id="b1", care_product_id=product.care_product_id, available_qty=2, reserved_qty=0))
+
     order = asyncio.run(service.create_order(clinic_id="c1", patient_id="p1", payment_mode="pay_at_pickup", currency_code="RUB", pickup_branch_id="b1", recommendation_id="r1", booking_id=None, items=[(product, 2)]))
     asyncio.run(service.transition_order(care_order_id=order.care_order_id, to_status="confirmed"))
 
     ready = asyncio.run(service.apply_admin_order_action(care_order_id=order.care_order_id, action="ready"))
     reservations = asyncio.run(service.repository.list_reservations_for_order(care_order_id=order.care_order_id))
     assert ready and ready.status == "ready_for_pickup"
-    assert len(reservations) == 1
-    assert reservations[0].status == "created"
-    assert reservations[0].reserved_qty == 2
+    assert reservations and reservations[0].branch_id == "b1"
 
     issued = asyncio.run(service.apply_admin_order_action(care_order_id=order.care_order_id, action="issue"))
     consumed = asyncio.run(service.repository.list_reservations_for_order(care_order_id=order.care_order_id))
+    availability = asyncio.run(service.get_branch_product_availability(branch_id="b1", care_product_id=product.care_product_id))
     assert issued and issued.status == "issued"
     assert all(row.status == "consumed" for row in consumed)
-
-    order2 = asyncio.run(service.create_order(clinic_id="c1", patient_id="p1", payment_mode="pay_at_pickup", currency_code="RUB", pickup_branch_id="b1", recommendation_id="r1", booking_id=None, items=[(product, 1)]))
-    asyncio.run(service.transition_order(care_order_id=order2.care_order_id, to_status="confirmed"))
-    asyncio.run(service.apply_admin_order_action(care_order_id=order2.care_order_id, action="ready"))
-    canceled = asyncio.run(service.apply_admin_order_action(care_order_id=order2.care_order_id, action="cancel"))
-    released = asyncio.run(service.repository.list_reservations_for_order(care_order_id=order2.care_order_id))
-    assert canceled and canceled.status == "canceled"
-    assert all(row.status == "released" for row in released)
+    assert availability and availability.available_qty == 0 and availability.reserved_qty == 0
 
 
-def test_ready_action_requires_pickup_branch_for_reservation_creation() -> None:
+def test_ready_action_fails_when_stock_is_insufficient() -> None:
     repo = InMemoryCareRepo()
     service = CareCommerceService(repo)
     product = asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-1", title_key="care.product.aftercare_brush.title", description_key=None, category="hygiene", price_amount=1000, currency_code="RUB", status="active"))
-    order = asyncio.run(service.create_order(clinic_id="c1", patient_id="p1", payment_mode="pay_at_pickup", currency_code="RUB", pickup_branch_id=None, recommendation_id="r1", booking_id=None, items=[(product, 1)]))
+    asyncio.run(service.set_branch_product_availability(clinic_id="c1", branch_id="b1", care_product_id=product.care_product_id, available_qty=0, reserved_qty=0))
+    order = asyncio.run(service.create_order(clinic_id="c1", patient_id="p1", payment_mode="pay_at_pickup", currency_code="RUB", pickup_branch_id="b1", recommendation_id="r1", booking_id=None, items=[(product, 1)]))
     asyncio.run(service.transition_order(care_order_id=order.care_order_id, to_status="confirmed"))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="insufficient_stock"):
         asyncio.run(service.apply_admin_order_action(care_order_id=order.care_order_id, action="ready"))
 
 

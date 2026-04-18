@@ -45,10 +45,6 @@ def make_router(
         clinics = list(reference.repository.clinics.values())
         return clinics[0].clinic_id if clinics else None
 
-    def _default_pickup_branch_id(clinic_id: str) -> str | None:
-        branches = reference.list_branches(clinic_id)
-        return branches[0].branch_id if branches else None
-
     async def _send_or_edit_panel(
         *,
         actor_id: int,
@@ -196,8 +192,8 @@ def make_router(
     async def recommendations_action(message: Message) -> None:
         if not message.from_user or not message.text or recommendation_service is None:
             return
-        parts = message.text.split(maxsplit=2)
-        if len(parts) != 3:
+        parts = message.text.split(maxsplit=3)
+        if len(parts) != 4:
             await message.answer(i18n.t("patient.recommendations.action.usage", _locale()))
             return
         action = parts[1].strip()
@@ -244,18 +240,18 @@ def make_router(
             return
         lines = [i18n.t("patient.care.products.title", _locale())]
         for link, product in rows:
-            lines.append(i18n.t("patient.care.products.item", _locale()).format(product_id=product.care_product_id, title=i18n.t(product.title_key, _locale()), price=product.price_amount, currency=product.currency_code, rank=link.relevance_rank))
+            lines.append(i18n.t("patient.care.products.item", _locale()).format(recommendation_id=link.recommendation_id, product_id=product.care_product_id, title=i18n.t(product.title_key, _locale()), price=product.price_amount, currency=product.currency_code, rank=link.relevance_rank))
         await message.answer("\n".join(lines))
 
     @router.message(Command("care_order_create"))
     async def care_order_create(message: Message) -> None:
         if not message.from_user or not message.text or recommendation_service is None or care_commerce_service is None:
             return
-        parts = message.text.split(maxsplit=2)
-        if len(parts) != 3:
+        parts = message.text.split(maxsplit=3)
+        if len(parts) != 4:
             await message.answer(i18n.t("patient.care.order.create.usage", _locale()))
             return
-        recommendation_id, care_product_id = parts[1], parts[2]
+        recommendation_id, care_product_id, pickup_branch_id = parts[1], parts[2], parts[3]
         patient_id = await _resolve_patient_id_for_user(message.from_user.id)
         clinic_id = _primary_clinic_id()
         if not patient_id or clinic_id is None:
@@ -265,23 +261,36 @@ def make_router(
         if recommendation is None or recommendation.patient_id != patient_id:
             await message.answer(i18n.t("patient.recommendations.not_found", _locale()))
             return
+        branches = reference.list_branches(clinic_id)
+        if not any(branch.branch_id == pickup_branch_id for branch in branches):
+            await message.answer(i18n.t("patient.care.order.branch_invalid", _locale()))
+            return
         linked = await care_commerce_service.list_products_by_recommendation(recommendation_id=recommendation_id)
         match = next((product for _, product in linked if product.care_product_id == care_product_id), None)
         if match is None:
             await message.answer(i18n.t("patient.care.order.product_not_linked", _locale()))
+            return
+        free_qty = await care_commerce_service.compute_free_qty(branch_id=pickup_branch_id, care_product_id=match.care_product_id)
+        if free_qty < 1:
+            await message.answer(
+                i18n.t("patient.care.order.out_of_stock", _locale()).format(
+                    branch_id=pickup_branch_id,
+                    title=i18n.t(match.title_key, _locale()),
+                )
+            )
             return
         order = await care_commerce_service.create_order(
             clinic_id=clinic_id,
             patient_id=patient_id,
             payment_mode="pay_at_pickup",
             currency_code=match.currency_code,
-            pickup_branch_id=_default_pickup_branch_id(clinic_id),
+            pickup_branch_id=pickup_branch_id,
             recommendation_id=recommendation_id,
             booking_id=recommendation.booking_id,
             items=[(match, 1)],
         )
         await care_commerce_service.transition_order(care_order_id=order.care_order_id, to_status="confirmed")
-        await message.answer(i18n.t("patient.care.order.created", _locale()).format(care_order_id=order.care_order_id, status="confirmed"))
+        await message.answer(i18n.t("patient.care.order.created", _locale()).format(care_order_id=order.care_order_id, status="confirmed", branch_id=pickup_branch_id))
 
     @router.message(Command("care_orders"))
     async def care_orders(message: Message) -> None:
@@ -298,7 +307,7 @@ def make_router(
             return
         lines = [i18n.t("patient.care.orders.title", _locale())]
         for row in rows[:8]:
-            lines.append(i18n.t("patient.care.orders.item", _locale()).format(care_order_id=row.care_order_id, status=row.status, amount=row.total_amount, currency=row.currency_code))
+            lines.append(i18n.t("patient.care.orders.item", _locale()).format(care_order_id=row.care_order_id, status=row.status, amount=row.total_amount, currency=row.currency_code, branch_id=(row.pickup_branch_id or "-")))
         await message.answer("\n".join(lines))
 
     @router.message(Command("book"))
