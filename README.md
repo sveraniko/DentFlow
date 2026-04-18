@@ -216,11 +216,26 @@ These define canonical entities, lifecycles, storage strategy and events.
 - `docs/40_search_model.md`
 - `docs/50_analytics_and_owner_metrics.md`
 - `docs/60_care_commerce.md`
+- `docs/shop/00_shop_readme.md`
+- `docs/shop/61_care_catalog_model.md`
+- `docs/shop/62_care_catalog_workbook_spec.md`
+- `docs/shop/63_recommendation_to_product_engine.md`
+- `docs/shop/64_care_patient_catalog_and_flow.md`
+- `docs/shop/66_care_stock_and_pickup_semantics.md`
+- `docs/shop/67_care_media_and_content_rules.md`
 - `docs/65_document_templates_and_043_mapping.md`
+- `docs/68_admin_reception_workdesk.md`
+- `docs/69_google_calendar_schedule_projection.md`
 - `docs/70_bot_flows.md`
 - `docs/72_admin_doctor_owner_ui_contracts.md`
 
 These define how major subsystems behave.
+
+General rule:
+- `60_care_commerce.md` = high-level commerce overview
+- `docs/shop/*` = detailed care-commerce package
+- `68_admin_reception_workdesk.md` = admin operational workdesk truth
+- `69_google_calendar_schedule_projection.md` = calendar mirror truth
 
 ## 5.5 Infrastructure and delivery authority
 
@@ -268,16 +283,25 @@ Recommended reading order before implementation:
 13. `docs/40_search_model.md`
 14. `docs/50_analytics_and_owner_metrics.md`
 15. `docs/60_care_commerce.md`
-16. `docs/65_document_templates_and_043_mapping.md`
-17. `docs/70_bot_flows.md`
-18. `docs/72_admin_doctor_owner_ui_contracts.md`
-19. `docs/80_integrations_and_infra.md`
-20. `docs/85_security_and_privacy.md`
-21. `docs/90_pr_plan.md`
-22. `docs/92_seed_data_and_demo_fixtures.md`
-23. `docs/95_testing_and_launch.md`
-24. `booking_docs/00_booking_readme.md`
-25. the rest of `booking_docs/*`
+16. `docs/shop/00_shop_readme.md`
+17. `docs/shop/61_care_catalog_model.md`
+18. `docs/shop/62_care_catalog_workbook_spec.md`
+19. `docs/shop/63_recommendation_to_product_engine.md`
+20. `docs/shop/64_care_patient_catalog_and_flow.md`
+21. `docs/shop/66_care_stock_and_pickup_semantics.md`
+22. `docs/shop/67_care_media_and_content_rules.md`
+23. `docs/65_document_templates_and_043_mapping.md`
+24. `docs/68_admin_reception_workdesk.md`
+25. `docs/69_google_calendar_schedule_projection.md`
+26. `docs/70_bot_flows.md`
+27. `docs/72_admin_doctor_owner_ui_contracts.md`
+28. `docs/80_integrations_and_infra.md`
+29. `docs/85_security_and_privacy.md`
+30. `docs/90_pr_plan.md`
+31. `docs/92_seed_data_and_demo_fixtures.md`
+32. `docs/95_testing_and_launch.md`
+33. `booking_docs/00_booking_readme.md`
+34. the rest of `booking_docs/*`
 
 ---
 
@@ -304,6 +328,8 @@ docs/
   50_analytics_and_owner_metrics.md
   60_care_commerce.md
   65_document_templates_and_043_mapping.md
+  68_admin_reception_workdesk.md
+  69_google_calendar_schedule_projection.md
   70_bot_flows.md
   72_admin_doctor_owner_ui_contracts.md
   80_integrations_and_infra.md
@@ -311,6 +337,14 @@ docs/
   90_pr_plan.md
   92_seed_data_and_demo_fixtures.md
   95_testing_and_launch.md
+  shop/
+    00_shop_readme.md
+    61_care_catalog_model.md
+    62_care_catalog_workbook_spec.md
+    63_recommendation_to_product_engine.md
+    64_care_patient_catalog_and_flow.md
+    66_care_stock_and_pickup_semantics.md
+    67_care_media_and_content_rules.md
 
 booking_docs/
   00_booking_readme.md
@@ -367,26 +401,4 @@ It must be built from already-proven patterns:
 - strong identity/access boundaries;
 - policy/configuration modeled explicitly;
 - exports generated from structured facts;
-- modular architecture that can absorb future growth without self-destruction.
-
-The product may be ambitious.
-
-The implementation must stay disciplined.
-
----
-
-## 10. Stack 0/1 bootstrap commands
-
-```bash
-cp .env.example .env
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
-make db-bootstrap
-make seed-stack1
-make test
-make run-app
-make run-worker
-```
-
-This repository now includes Stack 0 foundation skeletons plus Stack 1 canonical clinic reference, access/identity, policy/config seed fixtures, role guards, and related tests.
+- modular architecture that can absorb future growth without tearing itself apart.

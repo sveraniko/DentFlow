@@ -16,6 +16,11 @@ Without contract-level rules, CODEX will improvise:
 
 That is how clean systems become junk drawers.
 
+This document complements:
+- `docs/70_bot_flows.md`
+- `docs/68_admin_reception_workdesk.md`
+- `docs/69_google_calendar_schedule_projection.md`
+
 ---
 
 ## 2. Shared contract rules
@@ -35,14 +40,28 @@ All three role surfaces must respect:
 
 ## 3. Admin UI contracts
 
+Admin UI is not just “admin commands”.
+It is the Telegram workdesk for reception/operations.
+
+The detailed operational model lives in:
+- `docs/68_admin_reception_workdesk.md`
+
+Google Calendar, when present, is an auxiliary visual mirror:
+- `docs/69_google_calendar_schedule_projection.md`
+
 ## 3.1 Admin entry panels
 Canonical admin root surfaces:
 - `admin_today_panel`
-- `admin_search_panel`
 - `admin_confirmations_panel`
+- `admin_reschedules_panel`
 - `admin_waitlist_panel`
+- `admin_patients_panel`
 - `admin_care_pickups_panel`
-- `admin_exceptions_panel`
+- `admin_issues_panel`
+
+Optional secondary/support surfaces:
+- `admin_search_panel`
+- `admin_calendar_panel` (if a calendar mirror entry link is exposed later)
 
 ## 3.2 Admin patient quick card
 
@@ -98,7 +117,37 @@ Primary actions:
 - cancel
 - escalate to call/manual follow-up
 
-## 3.5 Care pickup card
+## 3.5 Reschedule queue card
+
+Show:
+- patient
+- current time
+- doctor
+- service
+- branch
+- reschedule request state
+- urgency hint if present
+
+Primary actions:
+- open booking
+- start reschedule handling
+- cancel if needed
+
+## 3.6 Waitlist queue card
+
+Show:
+- patient
+- doctor/service preference
+- preferred time window
+- status
+- priority/source
+
+Primary actions:
+- open entry
+- connect candidate slot later if supported
+- cancel/close entry
+
+## 3.7 Care pickup card
 
 Show:
 - patient
@@ -112,6 +161,20 @@ Primary actions:
 - issue
 - cancel/release if allowed
 - open patient
+
+## 3.8 Issues queue card
+
+Show:
+- issue type
+- patient or booking reference if relevant
+- branch
+- severity/freshness
+- compact summary
+
+Primary actions:
+- open detail
+- open booking/patient
+- mark handled if supported
 
 ---
 
@@ -240,6 +303,10 @@ Recommended callback namespace examples:
 - `admin:today:open`
 - `admin:booking:confirm`
 - `admin:booking:check_in`
+- `admin:reschedules:open`
+- `admin:waitlist:open`
+- `admin:care:pickup_open`
+- `admin:issues:open`
 - `doctor:queue:open_booking`
 - `doctor:booking:start_service`
 - `owner:digest:open_today`
@@ -310,7 +377,21 @@ This belongs in quick-card summaries, not buried in logs.
 
 ---
 
-## 11. Summary
+## 11. Google Calendar relationship
+
+Calendar is not an admin action surface.
+It is an auxiliary schedule mirror.
+
+If a calendar entry point is exposed in admin UI later, its contract must remain:
+- visual schedule awareness
+- branch/doctor time-space overview
+- return/deep-link back to DentFlow for action
+
+No bidirectional schedule editing is assumed in this contract layer.
+
+---
+
+## 12. Summary
 
 Admin, doctor and owner UI contracts must be:
 - compact;
@@ -320,5 +401,7 @@ Admin, doctor and owner UI contracts must be:
 - callback-consistent;
 - localized;
 - explicit about primary action.
+
+Admin surfaces in particular must now be understood as a reception workdesk, not just a handful of booking commands.
 
 That is how the non-patient surfaces stay operational instead of degenerating into chat rubble.

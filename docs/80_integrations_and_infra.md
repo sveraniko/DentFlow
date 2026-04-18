@@ -1,6 +1,6 @@
-# DentFlow Integrations and Infrastructure
+# DentFlow Infrastructure & Integrations
 
-> Infrastructure shape, integration surfaces, deployment policy, and operational foundations for DentFlow.
+> Runtime topology, storage model, integration surfaces, deployment policy, and operational foundations for DentFlow.
 
 ## 1. Purpose
 
@@ -50,7 +50,8 @@ Use branches for:
 - booking routing;
 - branch metrics;
 - branch pickup;
-- branch owner views.
+- branch owner views;
+- branch-aware admin and doctor day semantics.
 
 ## 3.3 Future federation
 Cross-clinic owner aggregation should be a federation/integration concern.
@@ -92,6 +93,7 @@ Lives in Postgres logical schemas:
 - booking
 - communication
 - clinical
+- recommendation
 - care commerce
 - media/docs
 - integration
@@ -101,7 +103,8 @@ Lives in Postgres logical schemas:
 - analytics projections
 - owner views
 - generated documents
-- Sheets exports
+- Sheets-driven master-data replicas
+- Google Calendar schedule projection
 - external adapter payloads
 
 These must be rebuildable or at least clearly derivable from truth.
@@ -131,11 +134,11 @@ Canonical reminder state lives in Communication, not Booking.
 Search should be its own service/index surface.
 
 It supports:
-- patient lookup
-- doctor lookup
-- service lookup
-- voice-assisted retrieval
-- transliteration and fuzzy behavior
+- patient lookup;
+- doctor lookup;
+- service lookup;
+- voice-assisted retrieval;
+- transliteration and fuzzy behavior.
 
 If search fails:
 - clinic operations degrade;
@@ -151,6 +154,7 @@ Use object storage or equivalent for:
 - uploaded files
 - generated PDFs
 - previews
+- product media
 
 Store metadata in Postgres.
 
@@ -184,10 +188,13 @@ Good uses:
 - seed imports
 - operator review exports
 - selected reference data management
+- care catalog authoring
 - controlled sync
 
 Forbidden use:
 - secret canonical truth for bookings or patients
+- live order/reservation truth
+- schedule truth
 
 Each Sheets flow must define:
 - direction
@@ -197,9 +204,42 @@ Each Sheets flow must define:
 - conflict behavior
 - failure visibility
 
+### Explicit source-of-truth rule
+For care-commerce:
+- Sheets/XLSX = master-data authoring truth for products, i18n, recommendation links, branch availability baseline
+- DentFlow DB = runtime truth for care orders, reservations, issue/fulfill, active reserved quantity
+
+That boundary must remain explicit.
+
 ---
 
-## 11. External adapters stance
+## 11. Google Calendar integration stance
+
+Google Calendar is a **visual schedule projection**, not booking truth.
+
+Good use:
+- day/week/month view
+- doctor load visualization
+- branch load visualization
+- schedule awareness for admin/reception
+
+Forbidden use:
+- becoming source of truth for bookings
+- being used for bidirectional schedule edits in v1
+- replacing DentFlow workdesk actions
+
+### Explicit rule
+- DentFlow = truth and actions
+- Google Calendar = mirror / projection
+
+The recommended baseline is:
+- one-way DentFlow -> Google Calendar sync
+- external mapping between booking and calendar event ids
+- operator returns to DentFlow for real actions
+
+---
+
+## 12. External adapters stance
 
 DentFlow may later integrate with systems such as 1C-like software.
 
@@ -214,7 +254,7 @@ It should not become a clone of every external system it might ever meet.
 
 ---
 
-## 12. AI infrastructure stance
+## 13. AI infrastructure stance
 
 AI should be implemented as an explicit assistive layer.
 
@@ -232,7 +272,7 @@ AI should consume scoped, grounded data, not accidental data soup.
 
 ---
 
-## 13. Configuration boundaries
+## 14. Configuration boundaries
 
 Infrastructure config groups:
 - core app config
@@ -249,7 +289,7 @@ Business policy belongs to `docs/23_policy_and_configuration_model.md`, not to r
 
 ---
 
-## 14. Seed/bootstrap infrastructure
+## 15. Seed/bootstrap infrastructure
 
 Before Sheets sync exists, DentFlow must support:
 - script-based seed imports
@@ -257,13 +297,14 @@ Before Sheets sync exists, DentFlow must support:
 - fake patient/demo booking fixtures
 - projection rebuilds
 - demo media/doc references
+- care catalog workbook import examples
 
 Bootstrap is not optional.
 Without realistic seeded data, many subsystems will look “fine” only because reality never touched them.
 
 ---
 
-## 15. Observability basics
+## 16. Observability basics
 
 DentFlow must at minimum provide visibility for:
 - bot uptime
@@ -274,25 +315,27 @@ DentFlow must at minimum provide visibility for:
 - projection lag
 - sync job status
 - document generation failures
+- calendar projection failures
 - AI service errors if enabled
 
 ---
 
-## 16. Graceful degradation
+## 17. Graceful degradation
 
 If:
 - search fails -> fallback lookup mode
 - AI fails -> raw owner projections still available
 - Sheets sync fails -> core truth unaffected
+- Google Calendar sync fails -> booking truth and workdesk still operate
 - document export fails -> structured data still exists
-- care-commerce fails -> booking and clinical core survive
+- care-commerce sync/input fails -> existing runtime orders/reservations still survive
 
 This separation is intentional.
 Core truth must be the hardest thing to lose.
 
 ---
 
-## 17. Summary
+## 18. Summary
 
 DentFlow infrastructure is built around:
 
@@ -303,7 +346,9 @@ DentFlow infrastructure is built around:
 - workers for async execution;
 - object storage for files;
 - export generation from structured facts;
-- Sheets and external systems as controlled adapters;
+- Sheets as controlled master-data authoring;
+- Google Calendar as schedule mirror;
+- external systems as controlled adapters;
 - AI as scoped assistance;
 - observable and degradable operations.
 

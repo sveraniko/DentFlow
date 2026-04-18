@@ -19,6 +19,12 @@ Detailed admin/doctor/owner contract rules live in:
 Detailed booking subsystem contract lives in:
 - `booking_docs/*`
 
+Detailed admin operational model lives in:
+- `docs/68_admin_reception_workdesk.md`
+
+Detailed Google Calendar mirror model lives in:
+- `docs/69_google_calendar_schedule_projection.md`
+
 ---
 
 ## 2. Role surfaces
@@ -78,27 +84,38 @@ Detailed booking specifics remain in `booking_docs/*`.
 
 ## 5. ClinicAdminBot flow map
 
-ClinicAdminBot is responsible for:
-- today operations panel;
-- patient search;
-- booking queue and confirmations;
-- check-in and reschedule handling;
-- waitlist processing;
-- communication exceptions;
-- care pickup queue;
-- limited patient operational detail.
+ClinicAdminBot is the **admin/reception workdesk surface**.
+
+Its role is not just to expose a few booking commands.
+It must support the clinic’s operational center for:
+- today schedule visibility,
+- confirmations,
+- reschedules,
+- waitlist,
+- patient quick access,
+- care pickups,
+- communication issues.
+
+The detailed product/operational model for this role lives in:
+- `docs/68_admin_reception_workdesk.md`
+
+Google Calendar may complement this role as a visual schedule mirror, but DentFlow remains truth:
+- `docs/69_google_calendar_schedule_projection.md`
 
 ### Canonical admin flows
-- open today dashboard
+- open today dashboard / workdesk
 - search patient
 - open patient quick card
 - open booking quick card
 - confirm booking
 - mark check-in
 - process reschedule request
-- handle reminder failure
+- handle reminder failure / no-response issue
 - process care pickup
-- escalate to doctor/owner where needed
+- act on waitlist
+- escalate or coordinate where needed
+
+The admin surface is a workdesk, not a giant owner dashboard and not a spreadsheet in disguise.
 
 ---
 
@@ -180,6 +197,11 @@ One lifecycle, multiple surfaces:
 - admin fulfills
 - owner sees attach rate and missed opportunities
 
+### Calendar projection lifecycle
+- booking changes in DentFlow
+- calendar mirror updates as a visual projection
+- admin uses Calendar for visual awareness and DentFlow for action
+
 ---
 
 ## 9. Relationship to UI contracts
@@ -193,6 +215,8 @@ The following define how specific panels, actions and callbacks should look:
 General rule:
 - `70_bot_flows` = role map
 - contract docs = concrete UI behavior
+- `68_admin_reception_workdesk.md` = detailed admin operational workdesk model
+- `69_google_calendar_schedule_projection.md` = admin schedule mirror model
 
 ---
 
@@ -200,7 +224,7 @@ General rule:
 
 DentFlow role flows are built around:
 - PatientBot for care entry and patient-side action;
-- ClinicAdminBot for clinic operations;
+- ClinicAdminBot for clinic operations and reception workdesk behavior;
 - doctor surface for fast medical/operational action;
 - OwnerBot for insight and control.
 

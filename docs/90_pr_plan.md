@@ -29,6 +29,13 @@ It must not be implemented in ways that sabotage patient registry, reminders, se
 ## 2.4 CODEX needs explicit non-goals
 Every stack should say what is **not** being built yet.
 
+## 2.5 Design waves matter when a bounded context is underdefined
+When a subsystem becomes clearly larger than one implementation prompt should invent, stop and write the docs wave first.
+This now explicitly applies to:
+- care-commerce
+- admin/reception workdesk
+- Google Calendar schedule projection
+
 ---
 
 ## 3. Logical implementation layers
@@ -78,6 +85,7 @@ Every stack should say what is **not** being built yet.
 - generated documents
 - Sheets sync
 - external adapter groundwork
+- Google Calendar projection groundwork where appropriate
 
 ### Layer 8. AI-assisted layer and pilot hardening
 - owner AI
@@ -86,7 +94,34 @@ Every stack should say what is **not** being built yet.
 
 ---
 
-## 4. PR stack sequence
+## 4. Commerce and operations design wave (mandatory before/alongside implementation)
+
+Before care-commerce and reception/admin schedule visualization can be considered complete, the wiki must include and remain aligned with:
+
+### Care-commerce package
+- `docs/60_care_commerce.md`
+- `docs/shop/00_shop_readme.md`
+- `docs/shop/61_care_catalog_model.md`
+- `docs/shop/62_care_catalog_workbook_spec.md`
+- `docs/shop/63_recommendation_to_product_engine.md`
+- `docs/shop/64_care_patient_catalog_and_flow.md`
+- `docs/shop/66_care_stock_and_pickup_semantics.md`
+- `docs/shop/67_care_media_and_content_rules.md`
+
+### Admin/ops package
+- `docs/68_admin_reception_workdesk.md`
+- `docs/69_google_calendar_schedule_projection.md`
+
+These documents are not “nice to have”.
+They prevent CODEX from improvising:
+- giant Telegram commerce panels
+- undefined product truth
+- vague recommendation/product flows
+- schedule visibility split across contradictory sources
+
+---
+
+## 5. PR stack sequence
 
 ## Stack 0. Repository foundation
 References:
@@ -159,15 +194,18 @@ Outcome:
 - admin/doctor search-first flows
 - focused voice-assisted retrieval
 
-## Stack 6. Doctor and admin operational surfaces
+## Stack 6. Operational role surfaces
 References:
 - `docs/70_bot_flows.md`
 - `docs/72_admin_doctor_owner_ui_contracts.md`
+- `docs/68_admin_reception_workdesk.md`
+- `docs/69_google_calendar_schedule_projection.md`
 
 Outcome:
-- admin quick cards
+- admin/reception workdesk
 - doctor queue and quick note path
 - check-in / in-service progression
+- calendar mirror groundwork later if selected
 
 ## Stack 7. Clinical chart baseline
 References:
@@ -202,6 +240,7 @@ Outcome:
 References:
 - `docs/25_state_machines.md`
 - `docs/60_care_commerce.md`
+- `docs/shop/63_recommendation_to_product_engine.md`
 
 Outcome:
 - recommendation model and flow
@@ -210,9 +249,11 @@ Outcome:
 ## Stack 11. Care-commerce baseline
 References:
 - `docs/60_care_commerce.md`
+- `docs/shop/*`
 - `docs/50_analytics_and_owner_metrics.md`
 
 Outcome:
+- operator-friendly care catalog model
 - reserve/pickup
 - care order lifecycle
 - attach-rate baseline metrics
@@ -230,10 +271,13 @@ Outcome:
 References:
 - `docs/80_integrations_and_infra.md`
 - `docs/85_security_and_privacy.md`
+- `docs/shop/62_care_catalog_workbook_spec.md`
+- `docs/69_google_calendar_schedule_projection.md`
 
 Outcome:
 - explicit sync jobs
-- controlled Sheets integration
+- controlled Sheets integration for master data
+- Google Calendar schedule projection groundwork where selected
 - external adapter readiness
 
 ## Stack 14. AI-assisted owner layer
@@ -256,7 +300,7 @@ Outcome:
 
 ---
 
-## 5. Recommended wave grouping
+## 6. Recommended wave grouping
 
 ### Wave 1
 Stacks 0–2
@@ -276,9 +320,11 @@ Stacks 10–12
 ### Wave 6
 Stacks 13–15
 
+Commerce docs wave and admin/ops docs wave may happen alongside Waves 4–5 where needed, but must be completed before the affected implementation stack is treated as stable.
+
 ---
 
-## 6. CODEX usage rule
+## 7. CODEX usage rule
 
 Every implementation prompt to CODEX should include:
 - target stack
@@ -290,9 +336,13 @@ Every implementation prompt to CODEX should include:
 
 CODEX must not jump ahead just because a later stack looks entertaining.
 
+If a bounded context becomes underdefined in docs, stop and write the docs first.
+That is not delay.
+That is damage prevention.
+
 ---
 
-## 7. Summary
+## 8. Summary
 
 DentFlow implementation order is:
 
@@ -307,3 +357,10 @@ DentFlow implementation order is:
 - AI and pilot hardening
 
 This sequence is designed to keep the system layered instead of collapsing into random simultaneous invention.
+
+And now explicitly:
+- care-commerce must use the `docs/shop/*` package as detailed authority
+- admin/reception work must use `68_admin_reception_workdesk.md`
+- Google Calendar schedule mirror must use `69_google_calendar_schedule_projection.md`
+- Sheets are master-data authoring, not runtime booking truth
+- Calendar is projection, not booking truth
