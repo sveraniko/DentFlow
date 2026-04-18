@@ -526,6 +526,143 @@ def test_manual_override_target_precedence_over_rule_mapping() -> None:
     assert rows[0].explanation_text == "Doctor selected this item"
 
 
+def test_invalid_manual_product_target_does_not_fallback_to_rule_mapping() -> None:
+    repo = InMemoryCareRepo()
+    service = CareCommerceService(repo)
+    asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-RULE", title_key="r", description_key=None, category="h", price_amount=1000, currency_code="RUB", status="active"))
+    repo.recommendation_links.append(
+        {
+            "clinic_id": "c1",
+            "recommendation_type": "aftercare",
+            "target_kind": "product",
+            "target_code": "SKU-RULE",
+            "relevance_rank": 1,
+            "active": True,
+            "justification_text_en": "rule text",
+            "justification_text_ru": None,
+        }
+    )
+    asyncio.run(
+        service.set_manual_recommendation_target(
+            recommendation_id="r-invalid-product",
+            target_kind="product",
+            target_code="SKU-MISSING",
+            justification_text="Doctor selected explicit product",
+        )
+    )
+
+    resolution = asyncio.run(
+        service.resolve_recommendation_target_result(
+            clinic_id="c1",
+            recommendation_id="r-invalid-product",
+            recommendation_type="aftercare",
+            locale="en",
+        )
+    )
+
+    assert resolution.status == "manual_target_invalid"
+    assert resolution.manual_target_present is True
+    assert resolution.manual_target_invalid is True
+    assert resolution.manual_target_kind == "product"
+    assert resolution.manual_target_code == "SKU-MISSING"
+    assert resolution.products == []
+
+
+def test_invalid_manual_set_target_does_not_fallback_to_rule_mapping() -> None:
+    repo = InMemoryCareRepo()
+    service = CareCommerceService(repo)
+    product = asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-RULE", title_key="r", description_key=None, category="h", price_amount=1000, currency_code="RUB", status="active"))
+    repo.recommendation_links.append(
+        {
+            "clinic_id": "c1",
+            "recommendation_type": "aftercare",
+            "target_kind": "product",
+            "target_code": "SKU-RULE",
+            "relevance_rank": 1,
+            "active": True,
+            "justification_text_en": "rule text",
+            "justification_text_ru": None,
+        }
+    )
+    repo.recommendation_sets["inactive-set"] = {"clinic_id": "c1", "set_code": "inactive-set", "status": "inactive", "description_en": "Inactive", "description_ru": None}
+    repo.recommendation_set_items["inactive-set"] = [{"position": 1, "quantity": 1, "product": product}]
+    asyncio.run(
+        service.set_manual_recommendation_target(
+            recommendation_id="r-invalid-set",
+            target_kind="set",
+            target_code="inactive-set",
+            justification_text="Doctor selected explicit set",
+        )
+    )
+
+    resolution = asyncio.run(
+        service.resolve_recommendation_target_result(
+            clinic_id="c1",
+            recommendation_id="r-invalid-set",
+            recommendation_type="aftercare",
+            locale="en",
+        )
+    )
+
+    assert resolution.status == "manual_target_invalid"
+    assert resolution.manual_target_present is True
+    assert resolution.manual_target_invalid is True
+    assert resolution.manual_target_kind == "set"
+    assert resolution.manual_target_code == "inactive-set"
+    assert resolution.products == []
+
+
+def test_direct_links_still_work_when_no_manual_target() -> None:
+    repo = InMemoryCareRepo()
+    service = CareCommerceService(repo)
+    product = asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-DIR", title_key="d", description_key=None, category="h", price_amount=1000, currency_code="RUB", status="active"))
+    asyncio.run(service.link_product_to_recommendation(recommendation_id="r-direct", care_product_id=product.care_product_id, relevance_rank=1, justification_text_key="direct"))
+
+    resolution = asyncio.run(
+        service.resolve_recommendation_target_result(
+            clinic_id="c1",
+            recommendation_id="r-direct",
+            recommendation_type="aftercare",
+            locale="en",
+        )
+    )
+
+    assert resolution.status == "direct_links_resolved"
+    assert resolution.manual_target_present is False
+    assert [row.care_product_id for row in resolution.products] == [product.care_product_id]
+
+
+def test_rule_links_still_work_when_no_manual_target() -> None:
+    repo = InMemoryCareRepo()
+    service = CareCommerceService(repo)
+    product = asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-RULE-ONLY", title_key="r", description_key=None, category="h", price_amount=1000, currency_code="RUB", status="active"))
+    repo.recommendation_links.append(
+        {
+            "clinic_id": "c1",
+            "recommendation_type": "aftercare",
+            "target_kind": "product",
+            "target_code": "SKU-RULE-ONLY",
+            "relevance_rank": 1,
+            "active": True,
+            "justification_text_en": "rule text",
+            "justification_text_ru": None,
+        }
+    )
+
+    resolution = asyncio.run(
+        service.resolve_recommendation_target_result(
+            clinic_id="c1",
+            recommendation_id="r-rule-only",
+            recommendation_type="aftercare",
+            locale="en",
+        )
+    )
+
+    assert resolution.status == "rule_links_resolved"
+    assert resolution.manual_target_present is False
+    assert [row.care_product_id for row in resolution.products] == [product.care_product_id]
+
+
 def test_doctor_issue_recommendation_with_set_target_persists_manual_override() -> None:
     now = datetime.now(timezone.utc)
     booking = Booking(
