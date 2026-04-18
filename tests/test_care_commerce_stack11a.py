@@ -44,6 +44,9 @@ class InMemoryCareRepo:
         rows = sorted(self.links.get(recommendation_id, []), key=lambda x: x.relevance_rank)
         return [(row, self.products[row.care_product_id]) for row in rows]
 
+    async def list_catalog_products_by_recommendation_type(self, *, clinic_id: str, recommendation_type: str) -> list[tuple[RecommendationProductLink, CareProduct]]:
+        return []
+
     async def create_order(self, order: CareOrder, items: list[CareOrderItem]) -> CareOrder:
         self.orders[order.care_order_id] = order
         self.order_items[order.care_order_id] = items

@@ -34,6 +34,7 @@ class CareCommerceRepository(Protocol):
     async def list_active_products_by_clinic(self, *, clinic_id: str) -> list[CareProduct]: ...
     async def link_product_to_recommendation(self, link: RecommendationProductLink) -> RecommendationProductLink: ...
     async def list_products_by_recommendation(self, *, recommendation_id: str) -> list[tuple[RecommendationProductLink, CareProduct]]: ...
+    async def list_catalog_products_by_recommendation_type(self, *, clinic_id: str, recommendation_type: str) -> list[tuple[RecommendationProductLink, CareProduct]]: ...
     async def create_order(self, order: CareOrder, items: list[CareOrderItem]) -> CareOrder: ...
     async def get_order(self, care_order_id: str) -> CareOrder | None: ...
     async def list_order_items(self, care_order_id: str) -> list[CareOrderItem]: ...
@@ -116,6 +117,23 @@ class CareCommerceService:
 
     async def list_products_by_recommendation(self, *, recommendation_id: str) -> list[tuple[RecommendationProductLink, CareProduct]]:
         return await self.repository.list_products_by_recommendation(recommendation_id=recommendation_id)
+
+    async def list_products_for_recommendation_context(
+        self,
+        *,
+        clinic_id: str,
+        recommendation_id: str,
+        recommendation_type: str,
+    ) -> list[tuple[RecommendationProductLink, CareProduct]]:
+        direct = await self.repository.list_products_by_recommendation(recommendation_id=recommendation_id)
+        if direct:
+            return direct
+        if hasattr(self.repository, "list_catalog_products_by_recommendation_type"):
+            return await self.repository.list_catalog_products_by_recommendation_type(
+                clinic_id=clinic_id,
+                recommendation_type=recommendation_type,
+            )
+        return []
 
     async def create_order(
         self,
