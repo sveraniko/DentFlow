@@ -801,6 +801,7 @@ STACK1_TABLES: tuple[str, ...] = (
       care_product_id TEXT PRIMARY KEY,
       clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
       sku TEXT NOT NULL,
+      product_code TEXT NULL,
       title_key TEXT NOT NULL,
       description_key TEXT NULL,
       category TEXT NOT NULL,
@@ -915,6 +916,79 @@ STACK1_TABLES: tuple[str, ...] = (
     """
     CREATE INDEX IF NOT EXISTS idx_branch_product_availability_branch_status
     ON care_commerce.branch_product_availability (branch_id, status, updated_at DESC)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS care_commerce.product_i18n (
+      care_product_i18n_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      care_product_id TEXT NOT NULL REFERENCES care_commerce.products(care_product_id) ON DELETE CASCADE,
+      locale TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      short_label TEXT NULL,
+      justification_text TEXT NULL,
+      usage_hint TEXT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(care_product_id, locale)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS care_commerce.recommendation_sets (
+      care_recommendation_set_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      set_code TEXT NOT NULL,
+      status TEXT NOT NULL,
+      title_ru TEXT NULL,
+      title_en TEXT NULL,
+      description_ru TEXT NULL,
+      description_en TEXT NULL,
+      sort_order INTEGER NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(clinic_id, set_code)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS care_commerce.recommendation_set_items (
+      care_recommendation_set_item_id TEXT PRIMARY KEY,
+      care_recommendation_set_id TEXT NOT NULL REFERENCES care_commerce.recommendation_sets(care_recommendation_set_id) ON DELETE CASCADE,
+      care_product_id TEXT NOT NULL REFERENCES care_commerce.products(care_product_id) ON DELETE CASCADE,
+      position INTEGER NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      notes TEXT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(care_recommendation_set_id, care_product_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS care_commerce.recommendation_links (
+      care_recommendation_link_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      recommendation_type TEXT NOT NULL,
+      target_kind TEXT NOT NULL,
+      target_code TEXT NOT NULL,
+      relevance_rank INTEGER NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      justification_key TEXT NULL,
+      justification_text_ru TEXT NULL,
+      justification_text_en TEXT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(clinic_id, recommendation_type, target_kind, target_code)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS care_commerce.catalog_settings (
+      care_catalog_setting_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(clinic_id, key)
+    )
     """,
     """
     CREATE TABLE IF NOT EXISTS policy_config.feature_flags (
