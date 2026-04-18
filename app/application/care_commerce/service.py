@@ -92,6 +92,16 @@ class ResolvedRecommendationProduct:
     source_kind: str
 
 
+@dataclass(frozen=True)
+class RecommendationTargetResolution:
+    status: str
+    products: list[ResolvedRecommendationProduct]
+    manual_target_present: bool
+    manual_target_invalid: bool
+    manual_target_kind: str | None = None
+    manual_target_code: str | None = None
+
+
 @dataclass(slots=True)
 class CareCommerceService:
     repository: CareCommerceRepository
@@ -209,20 +219,53 @@ class CareCommerceService:
         recommendation_type: str,
         locale: str = "en",
     ) -> list[ResolvedRecommendationProduct]:
+        resolution = await self.resolve_recommendation_target_result(
+            clinic_id=clinic_id,
+            recommendation_id=recommendation_id,
+            recommendation_type=recommendation_type,
+            locale=locale,
+        )
+        return resolution.products
+
+    async def resolve_recommendation_target_result(
+        self,
+        *,
+        clinic_id: str,
+        recommendation_id: str,
+        recommendation_type: str,
+        locale: str = "en",
+    ) -> RecommendationTargetResolution:
         manual = await self.repository.get_manual_recommendation_target(recommendation_id=recommendation_id)
         if manual:
+            manual_target_kind = str(manual.get("target_kind", ""))
+            manual_target_code = str(manual.get("target_code", ""))
             resolved = await self._resolve_target(
                 clinic_id=clinic_id,
                 recommendation_id=recommendation_id,
-                target_kind=str(manual["target_kind"]),
-                target_code=str(manual["target_code"]),
+                target_kind=manual_target_kind,
+                target_code=manual_target_code,
                 relevance_rank=0,
                 source_kind="manual_explicit_target",
                 locale=locale,
                 link_justification=self._clean_text(manual.get("justification_text")),
             )
             if resolved:
-                return resolved
+                return RecommendationTargetResolution(
+                    status="manual_target_resolved",
+                    products=resolved,
+                    manual_target_present=True,
+                    manual_target_invalid=False,
+                    manual_target_kind=manual_target_kind,
+                    manual_target_code=manual_target_code,
+                )
+            return RecommendationTargetResolution(
+                status="manual_target_invalid",
+                products=[],
+                manual_target_present=True,
+                manual_target_invalid=True,
+                manual_target_kind=manual_target_kind,
+                manual_target_code=manual_target_code,
+            )
 
         direct = await self.repository.list_products_by_recommendation(recommendation_id=recommendation_id)
         direct_rows = [
@@ -239,7 +282,12 @@ class CareCommerceService:
             if product.status == "active"
         ]
         if direct_rows:
-            return sorted(direct_rows, key=lambda row: row.relevance_rank)
+            return RecommendationTargetResolution(
+                status="direct_links_resolved",
+                products=sorted(direct_rows, key=lambda row: row.relevance_rank),
+                manual_target_present=False,
+                manual_target_invalid=False,
+            )
 
         links = await self.repository.list_recommendation_links_by_type(
             clinic_id=clinic_id,
@@ -261,7 +309,12 @@ class CareCommerceService:
                     link_justification=self._pick_justification_text(row=row, locale=locale),
                 )
             )
-        return self._dedupe_preserving_priority(sorted(resolved, key=lambda row: row.relevance_rank))
+        return RecommendationTargetResolution(
+            status="rule_links_resolved",
+            products=self._dedupe_preserving_priority(sorted(resolved, key=lambda row: row.relevance_rank)),
+            manual_target_present=False,
+            manual_target_invalid=False,
+        )
 
     async def _resolve_target(
         self,

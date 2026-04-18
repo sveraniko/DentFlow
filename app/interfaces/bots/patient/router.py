@@ -234,12 +234,13 @@ def make_router(
         if recommendation is None or recommendation.patient_id != patient_id:
             await message.answer(i18n.t("patient.recommendations.not_found", _locale()))
             return
-        resolved = await care_commerce_service.resolve_recommendation_targets(
+        resolution = await care_commerce_service.resolve_recommendation_target_result(
             clinic_id=_primary_clinic_id() or recommendation.clinic_id,
             recommendation_id=recommendation.recommendation_id,
             recommendation_type=recommendation.recommendation_type,
             locale=_locale(),
         )
+        resolved = resolution.products
         if not resolved:
             await message.answer(i18n.t("patient.care.products.empty", _locale()))
             return
@@ -293,12 +294,13 @@ def make_router(
         if not any(branch.branch_id == pickup_branch_id for branch in branches):
             await message.answer(i18n.t("patient.care.order.branch_invalid", _locale()))
             return
-        linked = await care_commerce_service.resolve_recommendation_targets(
+        linked_resolution = await care_commerce_service.resolve_recommendation_target_result(
             clinic_id=clinic_id,
             recommendation_id=recommendation_id,
             recommendation_type=recommendation.recommendation_type,
             locale=_locale(),
         )
+        linked = linked_resolution.products
         match = next((item.product for item in linked if item.care_product_id == care_product_id), None)
         if match is None:
             await message.answer(i18n.t("patient.care.order.product_not_linked", _locale()))
