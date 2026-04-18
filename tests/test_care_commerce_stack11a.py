@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
 from app.application.care_commerce import CareCommerceService
 from app.application.doctor.operations import DoctorOperationsService
 from app.application.recommendation import RecommendationService
+from app.common.i18n import I18nService
 from app.domain.booking import Booking
 from app.domain.care_commerce import CareOrder, CareOrderItem, CareProduct, CareReservation, RecommendationProductLink
 from app.domain.recommendations import Recommendation
@@ -130,6 +132,45 @@ def test_care_order_and_reservation_lifecycle_and_invalid_transition() -> None:
     assert consumed and consumed.status == "consumed"
 
 
+def test_reservation_is_integrated_into_ready_issue_cancel_admin_flow() -> None:
+    repo = InMemoryCareRepo()
+    service = CareCommerceService(repo)
+    product = asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-1", title_key="care.product.aftercare_brush.title", description_key=None, category="hygiene", price_amount=1000, currency_code="RUB", status="active"))
+    order = asyncio.run(service.create_order(clinic_id="c1", patient_id="p1", payment_mode="pay_at_pickup", currency_code="RUB", pickup_branch_id="b1", recommendation_id="r1", booking_id=None, items=[(product, 2)]))
+    asyncio.run(service.transition_order(care_order_id=order.care_order_id, to_status="confirmed"))
+
+    ready = asyncio.run(service.apply_admin_order_action(care_order_id=order.care_order_id, action="ready"))
+    reservations = asyncio.run(service.repository.list_reservations_for_order(care_order_id=order.care_order_id))
+    assert ready and ready.status == "ready_for_pickup"
+    assert len(reservations) == 1
+    assert reservations[0].status == "created"
+    assert reservations[0].reserved_qty == 2
+
+    issued = asyncio.run(service.apply_admin_order_action(care_order_id=order.care_order_id, action="issue"))
+    consumed = asyncio.run(service.repository.list_reservations_for_order(care_order_id=order.care_order_id))
+    assert issued and issued.status == "issued"
+    assert all(row.status == "consumed" for row in consumed)
+
+    order2 = asyncio.run(service.create_order(clinic_id="c1", patient_id="p1", payment_mode="pay_at_pickup", currency_code="RUB", pickup_branch_id="b1", recommendation_id="r1", booking_id=None, items=[(product, 1)]))
+    asyncio.run(service.transition_order(care_order_id=order2.care_order_id, to_status="confirmed"))
+    asyncio.run(service.apply_admin_order_action(care_order_id=order2.care_order_id, action="ready"))
+    canceled = asyncio.run(service.apply_admin_order_action(care_order_id=order2.care_order_id, action="cancel"))
+    released = asyncio.run(service.repository.list_reservations_for_order(care_order_id=order2.care_order_id))
+    assert canceled and canceled.status == "canceled"
+    assert all(row.status == "released" for row in released)
+
+
+def test_ready_action_requires_pickup_branch_for_reservation_creation() -> None:
+    repo = InMemoryCareRepo()
+    service = CareCommerceService(repo)
+    product = asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-1", title_key="care.product.aftercare_brush.title", description_key=None, category="hygiene", price_amount=1000, currency_code="RUB", status="active"))
+    order = asyncio.run(service.create_order(clinic_id="c1", patient_id="p1", payment_mode="pay_at_pickup", currency_code="RUB", pickup_branch_id=None, recommendation_id="r1", booking_id=None, items=[(product, 1)]))
+    asyncio.run(service.transition_order(care_order_id=order.care_order_id, to_status="confirmed"))
+
+    with pytest.raises(ValueError):
+        asyncio.run(service.apply_admin_order_action(care_order_id=order.care_order_id, action="ready"))
+
+
 @dataclass
 class _BookingRepo:
     booking: Booking
@@ -202,8 +243,70 @@ def test_aftercare_trigger_uses_localized_template_not_hardcoded_english() -> No
         reference_service=_Reference("ru"),
         patient_reader=None,
         recommendation_service=RecommendationService(rec_repo),
+        i18n=I18nService(locales_path=Path("locales")),
     )
     asyncio.run(ops._create_completion_aftercare(booking=booking))
     created = next(iter(rec_repo.rows.values()))
     assert "Рекомендации" in created.title
     assert "Please follow" not in created.body_text
+
+
+def test_aftercare_trigger_localization_resolves_for_en_and_ru() -> None:
+    now = datetime.now(timezone.utc)
+    booking = Booking(
+        booking_id="b1",
+        clinic_id="c1",
+        branch_id="br1",
+        patient_id="p1",
+        service_id="s1",
+        doctor_id="d1",
+        slot_id="sl1",
+        booking_mode="manual",
+        source_channel="doctor",
+        status="completed",
+        scheduled_start_at=now,
+        scheduled_end_at=now,
+        confirmation_required=True,
+        completed_at=now,
+        canceled_at=None,
+        no_show_at=None,
+        checked_in_at=now,
+        in_service_at=now,
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmed_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+
+    ru_repo = InMemoryRecommendationRepository()
+    ru_ops = DoctorOperationsService(
+        access_resolver=None,
+        booking_service=_BookingRepo(booking),
+        booking_state_service=_BookState(),
+        booking_orchestration=_Orch(),
+        reference_service=_Reference("ru"),
+        patient_reader=None,
+        recommendation_service=RecommendationService(ru_repo),
+        i18n=I18nService(locales_path=Path("locales")),
+    )
+    asyncio.run(ru_ops._create_completion_aftercare(booking=booking))
+
+    en_repo = InMemoryRecommendationRepository()
+    en_ops = DoctorOperationsService(
+        access_resolver=None,
+        booking_service=_BookingRepo(booking),
+        booking_state_service=_BookState(),
+        booking_orchestration=_Orch(),
+        reference_service=_Reference("en"),
+        patient_reader=None,
+        recommendation_service=RecommendationService(en_repo),
+        i18n=I18nService(locales_path=Path("locales")),
+    )
+    asyncio.run(en_ops._create_completion_aftercare(booking=booking))
+
+    ru_created = next(iter(ru_repo.rows.values()))
+    en_created = next(iter(en_repo.rows.values()))
+    assert ru_created.title != en_created.title
+    assert "Рекомендации" in ru_created.title
+    assert "Aftercare" in en_created.title

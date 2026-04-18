@@ -194,6 +194,7 @@ class RuntimeRegistry:
                 patient_reader=self.doctor_patient_reader,
                 clinical_service=self.clinical_chart_service,
                 recommendation_service=self.recommendation_service,
+                i18n=self.i18n,
                 default_locale=self.settings.app.default_locale,
                 max_voice_duration_sec=self.settings.stt.max_voice_duration_sec,
                 max_voice_file_size_bytes=self.settings.stt.max_voice_file_size_bytes,

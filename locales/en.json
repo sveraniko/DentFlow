@@ -180,5 +180,8 @@
   "admin.care.order.action.missing": "Care order not found.",
   "admin.care.order.action.ok": "Care order {care_order_id} updated to {status}.",
   "care.product.aftercare_brush.title": "Post-cleaning soft toothbrush",
-  "care.product.aftercare_irrigator.title": "Home irrigator for gum care"
+  "care.product.aftercare_irrigator.title": "Home irrigator for gum care",
+  "recommendation.aftercare.booking_complete.title": "Aftercare guidance",
+  "recommendation.aftercare.booking_complete.body": "Please follow your dentist aftercare instructions and contact the clinic if discomfort increases.",
+  "admin.care.order.action.pickup_branch_required": "Pickup branch is required before marking this care order ready for pickup."
 }

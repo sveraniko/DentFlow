@@ -12,6 +12,7 @@ from app.application.booking.services import BookingService
 from app.application.clinic_reference import ClinicReferenceService
 from app.application.clinical import ChartSummary, ClinicalChartService
 from app.application.doctor.patient_read import DoctorPatientReader
+from app.common.i18n import I18nService
 from app.application.recommendation import RecommendationService
 from app.application.timezone import DoctorTimezoneFormatter
 from app.domain.booking import Booking
@@ -20,16 +21,8 @@ from app.domain.clinical import ClinicalEncounter, EncounterNote, ImagingReferen
 
 LIVE_QUEUE_STATUSES = {"pending_confirmation", "confirmed", "reschedule_requested", "checked_in", "in_service"}
 DOCTOR_ALLOWED_ACTIONS = {"checked_in", "in_service", "completed"}
-_AFTERCARE_TEMPLATES = {
-    "en": {
-        "title": "Aftercare guidance",
-        "body": "Please follow your dentist aftercare instructions and contact the clinic if discomfort increases.",
-    },
-    "ru": {
-        "title": "Рекомендации после приема",
-        "body": "Пожалуйста, следуйте рекомендациям врача после приема и свяжитесь с клиникой, если дискомфорт усиливается.",
-    },
-}
+_AFTERCARE_TITLE_KEY = "recommendation.aftercare.booking_complete.title"
+_AFTERCARE_BODY_KEY = "recommendation.aftercare.booking_complete.body"
 
 
 @dataclass(frozen=True)
@@ -95,6 +88,7 @@ class DoctorOperationsService:
     patient_reader: DoctorPatientReader
     clinical_service: ClinicalChartService | None = None
     recommendation_service: RecommendationService | None = None
+    i18n: I18nService | None = None
     app_default_timezone: str = "UTC"
 
     def resolve_doctor_identity(self, telegram_user_id: int) -> tuple[str | None, str | None]:
@@ -408,16 +402,17 @@ class DoctorOperationsService:
         if self.recommendation_service is None:
             return
         clinic = self.reference_service.get_clinic(booking.clinic_id) if self.reference_service else None
-        locale = clinic.default_locale if clinic and clinic.default_locale in _AFTERCARE_TEMPLATES else "en"
-        template = _AFTERCARE_TEMPLATES[locale]
+        locale = clinic.default_locale if clinic else None
+        title = self.i18n.t(_AFTERCARE_TITLE_KEY, locale) if self.i18n else _AFTERCARE_TITLE_KEY
+        body = self.i18n.t(_AFTERCARE_BODY_KEY, locale) if self.i18n else _AFTERCARE_BODY_KEY
         created = await self.recommendation_service.create_recommendation(
             clinic_id=booking.clinic_id,
             patient_id=booking.patient_id,
             booking_id=booking.booking_id,
             recommendation_type="aftercare",
             source_kind="booking_trigger",
-            title=template["title"],
-            body_text=template["body"],
+            title=title,
+            body_text=body,
             rationale_text=None,
             prepared=True,
         )

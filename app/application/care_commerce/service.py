@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Protocol
+from typing import ClassVar, Protocol
 from uuid import uuid4
 
 from app.domain.care_commerce import CareOrder, CareOrderItem, CareProduct, CareReservation, RecommendationProductLink
@@ -41,6 +41,15 @@ class CareCommerceRepository(Protocol):
 @dataclass(slots=True)
 class CareCommerceService:
     repository: CareCommerceRepository
+
+    _ADMIN_ACTION_TARGETS: ClassVar[dict[str, str]] = {
+        "ready": "ready_for_pickup",
+        "issue": "issued",
+        "fulfill": "fulfilled",
+        "cancel": "canceled",
+        "pay_required": "awaiting_payment",
+        "paid": "paid",
+    }
 
     async def create_or_update_product(self, **kwargs) -> CareProduct:
         now = datetime.now(timezone.utc)
@@ -218,3 +227,65 @@ class CareCommerceService:
             return None
         now = datetime.now(timezone.utc)
         return await self.repository.save_reservation(CareReservation(**{**current.__dict__, "status": "consumed", "updated_at": now, "consumed_at": now}))
+
+    async def apply_admin_order_action(self, *, care_order_id: str, action: str) -> CareOrder | None:
+        target = self._ADMIN_ACTION_TARGETS.get(action)
+        if target is None:
+            raise ValueError(f"unsupported admin care action: {action}")
+        order = await self.repository.get_order(care_order_id)
+        if order is None:
+            return None
+
+        if action == "ready":
+            if not order.pickup_branch_id:
+                raise ValueError("pickup_branch_required")
+            updated = await self.transition_order(care_order_id=care_order_id, to_status=target)
+            if updated is None:
+                return None
+            await self._ensure_reservations_for_order(updated)
+            return updated
+
+        if action == "issue":
+            updated = await self.transition_order(care_order_id=care_order_id, to_status=target)
+            if updated is None:
+                return None
+            await self._consume_active_reservations(care_order_id=care_order_id)
+            return updated
+
+        if action == "cancel":
+            updated = await self.transition_order(care_order_id=care_order_id, to_status=target)
+            if updated is None:
+                return None
+            await self._release_active_reservations(care_order_id=care_order_id)
+            return updated
+
+        return await self.transition_order(care_order_id=care_order_id, to_status=target)
+
+    async def _ensure_reservations_for_order(self, order: CareOrder) -> None:
+        items = await self.repository.list_order_items(order.care_order_id)
+        existing = await self.repository.list_reservations_for_order(care_order_id=order.care_order_id)
+        existing_by_product: dict[str, int] = {}
+        for reservation in existing:
+            if reservation.status in {"created", "consumed"}:
+                existing_by_product[reservation.care_product_id] = existing_by_product.get(reservation.care_product_id, 0) + reservation.reserved_qty
+        for item in items:
+            missing_qty = item.quantity - existing_by_product.get(item.care_product_id, 0)
+            if missing_qty > 0:
+                await self.create_reservation(
+                    care_order_id=order.care_order_id,
+                    care_product_id=item.care_product_id,
+                    branch_id=order.pickup_branch_id or "",
+                    reserved_qty=missing_qty,
+                )
+
+    async def _consume_active_reservations(self, *, care_order_id: str) -> None:
+        rows = await self.repository.list_reservations_for_order(care_order_id=care_order_id)
+        for row in rows:
+            if row.status == "created":
+                await self.consume_reservation(care_reservation_id=row.care_reservation_id, care_order_id=care_order_id)
+
+    async def _release_active_reservations(self, *, care_order_id: str) -> None:
+        rows = await self.repository.list_reservations_for_order(care_order_id=care_order_id)
+        for row in rows:
+            if row.status == "created":
+                await self.release_reservation(care_reservation_id=row.care_reservation_id, care_order_id=care_order_id)
