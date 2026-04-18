@@ -12,6 +12,7 @@ from app.application.booking.services import BookingService
 from app.application.clinic_reference import ClinicReferenceService
 from app.application.clinical import ChartSummary, ClinicalChartService
 from app.application.doctor.patient_read import DoctorPatientReader
+from app.application.recommendation import RecommendationService
 from app.application.timezone import DoctorTimezoneFormatter
 from app.domain.booking import Booking
 from app.domain.booking.errors import InvalidBookingTransitionError
@@ -83,6 +84,7 @@ class DoctorOperationsService:
     reference_service: ClinicReferenceService
     patient_reader: DoctorPatientReader
     clinical_service: ClinicalChartService | None = None
+    recommendation_service: RecommendationService | None = None
     app_default_timezone: str = "UTC"
 
     def resolve_doctor_identity(self, telegram_user_id: int) -> tuple[str | None, str | None]:
@@ -233,7 +235,14 @@ class DoctorOperationsService:
         if booking is None or booking.doctor_id != doctor_id:
             return InvalidStateOutcome(kind="invalid_state", reason="booking_not_accessible")
         if action == "completed":
-            return await self.booking_orchestration.complete_booking(booking_id=booking_id, reason_code="doctor_marked_completed")
+            result = await self.booking_orchestration.complete_booking(booking_id=booking_id, reason_code="doctor_marked_completed")
+            if (
+                result.kind == "success"
+                and self.recommendation_service is not None
+                and booking.status in {"in_service", "checked_in", "confirmed", "pending_confirmation"}
+            ):
+                await self._create_completion_aftercare(booking=booking)
+            return result
         try:
             changed = await self.booking_state_service.transition_booking(
                 booking_id=booking_id,
@@ -343,3 +352,62 @@ class DoctorOperationsService:
         if len(digits) <= 4:
             return f"***{digits}"
         return f"***{digits[-4:]}"
+
+    async def issue_recommendation(
+        self,
+        *,
+        doctor_id: str,
+        clinic_id: str,
+        patient_id: str,
+        recommendation_type: str,
+        title: str,
+        body_text: str,
+        rationale_text: str | None = None,
+        booking_id: str | None = None,
+        encounter_id: str | None = None,
+        chart_id: str | None = None,
+    ):
+        if self.recommendation_service is None:
+            return None
+        if booking_id:
+            booking = await self.booking_service.load_booking(booking_id)
+            if booking is None or booking.patient_id != patient_id or booking.doctor_id != doctor_id:
+                return None
+        elif not await self._doctor_can_view_patient(doctor_id=doctor_id, patient_id=patient_id):
+            return None
+        issued = await self.recommendation_service.create_recommendation(
+            clinic_id=clinic_id,
+            patient_id=patient_id,
+            recommendation_type=recommendation_type,
+            source_kind="doctor_manual",
+            title=title,
+            body_text=body_text,
+            rationale_text=rationale_text,
+            booking_id=booking_id,
+            encounter_id=encounter_id,
+            chart_id=chart_id,
+            issued_by_actor_id=None,
+            prepared=True,
+        )
+        return await self.recommendation_service.issue(
+            recommendation_id=issued.recommendation_id,
+            issued_by_actor_id=None,
+        )
+
+    async def _create_completion_aftercare(self, *, booking: Booking) -> None:
+        if self.recommendation_service is None:
+            return
+        title = "Aftercare guidance"
+        body = "Please follow your dentist aftercare instructions and contact the clinic if discomfort increases."
+        created = await self.recommendation_service.create_recommendation(
+            clinic_id=booking.clinic_id,
+            patient_id=booking.patient_id,
+            booking_id=booking.booking_id,
+            recommendation_type="aftercare",
+            source_kind="booking_trigger",
+            title=title,
+            body_text=body,
+            rationale_text=None,
+            prepared=True,
+        )
+        await self.recommendation_service.issue(recommendation_id=created.recommendation_id)

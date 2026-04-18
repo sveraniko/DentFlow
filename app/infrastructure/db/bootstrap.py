@@ -13,6 +13,7 @@ SCHEMAS: tuple[str, ...] = (
     "booking",
     "communication",
     "clinical",
+    "recommendation",
     "care_commerce",
     "media_docs",
     "integration",
@@ -756,6 +757,44 @@ STACK1_TABLES: tuple[str, ...] = (
     """
     CREATE INDEX IF NOT EXISTS idx_odontogram_snapshots_chart_recorded
     ON clinical.odontogram_snapshots (chart_id, recorded_at DESC)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS recommendation.recommendations (
+      recommendation_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      patient_id TEXT NOT NULL REFERENCES core_patient.patients(patient_id),
+      booking_id TEXT NULL REFERENCES booking.bookings(booking_id) ON DELETE SET NULL,
+      encounter_id TEXT NULL REFERENCES clinical.clinical_encounters(encounter_id) ON DELETE SET NULL,
+      chart_id TEXT NULL REFERENCES clinical.patient_charts(chart_id) ON DELETE SET NULL,
+      issued_by_actor_id TEXT NULL REFERENCES access_identity.actor_identities(actor_id),
+      source_kind TEXT NOT NULL,
+      recommendation_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body_text TEXT NOT NULL,
+      rationale_text TEXT NULL,
+      status TEXT NOT NULL,
+      issued_at TIMESTAMPTZ NULL,
+      viewed_at TIMESTAMPTZ NULL,
+      acknowledged_at TIMESTAMPTZ NULL,
+      accepted_at TIMESTAMPTZ NULL,
+      declined_at TIMESTAMPTZ NULL,
+      expired_at TIMESTAMPTZ NULL,
+      withdrawn_at TIMESTAMPTZ NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_recommendations_patient_created
+    ON recommendation.recommendations (patient_id, created_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_recommendations_booking_created
+    ON recommendation.recommendations (booking_id, created_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_recommendations_chart_created
+    ON recommendation.recommendations (chart_id, created_at DESC)
     """,
     """
     CREATE TABLE IF NOT EXISTS policy_config.feature_flags (

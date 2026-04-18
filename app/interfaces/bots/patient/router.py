@@ -12,6 +12,7 @@ from app.application.booking.orchestration_outcomes import ConflictOutcome, Inva
 from app.application.booking.telegram_flow import BookingCardView, BookingControlResolutionResult, BookingPatientFlowService
 from app.application.clinic_reference import ClinicReferenceService
 from app.common.i18n import I18nService
+from app.application.recommendation import RecommendationService
 
 
 @dataclass(slots=True)
@@ -25,6 +26,8 @@ def make_router(
     booking_flow: BookingPatientFlowService,
     reference: ClinicReferenceService,
     reminder_actions: ReminderActionService,
+    recommendation_service: RecommendationService | None = None,
+    recommendation_repository=None,
     *,
     default_locale: str,
 ) -> Router:
@@ -125,6 +128,87 @@ def make_router(
     @router.message(CommandStart())
     async def start(message: Message) -> None:
         await message.answer(i18n.t("role.patient.home", _locale()))
+
+    async def _resolve_patient_id_for_user(telegram_user_id: int) -> str | None:
+        clinic_id = _primary_clinic_id()
+        if clinic_id is None or recommendation_repository is None:
+            return None
+        finder = getattr(recommendation_repository, "find_patient_id_by_telegram_user", None)
+        if not callable(finder):
+            return None
+        return await finder(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
+
+    @router.message(Command("recommendations"))
+    async def recommendations_list(message: Message) -> None:
+        if not message.from_user or recommendation_service is None:
+            return
+        patient_id = await _resolve_patient_id_for_user(message.from_user.id)
+        if not patient_id:
+            await message.answer(i18n.t("patient.recommendations.unavailable", _locale()))
+            return
+        rows = await recommendation_service.list_for_patient(patient_id=patient_id)
+        if not rows:
+            await message.answer(i18n.t("patient.recommendations.empty", _locale()))
+            return
+        lines = [i18n.t("patient.recommendations.title", _locale())]
+        for row in rows[:8]:
+            lines.append(f"• {row.title} [{row.recommendation_type}] ({row.status})")
+            lines.append(f"  /recommendation_open {row.recommendation_id}")
+        await message.answer("\n".join(lines))
+
+    @router.message(Command("recommendation_open"))
+    async def recommendations_open(message: Message) -> None:
+        if not message.from_user or not message.text or recommendation_service is None:
+            return
+        parts = message.text.split(maxsplit=1)
+        if len(parts) != 2:
+            await message.answer(i18n.t("patient.recommendations.open.usage", _locale()))
+            return
+        patient_id = await _resolve_patient_id_for_user(message.from_user.id)
+        recommendation = await recommendation_service.get(parts[1].strip())
+        if not patient_id or recommendation is None or recommendation.patient_id != patient_id:
+            await message.answer(i18n.t("patient.recommendations.not_found", _locale()))
+            return
+        if recommendation.status == "issued":
+            recommendation = await recommendation_service.mark_viewed(recommendation_id=recommendation.recommendation_id)
+        text = i18n.t("patient.recommendations.detail", _locale()).format(
+            title=recommendation.title if recommendation else "-",
+            body=(recommendation.body_text if recommendation else "-"),
+            recommendation_type=(recommendation.recommendation_type if recommendation else "-"),
+            status=(recommendation.status if recommendation else "-"),
+            recommendation_id=parts[1].strip(),
+        )
+        await message.answer(text)
+
+    @router.message(Command("recommendation_action"))
+    async def recommendations_action(message: Message) -> None:
+        if not message.from_user or not message.text or recommendation_service is None:
+            return
+        parts = message.text.split(maxsplit=2)
+        if len(parts) != 3:
+            await message.answer(i18n.t("patient.recommendations.action.usage", _locale()))
+            return
+        action = parts[1].strip()
+        recommendation_id = parts[2].strip()
+        patient_id = await _resolve_patient_id_for_user(message.from_user.id)
+        recommendation = await recommendation_service.get(recommendation_id)
+        if not patient_id or recommendation is None or recommendation.patient_id != patient_id:
+            await message.answer(i18n.t("patient.recommendations.not_found", _locale()))
+            return
+        try:
+            if action == "ack":
+                updated = await recommendation_service.acknowledge(recommendation_id=recommendation_id)
+            elif action == "accept":
+                updated = await recommendation_service.accept(recommendation_id=recommendation_id)
+            elif action == "decline":
+                updated = await recommendation_service.decline(recommendation_id=recommendation_id)
+            else:
+                await message.answer(i18n.t("patient.recommendations.action.usage", _locale()))
+                return
+        except ValueError:
+            await message.answer(i18n.t("patient.recommendations.action.invalid_state", _locale()))
+            return
+        await message.answer(i18n.t("patient.recommendations.action.ok", _locale()).format(status=(updated.status if updated else recommendation.status)))
 
     @router.message(Command("book"))
     async def book_entry(message: Message) -> None:

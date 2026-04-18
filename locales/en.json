@@ -147,5 +147,18 @@
   "owner.alerts.empty": "No open owner alerts.",
   "owner.alert.open.usage": "Usage: /owner_alert_open <owner_alert_id>",
   "owner.alert.open.missing": "Owner alert not found.",
-  "owner.alert.open.card": "Alert {owner_alert_id}\nType: {alert_type}\nSeverity: {severity}\nStatus: {status}\nDate: {alert_date}\nSummary: {summary}\nDetails: {details}"
+  "owner.alert.open.card": "Alert {owner_alert_id}\nType: {alert_type}\nSeverity: {severity}\nStatus: {status}\nDate: {alert_date}\nSummary: {summary}\nDetails: {details}",
+  "doctor.recommend.issue.usage": "Usage: /recommend_issue <patient_id> <type> <booking_id|-> <title|body>",
+  "doctor.recommend.issue.invalid_type": "Unsupported recommendation type.",
+  "doctor.recommend.issue.denied_or_missing": "Cannot issue recommendation for this context.",
+  "doctor.recommend.issue.ok": "Recommendation issued: {recommendation_id}",
+  "patient.recommendations.unavailable": "Recommendations are unavailable until your patient profile is linked.",
+  "patient.recommendations.empty": "No active recommendations.",
+  "patient.recommendations.title": "Your recommendations:",
+  "patient.recommendations.open.usage": "Usage: /recommendation_open <recommendation_id>",
+  "patient.recommendations.not_found": "Recommendation not found.",
+  "patient.recommendations.detail": "Recommendation: {title}\nType: {recommendation_type}\nStatus: {status}\n{body}\n\nActions: /recommendation_action ack|accept|decline {recommendation_id}",
+  "patient.recommendations.action.usage": "Usage: /recommendation_action <ack|accept|decline> <recommendation_id>",
+  "patient.recommendations.action.invalid_state": "This action is not available for the current recommendation state.",
+  "patient.recommendations.action.ok": "Saved. Current status: {status}"
 }

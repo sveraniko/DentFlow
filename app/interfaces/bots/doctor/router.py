@@ -9,6 +9,7 @@ from app.application.booking import BookingOrchestrationService, BookingService,
 from app.application.clinic_reference import ClinicReferenceService
 from app.application.clinical import ClinicalChartService
 from app.application.doctor import DOCTOR_ALLOWED_ACTIONS, DoctorOperationsService, DoctorPatientReader
+from app.application.recommendation import RecommendationService
 from app.application.search.service import HybridSearchService
 from app.application.voice import SpeechToTextService, VoiceSearchModeStore
 from app.common.i18n import I18nService
@@ -30,6 +31,7 @@ def make_router(
     reference_service: ClinicReferenceService | None = None,
     patient_reader: DoctorPatientReader | None = None,
     clinical_service: ClinicalChartService | None = None,
+    recommendation_service: RecommendationService | None = None,
     *,
     default_locale: str,
     max_voice_duration_sec: int,
@@ -68,6 +70,7 @@ def make_router(
             reference_service=reference_service,
             patient_reader=patient_reader,
             clinical_service=clinical_service,
+            recommendation_service=recommendation_service,
         )
         if booking_service and booking_state_service and booking_orchestration and reference_service and patient_reader
         else None
@@ -103,9 +106,44 @@ def make_router(
         await message.answer(
             i18n.t("doctor.home.panel", locale).format(
                 doctor_id=doctor_id,
-                actions="/today_queue · /next_patient · /booking_open · /patient_open · /chart_open · /encounter_open",
+                actions="/today_queue · /next_patient · /booking_open · /patient_open · /chart_open · /encounter_open · /recommend_issue",
             )
         )
+
+    @router.message(Command("recommend_issue"))
+    async def recommend_issue(message: Message) -> None:
+        if not await _guard_doctor(message) or not message.text:
+            return
+        doctor_id, locale, clinic_id = await _resolve_doctor_context(message)
+        if doctor_id is None or clinic_id is None or operations is None:
+            await message.answer(i18n.t("doctor.surface.unavailable", locale))
+            return
+        parts = message.text.split(maxsplit=4)
+        if len(parts) < 5 or "|" not in parts[4]:
+            await message.answer(i18n.t("doctor.recommend.issue.usage", locale))
+            return
+        patient_id = parts[1].strip()
+        recommendation_type = parts[2].strip()
+        booking_token = parts[3].strip()
+        title, body = [x.strip() for x in parts[4].split("|", 1)]
+        booking_id = None if booking_token == "-" else booking_token
+        try:
+            recommendation = await operations.issue_recommendation(
+                doctor_id=doctor_id,
+                clinic_id=clinic_id,
+                patient_id=patient_id,
+                recommendation_type=recommendation_type,
+                title=title,
+                body_text=body,
+                booking_id=booking_id,
+            )
+        except ValueError:
+            await message.answer(i18n.t("doctor.recommend.issue.invalid_type", locale))
+            return
+        if recommendation is None:
+            await message.answer(i18n.t("doctor.recommend.issue.denied_or_missing", locale))
+            return
+        await message.answer(i18n.t("doctor.recommend.issue.ok", locale).format(recommendation_id=recommendation.recommendation_id))
 
     @router.message(Command("chart_open"))
     async def chart_open(message: Message) -> None:
