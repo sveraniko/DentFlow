@@ -46,6 +46,8 @@ class CareCommerceRepository(Protocol):
     async def list_reservations_for_order(self, *, care_order_id: str) -> list[CareReservation]: ...
     async def get_branch_product_availability(self, *, branch_id: str, care_product_id: str) -> BranchProductAvailability | None: ...
     async def upsert_branch_product_availability(self, availability: BranchProductAvailability) -> BranchProductAvailability: ...
+    async def get_product_i18n_content(self, *, care_product_id: str, locale: str) -> dict[str, str | None] | None: ...
+    async def get_catalog_setting(self, *, clinic_id: str, key: str) -> str | None: ...
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,16 @@ class ReservationOutcome:
     reason: str | None
     reservation: CareReservation | None
     availability: BranchProductAvailability | None
+
+
+@dataclass(frozen=True)
+class CareProductContent:
+    locale: str | None
+    title: str | None
+    description: str | None
+    short_label: str | None
+    justification_text: str | None
+    usage_hint: str | None
 
 
 @dataclass(slots=True)
@@ -134,6 +146,53 @@ class CareCommerceService:
                 recommendation_type=recommendation_type,
             )
         return []
+
+    async def resolve_product_content(
+        self,
+        *,
+        clinic_id: str,
+        product: CareProduct,
+        locale: str,
+        fallback_locale: str | None = None,
+    ) -> CareProductContent:
+        fetcher = getattr(self.repository, "get_product_i18n_content", None)
+        if not callable(fetcher):
+            return CareProductContent(locale=None, title=None, description=None, short_label=None, justification_text=None, usage_hint=None)
+        exact = await fetcher(care_product_id=product.care_product_id, locale=locale)
+        if exact:
+            return CareProductContent(
+                locale=locale,
+                title=_content_str(exact, "title"),
+                description=_content_str(exact, "description"),
+                short_label=_content_str(exact, "short_label"),
+                justification_text=_content_str(exact, "justification_text"),
+                usage_hint=_content_str(exact, "usage_hint"),
+            )
+        fallback = await self._resolve_catalog_fallback_locale(clinic_id=clinic_id, preferred=fallback_locale)
+        if fallback and fallback != locale:
+            fallback_row = await fetcher(care_product_id=product.care_product_id, locale=fallback)
+            if fallback_row:
+                return CareProductContent(
+                    locale=fallback,
+                    title=_content_str(fallback_row, "title"),
+                    description=_content_str(fallback_row, "description"),
+                    short_label=_content_str(fallback_row, "short_label"),
+                    justification_text=_content_str(fallback_row, "justification_text"),
+                    usage_hint=_content_str(fallback_row, "usage_hint"),
+                )
+        return CareProductContent(locale=None, title=None, description=None, short_label=None, justification_text=None, usage_hint=None)
+
+    async def _resolve_catalog_fallback_locale(self, *, clinic_id: str, preferred: str | None) -> str | None:
+        if preferred:
+            return preferred
+        getter = getattr(self.repository, "get_catalog_setting", None)
+        if not callable(getter):
+            return None
+        for key in ("care.catalog_fallback_locale", "care.default_locale"):
+            value = await getter(clinic_id=clinic_id, key=key)
+            if value:
+                return value.strip().lower()
+        return None
 
     async def create_order(
         self,
@@ -428,3 +487,11 @@ class CareCommerceService:
                 **{**row.__dict__, "reserved_qty": next_reserved, "available_qty": next_available, "updated_at": now}
             )
         )
+
+
+def _content_str(row: dict[str, str | None], key: str) -> str | None:
+    value = row.get(key)
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None

@@ -20,6 +20,7 @@ class CareCatalogSyncRepository(Protocol):
     async def upsert_recommendation_set_item(self, *, clinic_id: str, row, now: datetime) -> str: ...
     async def upsert_recommendation_link(self, *, clinic_id: str, row, now: datetime) -> str: ...
     async def upsert_catalog_setting(self, *, clinic_id: str, key: str, value: str, now: datetime) -> str: ...
+    async def apply_catalog_sync_transaction(self, *, clinic_id: str, parsed: ParsedCatalogWorkbook, now: datetime) -> dict[str, dict[str, int]]: ...
 
 
 @dataclass(slots=True)
@@ -63,6 +64,16 @@ class CareCatalogSyncService:
 
     async def _apply(self, *, clinic_id: str, parsed: ParsedCatalogWorkbook, result: CatalogImportResult) -> None:
         now = datetime.now(timezone.utc)
+        transactional_apply = getattr(self.repository, "apply_catalog_sync_transaction", None)
+        if callable(transactional_apply):
+            tab_states = await transactional_apply(clinic_id=clinic_id, parsed=parsed, now=now)
+            for tab, counts in tab_states.items():
+                stats = result.ensure_tab(tab)
+                stats.added += counts.get("added", 0)
+                stats.updated += counts.get("updated", 0)
+                stats.unchanged += counts.get("unchanged", 0)
+                stats.skipped += counts.get("skipped", 0)
+            return
 
         for row in parsed.products:
             state = await self.repository.upsert_catalog_product(clinic_id=clinic_id, row=row, now=now)

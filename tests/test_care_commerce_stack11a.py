@@ -19,6 +19,8 @@ from app.domain.recommendations import Recommendation
 class InMemoryCareRepo:
     def __init__(self) -> None:
         self.products: dict[str, CareProduct] = {}
+        self.product_i18n: dict[tuple[str, str], dict[str, str | None]] = {}
+        self.catalog_settings: dict[str, str] = {}
         self.links: dict[str, list[RecommendationProductLink]] = {}
         self.orders: dict[str, CareOrder] = {}
         self.order_items: dict[str, list[CareOrderItem]] = {}
@@ -86,6 +88,12 @@ class InMemoryCareRepo:
     async def upsert_branch_product_availability(self, availability: BranchProductAvailability) -> BranchProductAvailability:
         self.availability[(availability.branch_id, availability.care_product_id)] = availability
         return availability
+
+    async def get_product_i18n_content(self, *, care_product_id: str, locale: str) -> dict[str, str | None] | None:
+        return self.product_i18n.get((care_product_id, locale))
+
+    async def get_catalog_setting(self, *, clinic_id: str, key: str) -> str | None:
+        return self.catalog_settings.get(f"{clinic_id}:{key}")
 
 
 class InMemoryRecommendationRepository:
@@ -343,3 +351,36 @@ def test_aftercare_trigger_localization_resolves_for_en_and_ru() -> None:
     assert ru_created.title != en_created.title
     assert "Рекомендации" in ru_created.title
     assert "Aftercare" in en_created.title
+
+
+def test_product_content_resolution_prefers_synced_i18n_and_fallback_locale() -> None:
+    repo = InMemoryCareRepo()
+    service = CareCommerceService(repo)
+    product = asyncio.run(
+        service.create_or_update_product(
+            clinic_id="c1",
+            sku="SKU-1",
+            title_key="care.product.aftercare_brush.title",
+            description_key=None,
+            category="hygiene",
+            price_amount=1000,
+            currency_code="RUB",
+            status="active",
+        )
+    )
+    repo.product_i18n[(product.care_product_id, "en")] = {
+        "title": "Synced Brush",
+        "description": "Synced description",
+        "short_label": "Brush",
+        "justification_text": None,
+        "usage_hint": None,
+    }
+    repo.catalog_settings["c1:care.default_locale"] = "en"
+
+    exact = asyncio.run(service.resolve_product_content(clinic_id="c1", product=product, locale="en"))
+    assert exact.title == "Synced Brush"
+    assert exact.locale == "en"
+
+    fallback = asyncio.run(service.resolve_product_content(clinic_id="c1", product=product, locale="ru"))
+    assert fallback.title == "Synced Brush"
+    assert fallback.locale == "en"

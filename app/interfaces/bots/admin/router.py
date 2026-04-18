@@ -307,7 +307,29 @@ def make_router(
             return
         lines = [i18n.t("admin.care.orders.title", locale)]
         for row in rows:
-            lines.append(i18n.t("admin.care.orders.item", locale).format(care_order_id=row.care_order_id, patient_id=row.patient_id, status=row.status, amount=row.total_amount, currency=row.currency_code, branch_id=(row.pickup_branch_id or "-")))
+            product_label = "-"
+            order_items = await care_commerce_service.repository.list_order_items(row.care_order_id)
+            if order_items:
+                product = await care_commerce_service.repository.get_product(order_items[0].care_product_id)
+                if product is not None:
+                    content = await care_commerce_service.resolve_product_content(
+                        clinic_id=row.clinic_id,
+                        product=product,
+                        locale=locale,
+                        fallback_locale=default_locale,
+                    )
+                    product_label = content.short_label or content.title or i18n.t(product.title_key, locale)
+            lines.append(
+                i18n.t("admin.care.orders.item", locale).format(
+                    care_order_id=row.care_order_id,
+                    patient_id=row.patient_id,
+                    status=row.status,
+                    amount=row.total_amount,
+                    currency=row.currency_code,
+                    branch_id=(row.pickup_branch_id or "-"),
+                )
+                + f" · {product_label}"
+            )
         await message.answer("\n".join(lines))
 
     @router.message(Command("care_order_action"))

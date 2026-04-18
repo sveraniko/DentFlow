@@ -792,6 +792,426 @@ class DbCareCommerceRepository:
             return "added"
         return "updated" if existing["value"] != value else "unchanged"
 
+    async def apply_catalog_sync_transaction(self, *, clinic_id: str, parsed, now) -> dict[str, dict[str, int]]:
+        engine = create_engine(self._db_config)
+        tab_stats: dict[str, dict[str, int]] = {
+            "products": {"added": 0, "updated": 0, "unchanged": 0, "skipped": 0},
+            "product_i18n": {"added": 0, "updated": 0, "unchanged": 0, "skipped": 0},
+            "branch_availability": {"added": 0, "updated": 0, "unchanged": 0, "skipped": 0},
+            "recommendation_sets": {"added": 0, "updated": 0, "unchanged": 0, "skipped": 0},
+            "recommendation_set_items": {"added": 0, "updated": 0, "unchanged": 0, "skipped": 0},
+            "recommendation_links": {"added": 0, "updated": 0, "unchanged": 0, "skipped": 0},
+            "settings": {"added": 0, "updated": 0, "unchanged": 0, "skipped": 0},
+        }
+        try:
+            async with engine.begin() as conn:
+                for row in parsed.products:
+                    existing = (
+                        await conn.execute(
+                            text(
+                                "SELECT care_product_id, product_code, status, category, use_case_tag, price_amount, currency_code, pickup_supported, delivery_supported, sort_order, title_key, description_key FROM care_commerce.products WHERE clinic_id=:clinic_id AND sku=:sku"
+                            ),
+                            {"clinic_id": clinic_id, "sku": row.sku},
+                        )
+                    ).mappings().first()
+                    care_product_id = str(existing["care_product_id"]) if existing else f"cp_{uuid4().hex[:16]}"
+                    title_key = f"care.catalog.{row.sku}.title"
+                    description_key = f"care.catalog.{row.sku}.description"
+                    await conn.execute(
+                        text(
+                            """
+                            INSERT INTO care_commerce.products (
+                              care_product_id, clinic_id, sku, title_key, description_key, product_code,
+                              category, use_case_tag, price_amount, currency_code, status,
+                              pickup_supported, delivery_supported, sort_order, available_qty,
+                              created_at, updated_at
+                            ) VALUES (
+                              :care_product_id, :clinic_id, :sku, :title_key, :description_key, :product_code,
+                              :category, :use_case_tag, :price_amount, :currency_code, :status,
+                              :pickup_supported, :delivery_supported, :sort_order, NULL,
+                              :created_at, :updated_at
+                            )
+                            ON CONFLICT (clinic_id, sku) DO UPDATE SET
+                              product_code=EXCLUDED.product_code,
+                              title_key=EXCLUDED.title_key,
+                              description_key=EXCLUDED.description_key,
+                              category=EXCLUDED.category,
+                              use_case_tag=EXCLUDED.use_case_tag,
+                              price_amount=EXCLUDED.price_amount,
+                              currency_code=EXCLUDED.currency_code,
+                              status=EXCLUDED.status,
+                              pickup_supported=EXCLUDED.pickup_supported,
+                              delivery_supported=EXCLUDED.delivery_supported,
+                              sort_order=EXCLUDED.sort_order,
+                              updated_at=EXCLUDED.updated_at
+                            """
+                        ),
+                        {
+                            "care_product_id": care_product_id,
+                            "clinic_id": clinic_id,
+                            "sku": row.sku,
+                            "title_key": title_key,
+                            "description_key": description_key,
+                            "product_code": row.product_code,
+                            "category": row.category,
+                            "use_case_tag": row.use_case_tag,
+                            "price_amount": int(row.price_amount * 100),
+                            "currency_code": row.currency_code,
+                            "status": row.status,
+                            "pickup_supported": row.pickup_supported,
+                            "delivery_supported": row.delivery_supported,
+                            "sort_order": row.sort_order,
+                            "created_at": now,
+                            "updated_at": now,
+                        },
+                    )
+                    if not existing:
+                        tab_stats["products"]["added"] += 1
+                    else:
+                        changed = (
+                            existing["product_code"] != row.product_code
+                            or existing["status"] != row.status
+                            or existing["category"] != row.category
+                            or existing["use_case_tag"] != row.use_case_tag
+                            or int(existing["price_amount"]) != int(row.price_amount * 100)
+                            or existing["currency_code"] != row.currency_code
+                            or bool(existing["pickup_supported"]) != row.pickup_supported
+                            or bool(existing["delivery_supported"]) != row.delivery_supported
+                            or existing["sort_order"] != row.sort_order
+                            or existing["title_key"] != title_key
+                            or existing["description_key"] != description_key
+                        )
+                        tab_stats["products"]["updated" if changed else "unchanged"] += 1
+
+                for row in parsed.product_i18n:
+                    product = (
+                        await conn.execute(
+                            text("SELECT care_product_id FROM care_commerce.products WHERE clinic_id=:clinic_id AND sku=:sku"),
+                            {"clinic_id": clinic_id, "sku": row.sku},
+                        )
+                    ).mappings().first()
+                    if not product:
+                        tab_stats["product_i18n"]["skipped"] += 1
+                        continue
+                    existing = (
+                        await conn.execute(
+                            text("SELECT title, description, short_label, justification_text, usage_hint FROM care_commerce.product_i18n WHERE care_product_id=:care_product_id AND locale=:locale"),
+                            {"care_product_id": product["care_product_id"], "locale": row.locale},
+                        )
+                    ).mappings().first()
+                    await conn.execute(
+                        text(
+                            """
+                            INSERT INTO care_commerce.product_i18n (
+                              care_product_i18n_id, clinic_id, care_product_id, locale, title, description,
+                              short_label, justification_text, usage_hint, created_at, updated_at
+                            ) VALUES (
+                              :care_product_i18n_id, :clinic_id, :care_product_id, :locale, :title, :description,
+                              :short_label, :justification_text, :usage_hint, :created_at, :updated_at
+                            )
+                            ON CONFLICT (care_product_id, locale) DO UPDATE SET
+                              title=EXCLUDED.title,
+                              description=EXCLUDED.description,
+                              short_label=EXCLUDED.short_label,
+                              justification_text=EXCLUDED.justification_text,
+                              usage_hint=EXCLUDED.usage_hint,
+                              updated_at=EXCLUDED.updated_at
+                            """
+                        ),
+                        {
+                            "care_product_i18n_id": f"cpi18n_{uuid4().hex[:16]}",
+                            "clinic_id": clinic_id,
+                            "care_product_id": product["care_product_id"],
+                            "locale": row.locale,
+                            "title": row.title,
+                            "description": row.description,
+                            "short_label": row.short_label,
+                            "justification_text": row.justification_text,
+                            "usage_hint": row.usage_hint,
+                            "created_at": now,
+                            "updated_at": now,
+                        },
+                    )
+                    if not existing:
+                        tab_stats["product_i18n"]["added"] += 1
+                    else:
+                        changed = any(existing[key] != getattr(row, key) for key in ("title", "description", "short_label", "justification_text", "usage_hint"))
+                        tab_stats["product_i18n"]["updated" if changed else "unchanged"] += 1
+
+                for row in parsed.branch_availability:
+                    product = (
+                        await conn.execute(
+                            text("SELECT care_product_id FROM care_commerce.products WHERE clinic_id=:clinic_id AND sku=:sku"),
+                            {"clinic_id": clinic_id, "sku": row.sku},
+                        )
+                    ).mappings().first()
+                    if not product:
+                        tab_stats["branch_availability"]["skipped"] += 1
+                        continue
+                    existing = (
+                        await conn.execute(
+                            text("SELECT available_qty, reserved_qty, status FROM care_commerce.branch_product_availability WHERE branch_id=:branch_id AND care_product_id=:care_product_id"),
+                            {"branch_id": row.branch_id, "care_product_id": product["care_product_id"]},
+                        )
+                    ).mappings().first()
+                    status = "active" if row.availability_enabled else "inactive"
+                    await conn.execute(
+                        text(
+                            """
+                            INSERT INTO care_commerce.branch_product_availability (
+                              branch_product_availability_id, clinic_id, branch_id, care_product_id,
+                              available_qty, reserved_qty, status, created_at, updated_at
+                            ) VALUES (
+                              :branch_product_availability_id, :clinic_id, :branch_id, :care_product_id,
+                              :available_qty, :reserved_qty, :status, :created_at, :updated_at
+                            )
+                            ON CONFLICT (branch_id, care_product_id) DO UPDATE SET
+                              clinic_id=EXCLUDED.clinic_id,
+                              available_qty=EXCLUDED.available_qty,
+                              status=EXCLUDED.status,
+                              updated_at=EXCLUDED.updated_at
+                            """
+                        ),
+                        {
+                            "branch_product_availability_id": f"bpa_{uuid4().hex[:16]}",
+                            "clinic_id": clinic_id,
+                            "branch_id": row.branch_id,
+                            "care_product_id": product["care_product_id"],
+                            "available_qty": row.on_hand_qty,
+                            "reserved_qty": int(existing["reserved_qty"]) if existing else 0,
+                            "status": status,
+                            "created_at": now,
+                            "updated_at": now,
+                        },
+                    )
+                    if not existing:
+                        tab_stats["branch_availability"]["added"] += 1
+                    else:
+                        changed = int(existing["available_qty"]) != row.on_hand_qty or existing["status"] != status
+                        tab_stats["branch_availability"]["updated" if changed else "unchanged"] += 1
+
+                for row in parsed.recommendation_sets:
+                    existing = (
+                        await conn.execute(
+                            text("SELECT status, title_ru, title_en, description_ru, description_en, sort_order FROM care_commerce.recommendation_sets WHERE clinic_id=:clinic_id AND set_code=:set_code"),
+                            {"clinic_id": clinic_id, "set_code": row.set_code},
+                        )
+                    ).mappings().first()
+                    await conn.execute(
+                        text(
+                            """
+                            INSERT INTO care_commerce.recommendation_sets (
+                              care_recommendation_set_id, clinic_id, set_code, status, title_ru, title_en,
+                              description_ru, description_en, sort_order, created_at, updated_at
+                            ) VALUES (
+                              :care_recommendation_set_id, :clinic_id, :set_code, :status, :title_ru, :title_en,
+                              :description_ru, :description_en, :sort_order, :created_at, :updated_at
+                            )
+                            ON CONFLICT (clinic_id, set_code) DO UPDATE SET
+                              status=EXCLUDED.status,
+                              title_ru=EXCLUDED.title_ru,
+                              title_en=EXCLUDED.title_en,
+                              description_ru=EXCLUDED.description_ru,
+                              description_en=EXCLUDED.description_en,
+                              sort_order=EXCLUDED.sort_order,
+                              updated_at=EXCLUDED.updated_at
+                            """
+                        ),
+                        {
+                            "care_recommendation_set_id": f"crs_{uuid4().hex[:16]}",
+                            "clinic_id": clinic_id,
+                            "set_code": row.set_code,
+                            "status": row.status,
+                            "title_ru": row.title_ru,
+                            "title_en": row.title_en,
+                            "description_ru": row.description_ru,
+                            "description_en": row.description_en,
+                            "sort_order": row.sort_order,
+                            "created_at": now,
+                            "updated_at": now,
+                        },
+                    )
+                    if not existing:
+                        tab_stats["recommendation_sets"]["added"] += 1
+                    else:
+                        changed = any(existing[key] != getattr(row, key) for key in ("status", "title_ru", "title_en", "description_ru", "description_en", "sort_order"))
+                        tab_stats["recommendation_sets"]["updated" if changed else "unchanged"] += 1
+
+                for row in parsed.recommendation_set_items:
+                    product = (
+                        await conn.execute(
+                            text("SELECT care_product_id FROM care_commerce.products WHERE clinic_id=:clinic_id AND sku=:sku"),
+                            {"clinic_id": clinic_id, "sku": row.sku},
+                        )
+                    ).mappings().first()
+                    rec_set = (
+                        await conn.execute(
+                            text("SELECT care_recommendation_set_id FROM care_commerce.recommendation_sets WHERE clinic_id=:clinic_id AND set_code=:set_code"),
+                            {"clinic_id": clinic_id, "set_code": row.set_code},
+                        )
+                    ).mappings().first()
+                    if not product or not rec_set:
+                        tab_stats["recommendation_set_items"]["skipped"] += 1
+                        continue
+                    existing = (
+                        await conn.execute(
+                            text("SELECT position, quantity, notes FROM care_commerce.recommendation_set_items WHERE care_recommendation_set_id=:set_id AND care_product_id=:product_id"),
+                            {"set_id": rec_set["care_recommendation_set_id"], "product_id": product["care_product_id"]},
+                        )
+                    ).mappings().first()
+                    await conn.execute(
+                        text(
+                            """
+                            INSERT INTO care_commerce.recommendation_set_items (
+                              care_recommendation_set_item_id, care_recommendation_set_id, care_product_id,
+                              position, quantity, notes, created_at, updated_at
+                            ) VALUES (
+                              :care_recommendation_set_item_id, :care_recommendation_set_id, :care_product_id,
+                              :position, :quantity, :notes, :created_at, :updated_at
+                            )
+                            ON CONFLICT (care_recommendation_set_id, care_product_id) DO UPDATE SET
+                              position=EXCLUDED.position,
+                              quantity=EXCLUDED.quantity,
+                              notes=EXCLUDED.notes,
+                              updated_at=EXCLUDED.updated_at
+                            """
+                        ),
+                        {
+                            "care_recommendation_set_item_id": f"crsi_{uuid4().hex[:16]}",
+                            "care_recommendation_set_id": rec_set["care_recommendation_set_id"],
+                            "care_product_id": product["care_product_id"],
+                            "position": row.position,
+                            "quantity": row.quantity,
+                            "notes": row.notes,
+                            "created_at": now,
+                            "updated_at": now,
+                        },
+                    )
+                    if not existing:
+                        tab_stats["recommendation_set_items"]["added"] += 1
+                    else:
+                        changed = existing["position"] != row.position or existing["quantity"] != row.quantity or existing["notes"] != row.notes
+                        tab_stats["recommendation_set_items"]["updated" if changed else "unchanged"] += 1
+
+                for row in parsed.recommendation_links:
+                    existing = (
+                        await conn.execute(
+                            text("SELECT relevance_rank, active, justification_key, justification_text_ru, justification_text_en FROM care_commerce.recommendation_links WHERE clinic_id=:clinic_id AND recommendation_type=:recommendation_type AND target_kind=:target_kind AND target_code=:target_code"),
+                            {
+                                "clinic_id": clinic_id,
+                                "recommendation_type": row.recommendation_type,
+                                "target_kind": row.target_kind,
+                                "target_code": row.target_code,
+                            },
+                        )
+                    ).mappings().first()
+                    await conn.execute(
+                        text(
+                            """
+                            INSERT INTO care_commerce.recommendation_links (
+                              care_recommendation_link_id, clinic_id, recommendation_type, target_kind, target_code,
+                              relevance_rank, active, justification_key, justification_text_ru, justification_text_en,
+                              created_at, updated_at
+                            ) VALUES (
+                              :care_recommendation_link_id, :clinic_id, :recommendation_type, :target_kind, :target_code,
+                              :relevance_rank, :active, :justification_key, :justification_text_ru, :justification_text_en,
+                              :created_at, :updated_at
+                            )
+                            ON CONFLICT (clinic_id, recommendation_type, target_kind, target_code) DO UPDATE SET
+                              relevance_rank=EXCLUDED.relevance_rank,
+                              active=EXCLUDED.active,
+                              justification_key=EXCLUDED.justification_key,
+                              justification_text_ru=EXCLUDED.justification_text_ru,
+                              justification_text_en=EXCLUDED.justification_text_en,
+                              updated_at=EXCLUDED.updated_at
+                            """
+                        ),
+                        {
+                            "care_recommendation_link_id": f"crl_{uuid4().hex[:16]}",
+                            "clinic_id": clinic_id,
+                            "recommendation_type": row.recommendation_type,
+                            "target_kind": row.target_kind,
+                            "target_code": row.target_code,
+                            "relevance_rank": row.relevance_rank,
+                            "active": row.active,
+                            "justification_key": row.justification_key,
+                            "justification_text_ru": row.justification_text_ru,
+                            "justification_text_en": row.justification_text_en,
+                            "created_at": now,
+                            "updated_at": now,
+                        },
+                    )
+                    if not existing:
+                        tab_stats["recommendation_links"]["added"] += 1
+                    else:
+                        changed = (
+                            existing["relevance_rank"] != row.relevance_rank
+                            or bool(existing["active"]) != row.active
+                            or existing["justification_key"] != row.justification_key
+                            or existing["justification_text_ru"] != row.justification_text_ru
+                            or existing["justification_text_en"] != row.justification_text_en
+                        )
+                        tab_stats["recommendation_links"]["updated" if changed else "unchanged"] += 1
+
+                for row in parsed.settings:
+                    existing = (
+                        await conn.execute(
+                            text("SELECT value FROM care_commerce.catalog_settings WHERE clinic_id=:clinic_id AND key=:key"),
+                            {"clinic_id": clinic_id, "key": row.key},
+                        )
+                    ).mappings().first()
+                    await conn.execute(
+                        text(
+                            """
+                            INSERT INTO care_commerce.catalog_settings (
+                              care_catalog_setting_id, clinic_id, key, value, created_at, updated_at
+                            ) VALUES (
+                              :care_catalog_setting_id, :clinic_id, :key, :value, :created_at, :updated_at
+                            )
+                            ON CONFLICT (clinic_id, key) DO UPDATE SET
+                              value=EXCLUDED.value,
+                              updated_at=EXCLUDED.updated_at
+                            """
+                        ),
+                        {
+                            "care_catalog_setting_id": f"ccs_{uuid4().hex[:16]}",
+                            "clinic_id": clinic_id,
+                            "key": row.key,
+                            "value": row.value,
+                            "created_at": now,
+                            "updated_at": now,
+                        },
+                    )
+                    if not existing:
+                        tab_stats["settings"]["added"] += 1
+                    else:
+                        tab_stats["settings"]["updated" if existing["value"] != row.value else "unchanged"] += 1
+            return tab_stats
+        finally:
+            await engine.dispose()
+
+    async def get_product_i18n_content(self, *, care_product_id: str, locale: str) -> dict[str, str | None] | None:
+        return await _fetch_one(
+            self._db_config,
+            """
+            SELECT title, description, short_label, justification_text, usage_hint
+            FROM care_commerce.product_i18n
+            WHERE care_product_id=:care_product_id AND locale=:locale
+            """,
+            {"care_product_id": care_product_id, "locale": locale.lower()},
+        )
+
+    async def get_catalog_setting(self, *, clinic_id: str, key: str) -> str | None:
+        row = await _fetch_one(
+            self._db_config,
+            "SELECT value FROM care_commerce.catalog_settings WHERE clinic_id=:clinic_id AND key=:key",
+            {"clinic_id": clinic_id, "key": key},
+        )
+        if not row:
+            return None
+        value = row.get("value")
+        return str(value) if value is not None else None
+
     async def _append_order_event(self, conn, order: CareOrder) -> None:
         event_name = _ORDER_EVENT_BY_STATUS.get(order.status)
         if not event_name:
