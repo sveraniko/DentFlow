@@ -9,6 +9,7 @@ import asyncio
 from app.config.settings import get_settings
 from app.infrastructure.outbox.repository import OutboxRepository, ProjectorCheckpointRepository
 from app.projections.analytics import AnalyticsEventLedgerProjector
+from app.projections.owner.daily_metrics_projector import OwnerDailyMetricsProjector
 from app.projections.runtime import ProjectorRunner
 from app.projections.search.patient_event_projector import PatientSearchProjector
 
@@ -18,7 +19,11 @@ async def _run(limit: int) -> None:
     runner = ProjectorRunner(
         outbox_repository=OutboxRepository(settings.db),
         checkpoint_repository=ProjectorCheckpointRepository(settings.db),
-        projectors=(AnalyticsEventLedgerProjector(settings.db), PatientSearchProjector(settings.db)),
+        projectors=(
+            AnalyticsEventLedgerProjector(settings.db),
+            PatientSearchProjector(settings.db),
+            OwnerDailyMetricsProjector(settings.db),
+        ),
     )
     print(await runner.run_once(limit=limit))
 

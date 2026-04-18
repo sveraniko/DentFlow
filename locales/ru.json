@@ -137,5 +137,15 @@
   "doctor.imaging.attach.ok": "Ссылка/снимок добавлены: {imaging_ref_id}.",
   "doctor.odontogram.save.usage": "Формат: /odontogram_save <patient_id> <json_payload>",
   "doctor.odontogram.save.invalid": "Payload одонтограммы должен быть JSON-объектом.",
-  "doctor.odontogram.save.ok": "Снимок одонтограммы сохранен: {snapshot_id}."
+  "doctor.odontogram.save.ok": "Снимок одонтограммы сохранен: {snapshot_id}.",
+  "owner.today.card": "Сегодня для владельца ({date})\nЗаписей: {bookings}\nОжидают подтверждения: {pending}\nЗавершено: {completed}\nОтменено: {canceled}\nНеявка: {no_show}\nОткрыто карт: {charts}\nОшибки напоминаний: {reminder_failures}\nОткрытые алерты: {open_alerts}",
+  "owner.digest.empty": "Сводка владельца пока недоступна.",
+  "owner.digest.card": "Сводка владельца ({date})\nСоздано: {created}\nПодтверждено: {confirmed}\nЗавершено: {completed}\nОтменено: {canceled}\nНеявка: {no_show}\nОшибки напоминаний: {reminder_failures}\nОткрытые алерты: {open_alerts}",
+  "owner.alerts.title": "Открытые алерты владельца:",
+  "owner.alerts.item": "• [{severity}] {alert_type} ({alert_date})\n  {summary}\n  /owner_alert_open {owner_alert_id}",
+  "owner.alerts.hint": "Открыть детали: /owner_alert_open <alert_id>",
+  "owner.alerts.empty": "Открытых алертов владельца нет.",
+  "owner.alert.open.usage": "Использование: /owner_alert_open <owner_alert_id>",
+  "owner.alert.open.missing": "Алерт владельца не найден.",
+  "owner.alert.open.card": "Алерт {owner_alert_id}\nТип: {alert_type}\nСерьезность: {severity}\nСтатус: {status}\nДата: {alert_date}\nСводка: {summary}\nДетали: {details}"
 }

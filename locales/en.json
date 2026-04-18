@@ -137,5 +137,15 @@
   "doctor.imaging.attach.ok": "Imaging reference attached: {imaging_ref_id}.",
   "doctor.odontogram.save.usage": "Usage: /odontogram_save <patient_id> <json_payload>",
   "doctor.odontogram.save.invalid": "Odontogram payload must be valid JSON object.",
-  "doctor.odontogram.save.ok": "Odontogram snapshot saved: {snapshot_id}."
+  "doctor.odontogram.save.ok": "Odontogram snapshot saved: {snapshot_id}.",
+  "owner.today.card": "Owner Today ({date})\nBookings: {bookings}\nPending confirmations: {pending}\nCompleted: {completed}\nCanceled: {canceled}\nNo-show: {no_show}\nCharts opened: {charts}\nReminder failures: {reminder_failures}\nOpen alerts: {open_alerts}",
+  "owner.digest.empty": "Owner digest is not ready yet.",
+  "owner.digest.card": "Owner Digest ({date})\nCreated: {created}\nConfirmed: {confirmed}\nCompleted: {completed}\nCanceled: {canceled}\nNo-show: {no_show}\nReminder failures: {reminder_failures}\nOpen alerts: {open_alerts}",
+  "owner.alerts.title": "Open owner alerts:",
+  "owner.alerts.item": "• [{severity}] {alert_type} ({alert_date})\n  {summary}\n  /owner_alert_open {owner_alert_id}",
+  "owner.alerts.hint": "Open details: /owner_alert_open <alert_id>",
+  "owner.alerts.empty": "No open owner alerts.",
+  "owner.alert.open.usage": "Usage: /owner_alert_open <owner_alert_id>",
+  "owner.alert.open.missing": "Owner alert not found.",
+  "owner.alert.open.card": "Alert {owner_alert_id}\nType: {alert_type}\nSeverity: {severity}\nStatus: {status}\nDate: {alert_date}\nSummary: {summary}\nDetails: {details}"
 }

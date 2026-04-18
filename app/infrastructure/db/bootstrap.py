@@ -865,6 +865,84 @@ STACK1_TABLES: tuple[str, ...] = (
       failed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
+
+    """
+    CREATE TABLE IF NOT EXISTS owner_views.daily_clinic_metrics (
+      clinic_id TEXT NOT NULL,
+      metrics_date DATE NOT NULL,
+      new_patients_count INTEGER NOT NULL DEFAULT 0,
+      bookings_created_count INTEGER NOT NULL DEFAULT 0,
+      bookings_confirmed_count INTEGER NOT NULL DEFAULT 0,
+      bookings_canceled_count INTEGER NOT NULL DEFAULT 0,
+      bookings_completed_count INTEGER NOT NULL DEFAULT 0,
+      bookings_no_show_count INTEGER NOT NULL DEFAULT 0,
+      bookings_reschedule_requested_count INTEGER NOT NULL DEFAULT 0,
+      reminders_scheduled_count INTEGER NOT NULL DEFAULT 0,
+      reminders_sent_count INTEGER NOT NULL DEFAULT 0,
+      reminders_acknowledged_count INTEGER NOT NULL DEFAULT 0,
+      reminders_failed_count INTEGER NOT NULL DEFAULT 0,
+      charts_opened_count INTEGER NOT NULL DEFAULT 0,
+      encounters_created_count INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (clinic_id, metrics_date)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS owner_views.daily_doctor_metrics (
+      clinic_id TEXT NOT NULL,
+      metrics_date DATE NOT NULL,
+      doctor_id TEXT NOT NULL,
+      bookings_created_count INTEGER NOT NULL DEFAULT 0,
+      bookings_confirmed_count INTEGER NOT NULL DEFAULT 0,
+      bookings_completed_count INTEGER NOT NULL DEFAULT 0,
+      bookings_no_show_count INTEGER NOT NULL DEFAULT 0,
+      bookings_reschedule_requested_count INTEGER NOT NULL DEFAULT 0,
+      reminders_sent_count INTEGER NOT NULL DEFAULT 0,
+      reminders_failed_count INTEGER NOT NULL DEFAULT 0,
+      encounters_created_count INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (clinic_id, metrics_date, doctor_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS owner_views.daily_service_metrics (
+      clinic_id TEXT NOT NULL,
+      metrics_date DATE NOT NULL,
+      service_id TEXT NOT NULL,
+      bookings_created_count INTEGER NOT NULL DEFAULT 0,
+      bookings_confirmed_count INTEGER NOT NULL DEFAULT 0,
+      bookings_completed_count INTEGER NOT NULL DEFAULT 0,
+      bookings_no_show_count INTEGER NOT NULL DEFAULT 0,
+      bookings_reschedule_requested_count INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (clinic_id, metrics_date, service_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS owner_views.owner_alerts (
+      owner_alert_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL,
+      alert_type TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      status TEXT NOT NULL,
+      entity_type TEXT NULL,
+      entity_id TEXT NULL,
+      alert_date DATE NOT NULL,
+      summary_text TEXT NOT NULL,
+      details_json JSONB NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_owner_alerts_clinic_status_date
+    ON owner_views.owner_alerts (clinic_id, status, alert_date DESC)
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_owner_alerts_open_dedupe
+    ON owner_views.owner_alerts (clinic_id, alert_type, alert_date, COALESCE(entity_type,''), COALESCE(entity_id,''))
+    WHERE status='open'
+    """,
     """
     CREATE TABLE IF NOT EXISTS analytics_raw.event_ledger (
       ledger_event_id BIGSERIAL PRIMARY KEY,
