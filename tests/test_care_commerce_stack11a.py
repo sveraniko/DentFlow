@@ -494,6 +494,21 @@ def test_product_content_resolution_prefers_synced_i18n_and_fallback_locale() ->
     assert fallback.locale == "en"
 
 
+def test_catalog_category_navigation_uses_active_catalog_products() -> None:
+    repo = InMemoryCareRepo()
+    service = CareCommerceService(repo)
+    asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-1", title_key="a", description_key=None, category="hygiene", price_amount=1000, currency_code="RUB", status="active"))
+    asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-2", title_key="b", description_key=None, category="irrigators", price_amount=2000, currency_code="RUB", status="active"))
+    asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-3", title_key="c", description_key=None, category="hygiene", price_amount=1100, currency_code="RUB", status="inactive"))
+
+    categories = asyncio.run(service.list_catalog_categories(clinic_id="c1"))
+    hygiene = asyncio.run(service.list_catalog_products_by_category(clinic_id="c1", category="hygiene"))
+
+    assert categories == ["hygiene", "irrigators"]
+    assert len(hygiene) == 1
+    assert hygiene[0].sku == "SKU-1"
+
+
 def test_manual_override_target_precedence_over_rule_mapping() -> None:
     repo = InMemoryCareRepo()
     service = CareCommerceService(repo)
@@ -661,6 +676,20 @@ def test_rule_links_still_work_when_no_manual_target() -> None:
     assert resolution.status == "rule_links_resolved"
     assert resolution.manual_target_present is False
     assert [row.care_product_id for row in resolution.products] == [product.care_product_id]
+
+
+def test_repeat_reserve_path_revalidates_current_stock_truth() -> None:
+    repo = InMemoryCareRepo()
+    service = CareCommerceService(repo)
+    product = asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-R", title_key="r", description_key=None, category="h", price_amount=1000, currency_code="RUB", status="active"))
+    asyncio.run(service.set_branch_product_availability(clinic_id="c1", branch_id="b1", care_product_id=product.care_product_id, available_qty=1, reserved_qty=0))
+
+    first = asyncio.run(service.reserve_if_available(care_order_id="co-1", care_product_id=product.care_product_id, branch_id="b1", reserved_qty=1))
+    second = asyncio.run(service.reserve_if_available(care_order_id="co-2", care_product_id=product.care_product_id, branch_id="b1", reserved_qty=1))
+
+    assert first.ok is True
+    assert second.ok is False
+    assert second.reason == "insufficient_stock"
 
 
 def test_doctor_issue_recommendation_with_set_target_persists_manual_override() -> None:

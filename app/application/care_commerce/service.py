@@ -141,6 +141,15 @@ class CareCommerceService:
     async def list_active_products_by_clinic(self, *, clinic_id: str) -> list[CareProduct]:
         return await self.repository.list_active_products_by_clinic(clinic_id=clinic_id)
 
+    async def list_catalog_categories(self, *, clinic_id: str) -> list[str]:
+        rows = await self.repository.list_active_products_by_clinic(clinic_id=clinic_id)
+        categories = sorted({str(row.category).strip() for row in rows if str(row.category).strip()})
+        return categories
+
+    async def list_catalog_products_by_category(self, *, clinic_id: str, category: str) -> list[CareProduct]:
+        rows = await self.repository.list_active_products_by_clinic(clinic_id=clinic_id)
+        return [row for row in rows if row.category == category]
+
     async def link_product_to_recommendation(
         self,
         *,
