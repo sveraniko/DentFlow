@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,8 @@ from app.interfaces.cards import (
     ActivePanelRegistry,
     BookingCardAdapter,
     BookingCardSeed,
+    BookingRuntimeSnapshot,
+    BookingRuntimeViewBuilder,
     CardAction,
     CardCallback,
     CardCallbackCodec,
@@ -232,10 +236,18 @@ def test_mode_transition_back_and_stale_protection_in_profile_flow(i18n: I18nSer
     shell = BookingCardAdapter.build(
         seed=BookingCardSeed(
             booking_id="bk_77",
-            title="Booking #77",
-            status_label="pending_confirmation",
+            role_variant="patient",
+            patient_label="Nina D.",
+            doctor_label="Dr. Smith",
+            service_label="Consultation",
+            branch_label="Main",
             datetime_label="2026-04-20 09:00",
+            local_time_hint="UTC",
+            status_label="Pending confirmation",
             state_token="rev-22",
+            can_confirm=True,
+            can_reschedule=True,
+            can_cancel=True,
         ),
         source=source,
         i18n=i18n,
@@ -262,6 +274,52 @@ def test_mode_transition_back_and_stale_protection_in_profile_flow(i18n: I18nSer
         expected_state_token="rev-10",
     )
     assert not stale_result.ok
+
+
+def test_booking_runtime_builder_and_role_variants(i18n: I18nService) -> None:
+    snapshot = BookingRuntimeSnapshot(
+        booking_id="bk_1",
+        role_variant="admin",
+        scheduled_start_at=datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc),
+        timezone_name="UTC",
+        patient_label="Nina D.",
+        doctor_label="Dr. Smith",
+        service_label="Consultation",
+        branch_label="Main",
+        status="confirmed",
+        compact_flags=("reminder",),
+        reminder_summary="sent",
+        reschedule_summary="none",
+        source_channel="telegram",
+        patient_contact="phone:+9955990099",
+        recommendation_summary="1 active",
+        care_order_summary="ready pickup",
+        chart_summary_entry="last note",
+        state_token="rev-booking",
+    )
+    seed = BookingRuntimeViewBuilder().build_seed(snapshot=snapshot, i18n=i18n, locale="en")
+    admin = BookingCardAdapter.build(seed=seed, source=SourceRef(context=SourceContext.ADMIN_TODAY, source_ref="today"), i18n=i18n, locale="en", mode=CardMode.EXPANDED)
+    labels = [a.label for a in admin.actions]
+    assert "Arrived" in labels
+    assert "Patient" in labels
+    assert any("Reminder:" in line for line in admin.detail_lines)
+
+    doctor_seed = BookingRuntimeViewBuilder().build_seed(
+        snapshot=replace(snapshot, role_variant="doctor", status="checked_in", state_token="rev-doc"),
+        i18n=i18n,
+        locale="en",
+    )
+    doctor = BookingCardAdapter.build(seed=doctor_seed, source=SourceRef(context=SourceContext.DOCTOR_QUEUE, source_ref="queue"), i18n=i18n, locale="en")
+    assert any(a.action == CardAction.IN_SERVICE for a in doctor.actions)
+    assert all(a.action != CardAction.CANCEL for a in doctor.actions)
+
+    owner_seed = BookingRuntimeViewBuilder().build_seed(
+        snapshot=replace(snapshot, role_variant="owner", status="confirmed", state_token="rev-own"),
+        i18n=i18n,
+        locale="en",
+    )
+    owner = BookingCardAdapter.build(seed=owner_seed, source=SourceRef(context=SourceContext.OWNER_ALERT, source_ref="alert"), i18n=i18n, locale="en")
+    assert all(a.action not in {CardAction.CONFIRM, CardAction.CANCEL, CardAction.RESCHEDULE} for a in owner.actions)
 
 
 def test_patient_unauthorized_is_localized(i18n: I18nService) -> None:

@@ -1,6 +1,8 @@
 from app.interfaces.cards.adapters import (
     BookingCardAdapter,
     BookingCardSeed,
+    BookingRuntimeSnapshot,
+    BookingRuntimeViewBuilder,
     DoctorCardAdapter,
     DoctorCardSeed,
     DoctorRuntimeSnapshot,
@@ -52,6 +54,8 @@ __all__ = [
     "BackTarget",
     "BookingCardAdapter",
     "BookingCardSeed",
+    "BookingRuntimeSnapshot",
+    "BookingRuntimeViewBuilder",
     "CallbackValidationResult",
     "CardAction",
     "CardActionButton",

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
 from app.domain.access_identity.models import RoleCode
 from app.interfaces.cards.models import (
@@ -72,10 +74,34 @@ class DoctorCardSeed:
 @dataclass(slots=True, frozen=True)
 class BookingCardSeed:
     booking_id: str
-    title: str
-    status_label: str
+    role_variant: str
+    patient_label: str
+    doctor_label: str
+    service_label: str
+    branch_label: str
     datetime_label: str
+    local_time_hint: str | None
+    status_label: str
     state_token: str
+    compact_flags: tuple[str, ...] = ()
+    reminder_summary: str | None = None
+    reschedule_summary: str | None = None
+    source_channel: str | None = None
+    patient_contact_hint: str | None = None
+    recommendation_summary: str | None = None
+    care_order_summary: str | None = None
+    chart_summary_entry: str | None = None
+    next_step_note: str | None = None
+    can_confirm: bool = False
+    can_reschedule: bool = False
+    can_cancel: bool = False
+    can_mark_arrived: bool = False
+    can_in_service: bool = False
+    can_complete: bool = False
+    can_open_patient: bool = False
+    can_open_chart: bool = False
+    can_open_recommendation: bool = False
+    can_open_care_order: bool = False
 
 
 @dataclass(slots=True, frozen=True)
@@ -125,6 +151,29 @@ class DoctorRuntimeSnapshot:
     today_bookings: int | None = None
     schedule_summary: str | None = None
     service_tags: tuple[str, ...] = ()
+
+
+@dataclass(slots=True, frozen=True)
+class BookingRuntimeSnapshot:
+    booking_id: str
+    state_token: str
+    role_variant: str
+    scheduled_start_at: datetime
+    timezone_name: str = "UTC"
+    patient_label: str = "-"
+    doctor_label: str = "-"
+    service_label: str = "-"
+    branch_label: str = "-"
+    status: str = "pending_confirmation"
+    compact_flags: tuple[str, ...] = ()
+    reminder_summary: str | None = None
+    reschedule_summary: str | None = None
+    source_channel: str | None = None
+    patient_contact: str | None = None
+    recommendation_summary: str | None = None
+    care_order_summary: str | None = None
+    chart_summary_entry: str | None = None
+    next_step_note_key: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -198,6 +247,67 @@ class DoctorRuntimeViewBuilder:
             queue_summary=queue_summary,
             service_tags=snapshot.service_tags,
         )
+
+
+@dataclass(slots=True, frozen=True)
+class BookingRuntimeViewBuilder:
+    def build_seed(self, *, snapshot: BookingRuntimeSnapshot, i18n: CardLocalizer, locale: str) -> BookingCardSeed:
+        tz = ZoneInfo(snapshot.timezone_name) if snapshot.timezone_name else timezone.utc
+        local_dt = snapshot.scheduled_start_at.astimezone(tz)
+        status_label = i18n.t(f"booking.status.{snapshot.status}", locale)
+        next_step_note = i18n.t(snapshot.next_step_note_key, locale) if snapshot.next_step_note_key else None
+        visibility = _booking_visibility(snapshot.role_variant, snapshot.status)
+        return BookingCardSeed(
+            booking_id=snapshot.booking_id,
+            role_variant=snapshot.role_variant,
+            patient_label=snapshot.patient_label,
+            doctor_label=snapshot.doctor_label,
+            service_label=snapshot.service_label,
+            branch_label=snapshot.branch_label,
+            datetime_label=local_dt.strftime("%Y-%m-%d %H:%M"),
+            local_time_hint=snapshot.timezone_name,
+            status_label=status_label,
+            state_token=snapshot.state_token,
+            compact_flags=snapshot.compact_flags,
+            reminder_summary=snapshot.reminder_summary,
+            reschedule_summary=snapshot.reschedule_summary,
+            source_channel=snapshot.source_channel,
+            patient_contact_hint=_masked_contact(snapshot.patient_contact),
+            recommendation_summary=snapshot.recommendation_summary,
+            care_order_summary=snapshot.care_order_summary,
+            chart_summary_entry=snapshot.chart_summary_entry,
+            next_step_note=next_step_note,
+            can_confirm=visibility["confirm"],
+            can_reschedule=visibility["reschedule"],
+            can_cancel=visibility["cancel"],
+            can_mark_arrived=visibility["checked_in"],
+            can_in_service=visibility["in_service"],
+            can_complete=visibility["complete"],
+            can_open_patient=visibility["open_patient"],
+            can_open_chart=visibility["open_chart"],
+            can_open_recommendation=visibility["open_recommendation"] and bool(snapshot.recommendation_summary),
+            can_open_care_order=visibility["open_care_order"] and bool(snapshot.care_order_summary),
+        )
+
+
+def _booking_visibility(role_variant: str, status: str) -> dict[str, bool]:
+    terminal = status in {"completed", "canceled", "no_show"}
+    patient = role_variant == "patient"
+    admin = role_variant == "admin"
+    doctor = role_variant == "doctor"
+    owner = role_variant == "owner"
+    return {
+        "confirm": (patient or admin) and status == "pending_confirmation",
+        "reschedule": (patient or admin) and not terminal,
+        "cancel": (patient or admin) and not terminal,
+        "checked_in": admin and status in {"confirmed", "reschedule_requested"},
+        "in_service": doctor and status in {"checked_in", "confirmed"},
+        "complete": doctor and status == "in_service",
+        "open_patient": admin or doctor,
+        "open_chart": admin or doctor,
+        "open_recommendation": not owner,
+        "open_care_order": not owner,
+    }
 
 
 def _masked_contact(contact: str | None) -> str | None:
@@ -433,22 +543,77 @@ class DoctorCardAdapter:
 class BookingCardAdapter:
     @staticmethod
     def build(*, seed: BookingCardSeed, source: SourceRef, i18n: CardLocalizer, locale: str, mode: CardMode = CardMode.COMPACT) -> CardShell:
-        actions = (
-            CardActionButton(action=CardAction.EXPAND, label=i18n.t("card.action.expand", locale))
-            if mode == CardMode.COMPACT
-            else CardActionButton(action=CardAction.COLLAPSE, label=i18n.t("card.action.collapse", locale)),
-            CardActionButton(action=CardAction.BACK, label=i18n.t("common.back", locale)),
-        )
+        title = f"{seed.datetime_label} · {seed.patient_label}"
+        subtitle = f"{seed.doctor_label} · {seed.service_label} · {seed.branch_label}"
+        badges = [CardBadge(seed.status_label), *[CardBadge(flag) for flag in seed.compact_flags[:3]]]
+        meta_lines = [
+            CardMetaLine(key="patient", value=seed.patient_label),
+            CardMetaLine(key="doctor", value=seed.doctor_label),
+            CardMetaLine(key="service", value=seed.service_label),
+            CardMetaLine(key="branch", value=seed.branch_label),
+            CardMetaLine(key="status", value=seed.status_label),
+        ]
+        if seed.local_time_hint:
+            meta_lines.insert(0, CardMetaLine(key="time", value=f"{seed.datetime_label} ({seed.local_time_hint})"))
+
+        detail_lines: list[str] = []
+        if mode == CardMode.EXPANDED:
+            if seed.source_channel:
+                detail_lines.append(i18n.t("card.booking.detail.source", locale).format(value=seed.source_channel))
+            if seed.patient_contact_hint and seed.role_variant in {"admin", "doctor"}:
+                detail_lines.append(i18n.t("card.booking.detail.contact", locale).format(value=seed.patient_contact_hint))
+            if seed.reminder_summary:
+                detail_lines.append(i18n.t("card.booking.detail.reminder", locale).format(value=seed.reminder_summary))
+            if seed.reschedule_summary:
+                detail_lines.append(i18n.t("card.booking.detail.reschedule", locale).format(value=seed.reschedule_summary))
+            if seed.recommendation_summary:
+                detail_lines.append(i18n.t("card.booking.detail.recommendation", locale).format(value=seed.recommendation_summary))
+            if seed.care_order_summary:
+                detail_lines.append(i18n.t("card.booking.detail.care_order", locale).format(value=seed.care_order_summary))
+            if seed.chart_summary_entry:
+                detail_lines.append(i18n.t("card.booking.detail.chart", locale).format(value=seed.chart_summary_entry))
+            if seed.next_step_note:
+                detail_lines.append(i18n.t("card.booking.detail.next_step", locale).format(value=seed.next_step_note))
+
+        actions: list[CardActionButton] = [
+            CardActionButton(
+                action=(CardAction.EXPAND if mode == CardMode.COMPACT else CardAction.COLLAPSE),
+                label=(i18n.t("card.action.expand", locale) if mode == CardMode.COMPACT else i18n.t("card.action.collapse", locale)),
+            )
+        ]
+        if seed.can_confirm:
+            actions.append(CardActionButton(action=CardAction.CONFIRM, label=i18n.t("card.booking.action.confirm", locale)))
+        if seed.can_mark_arrived:
+            actions.append(CardActionButton(action=CardAction.CHECKED_IN, label=i18n.t("card.booking.action.arrived", locale)))
+        if seed.can_in_service:
+            actions.append(CardActionButton(action=CardAction.IN_SERVICE, label=i18n.t("card.booking.action.in_service", locale)))
+        if seed.can_complete:
+            actions.append(CardActionButton(action=CardAction.COMPLETE, label=i18n.t("card.booking.action.complete", locale)))
+        if seed.can_reschedule:
+            actions.append(CardActionButton(action=CardAction.RESCHEDULE, label=i18n.t("card.booking.action.reschedule", locale)))
+        if seed.can_cancel:
+            actions.append(CardActionButton(action=CardAction.CANCEL, label=i18n.t("card.booking.action.cancel", locale)))
+        if mode == CardMode.EXPANDED and seed.can_open_patient:
+            actions.append(CardActionButton(action=CardAction.OPEN_PATIENT, label=i18n.t("card.booking.action.patient", locale)))
+        if mode == CardMode.EXPANDED and seed.can_open_chart:
+            actions.append(CardActionButton(action=CardAction.OPEN_CHART, label=i18n.t("card.booking.action.chart", locale)))
+        if mode == CardMode.EXPANDED and seed.can_open_recommendation:
+            actions.append(CardActionButton(action=CardAction.OPEN_RECOMMENDATION, label=i18n.t("card.booking.action.recommendation", locale)))
+        if mode == CardMode.EXPANDED and seed.can_open_care_order:
+            actions.append(CardActionButton(action=CardAction.OPEN_CARE_ORDER, label=i18n.t("card.booking.action.care_order", locale)))
+        actions.append(CardActionButton(action=CardAction.BACK, label=i18n.t("common.back", locale)))
+
         return CardShell(
             profile=CardProfile.BOOKING,
             entity_type=EntityType.BOOKING,
             entity_id=seed.booking_id,
             mode=mode,
-            title=seed.title,
-            subtitle=seed.datetime_label,
+            title=title,
+            subtitle=subtitle,
             source=source,
             state_token=seed.state_token,
-            meta_lines=(CardMetaLine(key="status", value=seed.status_label),),
-            detail_lines=((i18n.t("card.booking.detail.time", locale).format(value=seed.datetime_label),) if mode == CardMode.EXPANDED else ()),
-            actions=actions,
+            badges=tuple(badges),
+            meta_lines=tuple(meta_lines),
+            detail_lines=tuple(detail_lines),
+            actions=tuple(actions),
         )
