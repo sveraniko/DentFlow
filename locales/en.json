@@ -230,5 +230,8 @@
   "care.category.ortho_care": "Ortho care",
   "care.category.pediatric_care": "Pediatric care",
   "care.category.gum_care": "Gum care",
-  "care.category.hygiene": "Hygiene"
+  "care.category.hygiene": "Hygiene",
+  "common.card.callback.stale": "This card is outdated. Please reopen it from the source list.",
+  "common.card.callback.invalid_context": "This action no longer matches the current context.",
+  "common.card.callback.invalid_entity": "This action no longer matches the selected item."
 }
