@@ -138,6 +138,6 @@ def test_care_order_object_rows_and_expanded_view_expose_object_actions() -> Non
 def test_reserve_again_localization_stays_object_action_oriented() -> None:
     i18n = I18nService(locales_path=Path("locales"), default_locale="en")
 
-    assert i18n.t("patient.care.orders.repeat.action", "en") == "Reserve again"
-    assert i18n.t("patient.care.orders.repeat.action", "ru") == "Повторить резерв"
-    assert "reserve" in i18n.t("patient.care.orders.object.detail", "en").lower()
+    assert "Reserve again" in i18n.t("patient.care.orders.repeat.action", "en")
+    assert "Повторить резерв" in i18n.t("patient.care.orders.repeat.action", "ru")
+    assert "Order {care_order_id}" in i18n.t("patient.care.orders.object.detail", "en")

@@ -1,7 +1,12 @@
 from pathlib import Path
 
 from app.common.i18n import I18nService
-from app.interfaces.bots.patient.router import _CompactProductRowCard, _parse_gallery_index, _resolve_media_ref
+from app.interfaces.bots.patient.router import (
+    _CompactProductRowCard,
+    _compose_product_object_list_text,
+    _parse_gallery_index,
+    _resolve_media_ref,
+)
 from app.interfaces.cards import (
     CareOrderCardAdapter,
     CareOrderRuntimeSnapshot,
@@ -55,6 +60,65 @@ def test_compact_product_row_grammar_supports_recommendation_and_category_contex
     assert category_row.supports_open_action()
     assert recommendation_row.supports_open_action()
     assert category_row.grammar_signature()[:2] == recommendation_row.grammar_signature()[:2]
+
+
+def test_compact_product_row_renders_object_block_for_panel_body() -> None:
+    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+    seed = ProductCardSeed(
+        product_id="prod-1",
+        title="Nano Brush",
+        price_label="25 GEL",
+        availability_label="In stock",
+        short_label="Soft",
+        selected_branch_label="Main branch",
+        recommendation_badge="Recommended",
+        state_token="care:1",
+    )
+    row = _CompactProductRowCard(
+        product_id="prod-1",
+        shell=ProductCardAdapter.build(
+            seed=seed,
+            source=SourceRef(context=SourceContext.RECOMMENDATION_DETAIL, source_ref="care.recommendation"),
+            i18n=i18n,
+            locale="en",
+            mode=CardMode.LIST_ROW,
+        ),
+    )
+    block = row.object_block_lines(index=2)
+    assert block[0] == "2. Nano Brush"
+    assert "   - 25 GEL" in block
+    assert "   - In stock" in block
+    assert "   - Recommended" in block
+    assert "   - Main branch" in block
+
+
+def test_product_object_list_panel_composes_object_rows_not_single_text_lines() -> None:
+    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+    seed = ProductCardSeed(
+        product_id="prod-1",
+        title="Nano Brush",
+        price_label="25 GEL",
+        availability_label="In stock",
+        short_label="Soft",
+        selected_branch_label="Main branch",
+        state_token="care:1",
+    )
+    rows = [
+        _CompactProductRowCard(
+            product_id="prod-1",
+            shell=ProductCardAdapter.build(
+                seed=seed,
+                source=SourceRef(context=SourceContext.CARE_CATALOG_CATEGORY, source_ref="care.catalog"),
+                i18n=i18n,
+                locale="en",
+                mode=CardMode.LIST_ROW,
+            ),
+        )
+    ]
+    text = _compose_product_object_list_text(header_lines=["Care products", "Page 1"], row_cards=rows)
+    assert "1. Nano Brush" in text
+    assert "   - 25 GEL" in text
+    assert "Care products" in text
 
 
 def test_media_ref_resolution_supports_photo_video_and_missing_values() -> None:
