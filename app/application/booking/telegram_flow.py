@@ -406,6 +406,18 @@ class BookingPatientFlowService:
             return InvalidStateOutcome(kind="invalid_state", reason=validation.kind)
         return await self.orchestration.request_booking_reschedule(booking_id=booking_id, reason_code="patient_requested")
 
+    async def confirm_existing_booking(self, *, clinic_id: str, telegram_user_id: int, callback_session_id: str, booking_id: str):
+        validation = await self.validate_existing_booking_control_action(
+            clinic_id=clinic_id,
+            telegram_user_id=telegram_user_id,
+            callback_session_id=callback_session_id,
+            booking_id=booking_id,
+            allowed_statuses={"pending_confirmation"},
+        )
+        if validation.kind != "valid":
+            return InvalidStateOutcome(kind="invalid_state", reason=validation.kind)
+        return await self.orchestration.confirm_booking(booking_id=booking_id, reason_code="patient_confirmed")
+
     async def cancel_booking(self, *, clinic_id: str, telegram_user_id: int, callback_session_id: str, booking_id: str):
         validation = await self.validate_existing_booking_control_action(
             clinic_id=clinic_id,

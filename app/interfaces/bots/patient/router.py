@@ -1145,6 +1145,20 @@ def make_router(
                     return
                 await callback.answer(i18n.t("patient.booking.finalize.invalid_state", _locale()), show_alert=True)
                 return
+            if decoded.page_or_index == "confirm":
+                result = await booking_flow.confirm_existing_booking(
+                    clinic_id=clinic_id,
+                    telegram_user_id=callback.from_user.id,
+                    callback_session_id=callback_session_id,
+                    booking_id=booking_id,
+                )
+                if isinstance(result, OrchestrationSuccess):
+                    card = booking_flow.build_booking_card(booking=result.entity)
+                    session_id = (await _load_flow_state(callback.from_user.id)).booking_session_id
+                    await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=_render_booking_card_text(card, locale=_locale()))
+                    return
+                await callback.answer(i18n.t("patient.booking.finalize.invalid_state", _locale()), show_alert=True)
+                return
             if decoded.page_or_index == "waitlist":
                 created = await booking_flow.join_earlier_slot_waitlist(
                     clinic_id=clinic_id,
@@ -1626,6 +1640,27 @@ def make_router(
         card = booking_flow.build_booking_card(booking=booking)
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
+                *(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                text=i18n.t("card.booking.action.confirm", locale),
+                                callback_data=await _encode_runtime_callback(
+                                    profile=CardProfile.BOOKING,
+                                    entity_type=EntityType.BOOKING,
+                                    entity_id=booking.booking_id,
+                                    action=CardAction.CONFIRM,
+                                    source_context=SourceContext.BOOKING_LIST,
+                                    source_ref="mybk.confirm",
+                                    page_or_index="confirm",
+                                    state_token=effective_session_id,
+                                ),
+                            )
+                        ]
+                    ]
+                    if booking.status == "pending_confirmation"
+                    else []
+                ),
                 [
                     InlineKeyboardButton(
                         text=i18n.t("patient.booking.my.reschedule", locale),
@@ -1633,7 +1668,7 @@ def make_router(
                             profile=CardProfile.BOOKING,
                             entity_type=EntityType.BOOKING,
                             entity_id=booking.booking_id,
-                            action=CardAction.BOOKINGS,
+                            action=CardAction.RESCHEDULE,
                             source_context=SourceContext.BOOKING_LIST,
                             source_ref="mybk.reschedule",
                             page_or_index="reschedule",
@@ -1648,7 +1683,7 @@ def make_router(
                             profile=CardProfile.BOOKING,
                             entity_type=EntityType.BOOKING,
                             entity_id=booking.booking_id,
-                            action=CardAction.BOOKINGS,
+                            action=CardAction.RESCHEDULE,
                             source_context=SourceContext.BOOKING_LIST,
                             source_ref="mybk.waitlist",
                             page_or_index="waitlist",
@@ -1663,7 +1698,7 @@ def make_router(
                             profile=CardProfile.BOOKING,
                             entity_type=EntityType.BOOKING,
                             entity_id=booking.booking_id,
-                            action=CardAction.BOOKINGS,
+                            action=CardAction.CANCEL,
                             source_context=SourceContext.BOOKING_LIST,
                             source_ref="mybk.cancel_prompt",
                             page_or_index="cancel_prompt",
@@ -1671,7 +1706,7 @@ def make_router(
                         ),
                     )
                 ],
-            ]
+            ],
         )
         await _send_or_edit_panel(
             actor_id=actor_id,
