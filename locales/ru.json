@@ -326,5 +326,14 @@
   "card.booking.action.chart": "Карта",
   "card.booking.action.recommendation": "Рекомендации",
   "card.booking.action.care_order": "Уход",
-  "patient.care.products.open.indexed": "Открыть #{index}"
+  "patient.care.products.open.indexed": "Открыть #{index}",
+  "admin.today.title": "Рабочий стол на сегодня",
+  "admin.today.filters": "Фильтры · филиал: {branch} · врач: {doctor} · статус: {status}",
+  "admin.today.empty": "Нет записей для выбранных фильтров на сегодня.",
+  "admin.today.row": "• {time} · {patient} · {doctor} · {service} · {branch} · {status} · {flags}{issue_hint}",
+  "admin.today.filter.branch": "Филиал",
+  "admin.today.filter.doctor": "Врач",
+  "admin.today.filter.status": "Статус",
+  "admin.today.issue.confirmation_no_response": "Нет ответа",
+  "admin.today.issue.reminder_failed": "Сбой напоминания"
 }

@@ -4,6 +4,7 @@ from pathlib import Path
 from aiogram import Dispatcher
 
 from app.application.access import AccessResolver
+from app.application.admin.workdesk import AdminWorkdeskReadService
 from app.application.booking import (
     AdminEscalationService,
     AvailabilitySlotService,
@@ -127,6 +128,7 @@ class RuntimeRegistry:
         )
         self.voice_mode_store = VoiceSearchModeStore(runtime=self.card_runtime)
         self.owner_analytics_service = OwnerAnalyticsService(settings.db)
+        self.admin_workdesk_service = AdminWorkdeskReadService(settings.db, app_default_timezone=settings.app.default_timezone)
         stt_provider = build_speech_to_text_provider(settings.stt)
         self.speech_to_text_service = SpeechToTextService(
             provider=stt_provider,
@@ -181,6 +183,7 @@ class RuntimeRegistry:
                 stt_service=self.speech_to_text_service,
                 voice_mode_store=self.voice_mode_store,
                 care_commerce_service=self.care_commerce_service,
+                admin_workdesk=self.admin_workdesk_service,
                 default_locale=self.settings.app.default_locale,
                 max_voice_duration_sec=self.settings.stt.max_voice_duration_sec,
                 max_voice_file_size_bytes=self.settings.stt.max_voice_file_size_bytes,
