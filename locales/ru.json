@@ -230,5 +230,8 @@
   "care.category.ortho_care": "Ортодонтический уход",
   "care.category.pediatric_care": "Детский уход",
   "care.category.gum_care": "Уход за деснами",
-  "care.category.hygiene": "Гигиена"
+  "care.category.hygiene": "Гигиена",
+  "common.card.callback.stale": "Эта карточка устарела. Откройте её заново из исходного списка.",
+  "common.card.callback.invalid_context": "Это действие больше не соответствует текущему контексту.",
+  "common.card.callback.invalid_entity": "Это действие больше не соответствует выбранному объекту."
 }
