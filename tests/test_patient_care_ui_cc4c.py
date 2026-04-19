@@ -1,35 +1,50 @@
 from pathlib import Path
 
 from app.common.i18n import I18nService
-from app.interfaces.bots.patient.router import _CompactProductPickerItem, _resolve_media_ref
+from app.interfaces.bots.patient.router import _CompactProductRowCard, _resolve_media_ref
 from app.interfaces.cards import CardAction, CardMode, ProductCardAdapter, ProductCardSeed, SourceContext, SourceRef
 
 
 def test_compact_product_row_grammar_supports_recommendation_and_category_contexts() -> None:
-    category_row = _CompactProductPickerItem(
+    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+    seed = ProductCardSeed(
         product_id="prod-1",
         title="Nano Brush",
-        price_amount=25,
-        currency_code="GEL",
-        availability="In stock",
+        price_label="25 GEL",
+        availability_label="In stock",
         short_label="Soft",
-        branch_hint="Main branch",
+        selected_branch_label="Main branch",
+        recommendation_badge="Recommended",
+        state_token="care:1",
     )
-    recommendation_row = _CompactProductPickerItem(
+    category_row = _CompactProductRowCard(
         product_id="prod-1",
-        title="Nano Brush",
-        price_amount=25,
-        currency_code="GEL",
-        availability="In stock",
-        short_label="Soft",
-        badge="Recommended",
-        branch_hint="Main branch",
+        shell=ProductCardAdapter.build(
+            seed=seed,
+            source=SourceRef(context=SourceContext.CARE_CATALOG_CATEGORY, source_ref="care.catalog"),
+            i18n=i18n,
+            locale="en",
+            mode=CardMode.LIST_ROW,
+        ),
+    )
+    recommendation_row = _CompactProductRowCard(
+        product_id="prod-1",
+        shell=ProductCardAdapter.build(
+            seed=seed,
+            source=SourceRef(context=SourceContext.RECOMMENDATION_DETAIL, source_ref="care.recommendation"),
+            i18n=i18n,
+            locale="en",
+            mode=CardMode.LIST_ROW,
+        ),
     )
 
     assert category_row.button_label() == "Nano Brush · 25 GEL · In stock · Soft · Main branch"
     rec_label = recommendation_row.button_label()
     assert rec_label.startswith("Nano Brush · 25 GEL · In stock · Recommended")
     assert len(rec_label) <= 62
+    assert category_row.supports_open_action()
+    assert recommendation_row.supports_open_action()
+    assert category_row.grammar_signature()[:2] == recommendation_row.grammar_signature()[:2]
 
 
 def test_media_ref_resolution_supports_photo_video_and_missing_values() -> None:
