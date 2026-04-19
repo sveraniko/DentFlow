@@ -38,6 +38,7 @@ from app.interfaces.cards import (
     RuntimeTtlConfig,
     SourceContext,
     SourceRef,
+    RuntimeStateError,
     resolve_back_target,
     transition_mode,
     validate_stale_callback,
@@ -109,6 +110,39 @@ def test_active_panel_registry_is_family_aware_and_supersedes() -> None:
         assert second.operation == "edit"
         assert second.message_id == 700
         assert (await runtime.resolve_active_panel(actor_id=10, panel_family=PanelFamily.BOOKING_DETAIL)).message_id == 800
+
+    asyncio.run(_run())
+
+
+def test_actor_session_state_is_shared_and_restart_safe_within_ttl() -> None:
+    async def _run() -> None:
+        redis = InMemoryRedis()
+        runtime_a = CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=redis))
+        runtime_b = CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=redis))
+
+        await runtime_a.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=42,
+            payload={
+                "booking_session_id": "sess-1",
+                "booking_mode": "existing_lookup_contact",
+                "care": {"selected_category": "paste"},
+            },
+        )
+        loaded = await runtime_b.resolve_actor_session_state(scope="patient_flow", actor_id=42)
+        assert loaded is not None
+        assert loaded["booking_session_id"] == "sess-1"
+        assert loaded["booking_mode"] == "existing_lookup_contact"
+        assert loaded["care"]["selected_category"] == "paste"
+
+    asyncio.run(_run())
+
+
+def test_missing_active_panel_is_rejected_as_stale() -> None:
+    async def _run() -> None:
+        runtime = CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=InMemoryRedis()))
+        with pytest.raises(RuntimeStateError):
+            await runtime.ensure_panel_is_active(actor_id=11, panel_family=PanelFamily.PATIENT_CATALOG, state_token="rev-1")
 
     asyncio.run(_run())
 
