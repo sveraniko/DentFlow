@@ -233,5 +233,7 @@
   "care.category.hygiene": "Hygiene",
   "common.card.callback.stale": "This card is outdated. Please reopen it from the source list.",
   "common.card.callback.invalid_context": "This action no longer matches the current context.",
-  "common.card.callback.invalid_entity": "This action no longer matches the selected item."
+  "common.card.callback.invalid_entity": "This action no longer matches the selected item.",
+  "common.card.callback.invalid_source_ref": "This action no longer matches the source list.",
+  "common.card.callback.invalid_page": "This action no longer matches the current page."
 }

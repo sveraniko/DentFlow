@@ -103,12 +103,36 @@ def test_callback_contract_roundtrip() -> None:
     packed = CardCallbackCodec.encode(callback)
     resolved = CardCallbackCodec.decode(packed)
 
+    assert packed.startswith("c2|")
     assert resolved == callback
 
 
 def test_invalid_callback_is_rejected() -> None:
     with pytest.raises(CardCallbackError):
         CardCallbackCodec.decode("broken")
+
+
+def test_legacy_callback_contract_roundtrip_still_supported() -> None:
+    raw = "c1|product|care_product|prod_123|cover|expanded|recommendation_detail|rec_19|0|rev-9"
+    resolved = CardCallbackCodec.decode(raw)
+    assert resolved.entity_id == "prod_123"
+    assert resolved.action == CardAction.COVER
+
+
+def test_compact_callback_payload_fits_telegram_limit() -> None:
+    callback = CardCallback(
+        profile=CardProfile.RECOMMENDATION,
+        entity_type=EntityType.RECOMMENDATION,
+        entity_id="rec_very_long_entity_id_1234567890abcdef",
+        action=CardAction.OPEN,
+        mode=CardMode.EXPANDED,
+        source_context=SourceContext.ADMIN_CONFIRMATIONS,
+        source_ref="doctor_queue:branch=main:query=ivanov:cursor=next:batch=45",
+        page_or_index="27",
+        state_token="revision-token-1234567890",
+    )
+    packed = CardCallbackCodec.encode(callback)
+    assert len(packed.encode("utf-8")) <= 64
 
 
 def test_stale_validation_blocks_mutation() -> None:
@@ -157,6 +181,54 @@ def test_context_mismatch_blocks_mutation() -> None:
 
     assert not result.ok
     assert result.reason_key == "common.card.callback.invalid_context"
+
+
+def test_source_ref_mismatch_blocks_mutation_when_required() -> None:
+    callback = CardCallback(
+        profile=CardProfile.BOOKING,
+        entity_type=EntityType.BOOKING,
+        entity_id="bk_5",
+        action=CardAction.OPEN,
+        mode=CardMode.COMPACT,
+        source_context=SourceContext.BOOKING_LIST,
+        source_ref="list:today",
+        page_or_index="2",
+        state_token="rev-8",
+    )
+    result = validate_stale_callback(
+        callback,
+        expected_entity_id="bk_5",
+        expected_source_context=SourceContext.BOOKING_LIST,
+        expected_source_ref="list:tomorrow",
+        require_source_ref_match=True,
+        expected_state_token="rev-8",
+    )
+    assert not result.ok
+    assert result.reason_key == "common.card.callback.invalid_source_ref"
+
+
+def test_page_mismatch_blocks_mutation_when_required() -> None:
+    callback = CardCallback(
+        profile=CardProfile.BOOKING,
+        entity_type=EntityType.BOOKING,
+        entity_id="bk_6",
+        action=CardAction.OPEN,
+        mode=CardMode.COMPACT,
+        source_context=SourceContext.BOOKING_LIST,
+        source_ref="list:today",
+        page_or_index="3",
+        state_token="rev-8",
+    )
+    result = validate_stale_callback(
+        callback,
+        expected_entity_id="bk_6",
+        expected_source_context=SourceContext.BOOKING_LIST,
+        expected_page_or_index="4",
+        require_page_or_index_match=True,
+        expected_state_token="rev-8",
+    )
+    assert not result.ok
+    assert result.reason_key == "common.card.callback.invalid_page"
 
 
 def test_active_panel_registry_prefers_replace_update() -> None:
