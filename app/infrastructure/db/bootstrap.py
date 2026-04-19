@@ -813,6 +813,7 @@ STACK1_TABLES: tuple[str, ...] = (
       delivery_supported BOOLEAN NOT NULL DEFAULT FALSE,
       sort_order INTEGER NULL,
       available_qty INTEGER NULL,
+      media_asset_id TEXT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (clinic_id, sku)

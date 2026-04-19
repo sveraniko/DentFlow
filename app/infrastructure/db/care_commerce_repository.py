@@ -52,11 +52,11 @@ class DbCareCommerceRepository:
                         INSERT INTO care_commerce.products (
                           care_product_id, clinic_id, sku, title_key, description_key, category, use_case_tag,
                           price_amount, currency_code, status, pickup_supported, delivery_supported,
-                          sort_order, available_qty, created_at, updated_at
+                          sort_order, available_qty, media_asset_id, created_at, updated_at
                         ) VALUES (
                           :care_product_id, :clinic_id, :sku, :title_key, :description_key, :category, :use_case_tag,
                           :price_amount, :currency_code, :status, :pickup_supported, :delivery_supported,
-                          :sort_order, :available_qty, :created_at, :updated_at
+                          :sort_order, :available_qty, :media_asset_id, :created_at, :updated_at
                         )
                         ON CONFLICT (care_product_id) DO UPDATE SET
                           sku=EXCLUDED.sku,
@@ -71,6 +71,7 @@ class DbCareCommerceRepository:
                           delivery_supported=EXCLUDED.delivery_supported,
                           sort_order=EXCLUDED.sort_order,
                           available_qty=EXCLUDED.available_qty,
+                          media_asset_id=EXCLUDED.media_asset_id,
                           updated_at=EXCLUDED.updated_at
                         """
                     ),
@@ -94,14 +95,14 @@ class DbCareCommerceRepository:
             await engine.dispose()
 
     async def get_product(self, care_product_id: str) -> CareProduct | None:
-        row = await _fetch_one(self._db_config, "SELECT care_product_id, clinic_id, sku, title_key, description_key, category, use_case_tag, price_amount, currency_code, status, pickup_supported, delivery_supported, sort_order, available_qty, created_at, updated_at FROM care_commerce.products WHERE care_product_id=:id", {"id": care_product_id})
+        row = await _fetch_one(self._db_config, "SELECT care_product_id, clinic_id, sku, title_key, description_key, category, use_case_tag, price_amount, currency_code, status, pickup_supported, delivery_supported, sort_order, available_qty, media_asset_id, created_at, updated_at FROM care_commerce.products WHERE care_product_id=:id", {"id": care_product_id})
         return CareProduct(**row) if row else None
 
     async def list_active_products_by_clinic(self, *, clinic_id: str) -> list[CareProduct]:
         rows = await _fetch_all(
             self._db_config,
             """
-            SELECT care_product_id, clinic_id, sku, title_key, description_key, category, use_case_tag, price_amount, currency_code, status, pickup_supported, delivery_supported, sort_order, available_qty, created_at, updated_at
+            SELECT care_product_id, clinic_id, sku, title_key, description_key, category, use_case_tag, price_amount, currency_code, status, pickup_supported, delivery_supported, sort_order, available_qty, media_asset_id, created_at, updated_at
             FROM care_commerce.products
             WHERE clinic_id=:clinic_id AND status='active'
             ORDER BY sort_order NULLS LAST, created_at DESC
@@ -139,7 +140,7 @@ class DbCareCommerceRepository:
               l.justification_key, l.justification_text_key, l.created_at,
               p.clinic_id, p.sku, p.title_key, p.description_key, p.category, p.use_case_tag,
               p.price_amount, p.currency_code, p.status, p.pickup_supported, p.delivery_supported,
-              p.sort_order, p.available_qty, p.created_at AS product_created_at, p.updated_at AS product_updated_at
+              p.sort_order, p.available_qty, p.media_asset_id, p.created_at AS product_created_at, p.updated_at AS product_updated_at
             FROM care_commerce.recommendation_product_links l
             JOIN care_commerce.products p ON p.care_product_id=l.care_product_id
             WHERE l.recommendation_id=:recommendation_id
@@ -175,6 +176,7 @@ class DbCareCommerceRepository:
                 available_qty=row["available_qty"],
                 created_at=row["product_created_at"],
                 updated_at=row["product_updated_at"],
+                media_asset_id=row["media_asset_id"],
             )
             out.append((link, product))
         return out
@@ -207,7 +209,7 @@ class DbCareCommerceRepository:
                    p.care_product_id, p.clinic_id, p.title_key, p.description_key,
                    p.category, p.use_case_tag, p.price_amount, p.currency_code,
                    p.status, p.pickup_supported, p.delivery_supported, p.sort_order,
-                   p.available_qty, p.created_at, p.updated_at
+                   p.available_qty, p.media_asset_id, p.created_at, p.updated_at
             FROM links l
             JOIN care_commerce.products p ON p.clinic_id=:clinic_id AND p.sku=l.sku
             WHERE p.status='active'
@@ -243,6 +245,7 @@ class DbCareCommerceRepository:
                 available_qty=row["available_qty"],
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
+                media_asset_id=row["media_asset_id"],
             )
             out.append((link, product))
         return out
@@ -253,7 +256,7 @@ class DbCareCommerceRepository:
             """
             SELECT care_product_id, clinic_id, sku, title_key, description_key, category, use_case_tag,
                    price_amount, currency_code, status, pickup_supported, delivery_supported, sort_order,
-                   available_qty, created_at, updated_at
+                   available_qty, media_asset_id, created_at, updated_at
             FROM care_commerce.products
             WHERE clinic_id=:clinic_id AND (sku=:target_code OR product_code=:target_code)
             ORDER BY CASE WHEN sku=:target_code THEN 0 ELSE 1 END, updated_at DESC
@@ -296,7 +299,7 @@ class DbCareCommerceRepository:
                    p.care_product_id, p.clinic_id, p.sku, p.title_key, p.description_key,
                    p.category, p.use_case_tag, p.price_amount, p.currency_code, p.status,
                    p.pickup_supported, p.delivery_supported, p.sort_order, p.available_qty,
-                   p.created_at, p.updated_at
+                   p.media_asset_id, p.created_at, p.updated_at
             FROM care_commerce.recommendation_set_items rsi
             JOIN care_commerce.recommendation_sets rs ON rs.care_recommendation_set_id=rsi.care_recommendation_set_id
             JOIN care_commerce.products p ON p.care_product_id=rsi.care_product_id
@@ -324,6 +327,7 @@ class DbCareCommerceRepository:
                 available_qty=row["available_qty"],
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
+                media_asset_id=row["media_asset_id"],
             )
             out.append({"position": row["position"], "quantity": row["quantity"], "product": product})
         return out
@@ -566,7 +570,7 @@ class DbCareCommerceRepository:
     async def upsert_catalog_product(self, *, clinic_id: str, row, now) -> str:
         existing = await _fetch_one(
             self._db_config,
-            "SELECT care_product_id, product_code, status, category, use_case_tag, price_amount, currency_code, pickup_supported, delivery_supported, sort_order, title_key, description_key FROM care_commerce.products WHERE clinic_id=:clinic_id AND sku=:sku",
+            "SELECT care_product_id, product_code, status, category, use_case_tag, price_amount, currency_code, pickup_supported, delivery_supported, sort_order, title_key, description_key, media_asset_id FROM care_commerce.products WHERE clinic_id=:clinic_id AND sku=:sku",
             {"clinic_id": clinic_id, "sku": row.sku},
         )
         care_product_id = str(existing["care_product_id"]) if existing else f"cp_{uuid4().hex[:16]}"
@@ -578,12 +582,12 @@ class DbCareCommerceRepository:
             INSERT INTO care_commerce.products (
               care_product_id, clinic_id, sku, title_key, description_key, product_code,
               category, use_case_tag, price_amount, currency_code, status,
-              pickup_supported, delivery_supported, sort_order, available_qty,
+              pickup_supported, delivery_supported, sort_order, available_qty, media_asset_id,
               created_at, updated_at
             ) VALUES (
               :care_product_id, :clinic_id, :sku, :title_key, :description_key, :product_code,
               :category, :use_case_tag, :price_amount, :currency_code, :status,
-              :pickup_supported, :delivery_supported, :sort_order, NULL,
+              :pickup_supported, :delivery_supported, :sort_order, NULL, :media_asset_id,
               :created_at, :updated_at
             )
             ON CONFLICT (clinic_id, sku) DO UPDATE SET
@@ -598,6 +602,7 @@ class DbCareCommerceRepository:
               pickup_supported=EXCLUDED.pickup_supported,
               delivery_supported=EXCLUDED.delivery_supported,
               sort_order=EXCLUDED.sort_order,
+              media_asset_id=EXCLUDED.media_asset_id,
               updated_at=EXCLUDED.updated_at
             """,
             {
@@ -615,6 +620,7 @@ class DbCareCommerceRepository:
                 "pickup_supported": row.pickup_supported,
                 "delivery_supported": row.delivery_supported,
                 "sort_order": row.sort_order,
+                "media_asset_id": row.media_asset_id,
                 "created_at": now,
                 "updated_at": now,
             },
@@ -631,6 +637,7 @@ class DbCareCommerceRepository:
             or bool(existing["pickup_supported"]) != row.pickup_supported
             or bool(existing["delivery_supported"]) != row.delivery_supported
             or existing["sort_order"] != row.sort_order
+            or existing["media_asset_id"] != row.media_asset_id
             or existing["title_key"] != title_key
             or existing["description_key"] != description_key
         )
@@ -932,7 +939,7 @@ class DbCareCommerceRepository:
                     existing = (
                         await conn.execute(
                             text(
-                                "SELECT care_product_id, product_code, status, category, use_case_tag, price_amount, currency_code, pickup_supported, delivery_supported, sort_order, title_key, description_key FROM care_commerce.products WHERE clinic_id=:clinic_id AND sku=:sku"
+                                "SELECT care_product_id, product_code, status, category, use_case_tag, price_amount, currency_code, pickup_supported, delivery_supported, sort_order, title_key, description_key, media_asset_id FROM care_commerce.products WHERE clinic_id=:clinic_id AND sku=:sku"
                             ),
                             {"clinic_id": clinic_id, "sku": row.sku},
                         )
@@ -946,12 +953,12 @@ class DbCareCommerceRepository:
                             INSERT INTO care_commerce.products (
                               care_product_id, clinic_id, sku, title_key, description_key, product_code,
                               category, use_case_tag, price_amount, currency_code, status,
-                              pickup_supported, delivery_supported, sort_order, available_qty,
+                              pickup_supported, delivery_supported, sort_order, available_qty, media_asset_id,
                               created_at, updated_at
                             ) VALUES (
                               :care_product_id, :clinic_id, :sku, :title_key, :description_key, :product_code,
                               :category, :use_case_tag, :price_amount, :currency_code, :status,
-                              :pickup_supported, :delivery_supported, :sort_order, NULL,
+                              :pickup_supported, :delivery_supported, :sort_order, NULL, :media_asset_id,
                               :created_at, :updated_at
                             )
                             ON CONFLICT (clinic_id, sku) DO UPDATE SET
@@ -966,6 +973,7 @@ class DbCareCommerceRepository:
                               pickup_supported=EXCLUDED.pickup_supported,
                               delivery_supported=EXCLUDED.delivery_supported,
                               sort_order=EXCLUDED.sort_order,
+                              media_asset_id=EXCLUDED.media_asset_id,
                               updated_at=EXCLUDED.updated_at
                             """
                         ),
@@ -984,6 +992,7 @@ class DbCareCommerceRepository:
                             "pickup_supported": row.pickup_supported,
                             "delivery_supported": row.delivery_supported,
                             "sort_order": row.sort_order,
+                            "media_asset_id": row.media_asset_id,
                             "created_at": now,
                             "updated_at": now,
                         },
@@ -1001,6 +1010,7 @@ class DbCareCommerceRepository:
                             or bool(existing["pickup_supported"]) != row.pickup_supported
                             or bool(existing["delivery_supported"]) != row.delivery_supported
                             or existing["sort_order"] != row.sort_order
+                            or existing["media_asset_id"] != row.media_asset_id
                             or existing["title_key"] != title_key
                             or existing["description_key"] != description_key
                         )
