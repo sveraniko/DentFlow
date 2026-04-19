@@ -166,6 +166,7 @@ def test_product_patient_doctor_localization_and_runtime_builders(i18n: I18nServ
             category="aftercare",
             recommendation_rationale="Based on enamel sensitivity",
             selected_branch_label="Main branch",
+            media_count=3,
             state_token="rev-2",
         ),
         i18n=i18n,
@@ -183,6 +184,8 @@ def test_product_patient_doctor_localization_and_runtime_builders(i18n: I18nServ
     assert any(meta.key == "branch" for meta in product.meta_lines)
     assert any(action.action == CardAction.RESERVE for action in product.actions)
     assert any(action.action == CardAction.CHANGE_BRANCH for action in product.actions)
+    assert any(action.action == CardAction.COVER for action in product.actions)
+    assert any(action.action == CardAction.GALLERY for action in product.actions)
 
     compact = ProductCardAdapter.build(
         seed=product_seed,

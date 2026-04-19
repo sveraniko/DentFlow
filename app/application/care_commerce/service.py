@@ -79,6 +79,7 @@ class CareProductContent:
     short_label: str | None
     justification_text: str | None
     usage_hint: str | None
+    media_refs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -133,6 +134,7 @@ class CareCommerceService:
             "delivery_supported": kwargs.get("delivery_supported", False),
             "sort_order": kwargs.get("sort_order"),
             "available_qty": kwargs.get("available_qty"),
+            "media_asset_id": kwargs.get("media_asset_id"),
             "created_at": existing.created_at if existing else now,
             "updated_at": now,
         }
@@ -417,7 +419,15 @@ class CareCommerceService:
     ) -> CareProductContent:
         fetcher = getattr(self.repository, "get_product_i18n_content", None)
         if not callable(fetcher):
-            return CareProductContent(locale=None, title=None, description=None, short_label=None, justification_text=None, usage_hint=None)
+            return CareProductContent(
+                locale=None,
+                title=None,
+                description=None,
+                short_label=None,
+                justification_text=None,
+                usage_hint=None,
+                media_refs=self.resolve_product_media_refs(product=product),
+            )
         exact = await fetcher(care_product_id=product.care_product_id, locale=locale)
         if exact:
             return CareProductContent(
@@ -427,6 +437,7 @@ class CareCommerceService:
                 short_label=_content_str(exact, "short_label"),
                 justification_text=_content_str(exact, "justification_text"),
                 usage_hint=_content_str(exact, "usage_hint"),
+                media_refs=self.resolve_product_media_refs(product=product),
             )
         fallback = await self._resolve_catalog_fallback_locale(clinic_id=clinic_id, preferred=fallback_locale)
         if fallback and fallback != locale:
@@ -439,8 +450,28 @@ class CareCommerceService:
                     short_label=_content_str(fallback_row, "short_label"),
                     justification_text=_content_str(fallback_row, "justification_text"),
                     usage_hint=_content_str(fallback_row, "usage_hint"),
+                    media_refs=self.resolve_product_media_refs(product=product),
                 )
-        return CareProductContent(locale=None, title=None, description=None, short_label=None, justification_text=None, usage_hint=None)
+        return CareProductContent(
+            locale=None,
+            title=None,
+            description=None,
+            short_label=None,
+            justification_text=None,
+            usage_hint=None,
+            media_refs=self.resolve_product_media_refs(product=product),
+        )
+
+    def resolve_product_media_refs(self, *, product: CareProduct) -> tuple[str, ...]:
+        raw = (product.media_asset_id or "").strip()
+        if not raw:
+            return ()
+        refs: list[str] = []
+        for chunk in raw.replace(";", ",").replace("|", ",").split(","):
+            ref = chunk.strip()
+            if ref and ref not in refs:
+                refs.append(ref)
+        return tuple(refs)
 
     async def _resolve_catalog_fallback_locale(self, *, clinic_id: str, preferred: str | None) -> str | None:
         if preferred:

@@ -494,6 +494,29 @@ def test_product_content_resolution_prefers_synced_i18n_and_fallback_locale() ->
     assert fallback.locale == "en"
 
 
+def test_product_media_refs_are_resolved_from_catalog_truth() -> None:
+    repo = InMemoryCareRepo()
+    service = CareCommerceService(repo)
+    product = asyncio.run(
+        service.create_or_update_product(
+            clinic_id="c1",
+            sku="SKU-MEDIA",
+            title_key="care.product.aftercare_brush.title",
+            description_key=None,
+            category="hygiene",
+            price_amount=1000,
+            currency_code="RUB",
+            status="active",
+            media_asset_id="media-cover, media-gallery-1 | media-gallery-2",
+        )
+    )
+    refs = service.resolve_product_media_refs(product=product)
+    assert refs == ("media-cover", "media-gallery-1", "media-gallery-2")
+
+    content = asyncio.run(service.resolve_product_content(clinic_id="c1", product=product, locale="en"))
+    assert content.media_refs == refs
+
+
 def test_catalog_category_navigation_uses_active_catalog_products() -> None:
     repo = InMemoryCareRepo()
     service = CareCommerceService(repo)

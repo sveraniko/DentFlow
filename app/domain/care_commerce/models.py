@@ -40,6 +40,7 @@ class CareProduct:
     available_qty: int | None
     created_at: datetime
     updated_at: datetime
+    media_asset_id: str | None = None
 
 
 @dataclass(frozen=True)
