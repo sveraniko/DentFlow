@@ -5,7 +5,7 @@ import secrets
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.interfaces.cards.models import CardProfile, SourceContext
 
@@ -30,6 +30,7 @@ class RuntimeTtlConfig:
     callback_ttl_sec: int = 30 * 60
     panel_ttl_sec: int = 2 * 60 * 60
     source_context_ttl_sec: int = 60 * 60
+    session_ttl_sec: int = 2 * 60 * 60
 
 
 @dataclass(slots=True, frozen=True)
@@ -129,9 +130,26 @@ class CardRuntimeStateStore:
         # Overwrite by family key provides explicit supersession semantics.
         await self.bind_active_panel(panel)
 
+    async def bind_actor_session_state(self, *, scope: str, actor_id: int, payload: dict[str, Any]) -> None:
+        key = self._session_key(scope=scope, actor_id=actor_id)
+        await self._redis.set(key, json.dumps(payload), ex=self._ttl.session_ttl_sec)
+
+    async def resolve_actor_session_state(self, *, scope: str, actor_id: int) -> dict[str, Any] | None:
+        raw = await self._redis.get(self._session_key(scope=scope, actor_id=actor_id))
+        if raw is None:
+            return None
+        return json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+
+    async def clear_actor_session_state(self, *, scope: str, actor_id: int) -> None:
+        await self._redis.delete(self._session_key(scope=scope, actor_id=actor_id))
+
     @staticmethod
     def _panel_key(actor_id: int, panel_family: PanelFamily) -> str:
         return f"card:panel:{actor_id}:{panel_family.value}"
+
+    @staticmethod
+    def _session_key(*, scope: str, actor_id: int) -> str:
+        return f"card:session:{scope}:{actor_id}"
 
 
 class CardRuntimeCoordinator:
@@ -184,3 +202,9 @@ class CardRuntimeCoordinator:
 
     async def resolve_active_panel(self, *, actor_id: int, panel_family: PanelFamily) -> ActivePanelState | None:
         return await self._store.resolve_active_panel(actor_id=actor_id, panel_family=panel_family)
+
+    async def bind_actor_session_state(self, *, scope: str, actor_id: int, payload: dict[str, Any]) -> None:
+        await self._store.bind_actor_session_state(scope=scope, actor_id=actor_id, payload=payload)
+
+    async def resolve_actor_session_state(self, *, scope: str, actor_id: int) -> dict[str, Any] | None:
+        return await self._store.resolve_actor_session_state(scope=scope, actor_id=actor_id)

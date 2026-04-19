@@ -15,13 +15,7 @@ from app.application.booking.telegram_flow import BookingCardView, BookingContro
 from app.application.clinic_reference import ClinicReferenceService
 from app.common.i18n import I18nService
 from app.application.recommendation import RecommendationService
-from app.interfaces.cards import CardCallbackCodec, CardRuntimeCoordinator
-
-
-@dataclass(slots=True)
-class _PanelState:
-    message_id: int
-    session_id: str
+from app.interfaces.cards import CardCallbackCodec, CardRuntimeCoordinator, PanelFamily, SourceContext
 
 
 @dataclass(slots=True)
@@ -31,6 +25,13 @@ class _CareViewState:
     recommendation_type: str | None = None
     recommendation_reason: str | None = None
     selected_branch_by_product: dict[str, str] | None = None
+
+
+@dataclass(slots=True)
+class _PatientFlowState:
+    booking_session_id: str = ""
+    booking_mode: str = "new_booking_contact"
+    care: _CareViewState | None = None
 
 
 def make_router(
@@ -47,10 +48,9 @@ def make_router(
     card_callback_codec: CardCallbackCodec | None = None,
 ) -> Router:
     router = Router(name="patient_router")
-    panel_by_user: dict[int, _PanelState] = {}
-    session_by_user: dict[int, str] = {}
-    mode_by_user: dict[int, str] = {}
-    care_state_by_user: dict[int, _CareViewState] = {}
+    if card_runtime is None:
+        raise RuntimeError("patient router requires shared card runtime coordinator")
+    _SESSION_SCOPE = "patient_flow"
 
     def _locale() -> str:
         return default_locale
@@ -59,13 +59,49 @@ def make_router(
         clinics = list(reference.repository.clinics.values())
         return clinics[0].clinic_id if clinics else None
 
-    def _care_state(actor_id: int) -> _CareViewState:
-        current = care_state_by_user.get(actor_id)
-        if current is None:
-            current = _CareViewState(selected_branch_by_product={})
-            care_state_by_user[actor_id] = current
+    async def _load_flow_state(actor_id: int) -> _PatientFlowState:
+        payload = await card_runtime.resolve_actor_session_state(scope=_SESSION_SCOPE, actor_id=actor_id)
+        if payload is None:
+            return _PatientFlowState(care=_CareViewState(selected_branch_by_product={}))
+        care_payload = payload.get("care") or {}
+        care_state = _CareViewState(
+            selected_category=care_payload.get("selected_category"),
+            recommendation_id=care_payload.get("recommendation_id"),
+            recommendation_type=care_payload.get("recommendation_type"),
+            recommendation_reason=care_payload.get("recommendation_reason"),
+            selected_branch_by_product=dict(care_payload.get("selected_branch_by_product") or {}),
+        )
+        return _PatientFlowState(
+            booking_session_id=payload.get("booking_session_id", ""),
+            booking_mode=payload.get("booking_mode", "new_booking_contact"),
+            care=care_state,
+        )
+
+    async def _save_flow_state(actor_id: int, state: _PatientFlowState) -> None:
+        care_state = state.care or _CareViewState(selected_branch_by_product={})
+        await card_runtime.bind_actor_session_state(
+            scope=_SESSION_SCOPE,
+            actor_id=actor_id,
+            payload={
+                "booking_session_id": state.booking_session_id,
+                "booking_mode": state.booking_mode,
+                "care": {
+                    "selected_category": care_state.selected_category,
+                    "recommendation_id": care_state.recommendation_id,
+                    "recommendation_type": care_state.recommendation_type,
+                    "recommendation_reason": care_state.recommendation_reason,
+                    "selected_branch_by_product": dict(care_state.selected_branch_by_product or {}),
+                },
+            },
+        )
+
+    async def _care_state(actor_id: int) -> _CareViewState:
+        state = await _load_flow_state(actor_id)
+        current = state.care or _CareViewState(selected_branch_by_product={})
         if current.selected_branch_by_product is None:
             current.selected_branch_by_product = {}
+        state.care = current
+        await _save_flow_state(actor_id, state)
         return current
 
     def _is_in_stock(row: Any) -> bool:
@@ -165,7 +201,7 @@ def make_router(
             )
             title = content.title or i18n.t(product.title_key, locale)
             short = content.short_label or await _category_label(category_code=product.category, locale=locale)
-            branch_id = _care_state(actor_id).selected_branch_by_product.get(product.care_product_id) or await _resolve_preferred_branch_for_product(
+            branch_id = (await _care_state(actor_id)).selected_branch_by_product.get(product.care_product_id) or await _resolve_preferred_branch_for_product(
                 clinic_id=clinic_id,
                 product_id=product.care_product_id,
             )
@@ -207,11 +243,14 @@ def make_router(
         if product is None or product.status != "active":
             await _send_or_edit_panel(actor_id=actor_id, message=message, session_id="care", text=i18n.t("patient.care.product.missing", locale))
             return
-        state = _care_state(actor_id)
+        state = await _care_state(actor_id)
         content = await care_commerce_service.resolve_product_content(clinic_id=clinic_id, product=product, locale=locale, fallback_locale=locale)
         branch_id = state.selected_branch_by_product.get(product_id) or await _resolve_preferred_branch_for_product(clinic_id=clinic_id, product_id=product_id)
         if branch_id:
             state.selected_branch_by_product[product_id] = branch_id
+            flow = await _load_flow_state(actor_id)
+            flow.care = state
+            await _save_flow_state(actor_id, flow)
         availability = await care_commerce_service.get_branch_product_availability(branch_id=branch_id, care_product_id=product_id) if branch_id else None
         branch = next((b for b in reference.list_branches(clinic_id) if b.branch_id == branch_id), None)
         lines = [
@@ -270,7 +309,7 @@ def make_router(
         if product is None or product.status != "active":
             await _send_or_edit_panel(actor_id=actor_id, message=message, session_id="care", text=i18n.t("patient.care.product.missing", locale))
             return
-        state = _care_state(actor_id)
+        state = await _care_state(actor_id)
         branch_id = state.selected_branch_by_product.get(product_id) or await _resolve_preferred_branch_for_product(clinic_id=clinic_id, product_id=product_id)
         if not branch_id:
             await _render_branch_picker(message, actor_id=actor_id, clinic_id=clinic_id, product_id=product_id)
@@ -328,12 +367,29 @@ def make_router(
         session_id: str,
         reply_keyboard: ReplyKeyboardMarkup | None = None,
     ) -> None:
-        state = panel_by_user.get(actor_id)
+        panel_family = PanelFamily.PATIENT_CATALOG if session_id == "care" else PanelFamily.BOOKING_DETAIL
+        source_context = SourceContext.CARE_CATALOG_CATEGORY if session_id == "care" else SourceContext.BOOKING_LIST
+        state_token = session_id or f"actor:{actor_id}"
+        state = await card_runtime.resolve_active_panel(actor_id=actor_id, panel_family=panel_family)
         if isinstance(message, CallbackQuery):
             current_message = message.message
             if current_message:
+                if state is not None and state.message_id != current_message.message_id:
+                    await message.answer(i18n.t("common.card.callback.stale", _locale()), show_alert=True)
+                    return
                 await current_message.edit_text(text=text, reply_markup=keyboard)
-                panel_by_user[actor_id] = _PanelState(message_id=current_message.message_id, session_id=session_id)
+                await card_runtime.bind_panel(
+                    actor_id=actor_id,
+                    chat_id=current_message.chat.id,
+                    message_id=current_message.message_id,
+                    panel_family=panel_family,
+                    profile=None,
+                    entity_id=session_id or None,
+                    source_context=source_context,
+                    source_ref=session_id,
+                    page_or_index=session_id,
+                    state_token=state_token,
+                )
             await message.answer()
             return
         if state:
@@ -344,12 +400,34 @@ def make_router(
                     text=text,
                     reply_markup=keyboard,
                 )
-                panel_by_user[actor_id] = _PanelState(message_id=state.message_id, session_id=session_id)
+                await card_runtime.bind_panel(
+                    actor_id=actor_id,
+                    chat_id=message.chat.id,
+                    message_id=state.message_id,
+                    panel_family=panel_family,
+                    profile=None,
+                    entity_id=session_id or None,
+                    source_context=source_context,
+                    source_ref=session_id,
+                    page_or_index=session_id,
+                    state_token=state_token,
+                )
                 return
             except Exception:
                 pass
         sent = await message.answer(text, reply_markup=reply_keyboard or keyboard)
-        panel_by_user[actor_id] = _PanelState(message_id=sent.message_id, session_id=session_id)
+        await card_runtime.bind_panel(
+            actor_id=actor_id,
+            chat_id=sent.chat.id,
+            message_id=sent.message_id,
+            panel_family=panel_family,
+            profile=None,
+            entity_id=session_id or None,
+            source_context=source_context,
+            source_ref=session_id,
+            page_or_index=session_id,
+            state_token=state_token,
+        )
 
     async def _render_service_panel(message: Message | CallbackQuery, *, actor_id: int, session_id: str, clinic_id: str) -> None:
         locale = _locale()
@@ -413,11 +491,14 @@ def make_router(
         if clinic_id is None:
             await message.answer(i18n.t("patient.booking.unavailable", _locale()))
             return
-        state = _care_state(message.from_user.id)
+        state = await _care_state(message.from_user.id)
         state.selected_category = None
         state.recommendation_id = None
         state.recommendation_type = None
         state.recommendation_reason = None
+        flow = await _load_flow_state(message.from_user.id)
+        flow.care = state
+        await _save_flow_state(message.from_user.id, flow)
         await _render_care_categories_panel(message, actor_id=message.from_user.id, clinic_id=clinic_id)
 
     async def _resolve_patient_id_for_user(telegram_user_id: int) -> str | None:
@@ -540,10 +621,13 @@ def make_router(
         if not resolved:
             await message.answer(i18n.t("patient.care.products.empty", _locale()))
             return
-        state = _care_state(message.from_user.id)
+        state = await _care_state(message.from_user.id)
         state.recommendation_id = recommendation.recommendation_id
         state.recommendation_type = recommendation.recommendation_type
         state.recommendation_reason = recommendation.rationale_text or recommendation.body_text
+        flow = await _load_flow_state(message.from_user.id)
+        flow.care = state
+        await _save_flow_state(message.from_user.id, flow)
         lines = [i18n.t("patient.care.products.title", _locale())]
         rec_explanation = recommendation.rationale_text or recommendation.body_text
         if rec_explanation:
@@ -737,7 +821,9 @@ def make_router(
             clinic_id=clinic_id,
             telegram_user_id=message.from_user.id,
         )
-        session_by_user[message.from_user.id] = session.booking_session_id
+        flow = await _load_flow_state(message.from_user.id)
+        flow.booking_session_id = session.booking_session_id
+        await _save_flow_state(message.from_user.id, flow)
         await _render_resume_panel(message, actor_id=message.from_user.id, session_id=session.booking_session_id, clinic_id=clinic_id)
 
     @router.message(Command("my_booking"))
@@ -749,8 +835,10 @@ def make_router(
             await message.answer(i18n.t("patient.booking.unavailable", _locale()))
             return
         session = await booking_flow.start_or_resume_existing_booking_session(clinic_id=clinic_id, telegram_user_id=message.from_user.id)
-        session_by_user[message.from_user.id] = session.booking_session_id
-        mode_by_user[message.from_user.id] = "existing_lookup_contact"
+        flow = await _load_flow_state(message.from_user.id)
+        flow.booking_session_id = session.booking_session_id
+        flow.booking_mode = "existing_lookup_contact"
+        await _save_flow_state(message.from_user.id, flow)
         await _send_or_edit_panel(
             actor_id=message.from_user.id,
             message=message,
@@ -762,7 +850,7 @@ def make_router(
     async def select_service(callback: CallbackQuery) -> None:
         if not callback.from_user:
             return
-        session_id = session_by_user.get(callback.from_user.id)
+        session_id = (await _load_flow_state(callback.from_user.id)).booking_session_id
         clinic_id = _primary_clinic_id()
         if not session_id or not clinic_id:
             await callback.answer(i18n.t("patient.booking.session.missing", _locale()), show_alert=True)
@@ -788,8 +876,11 @@ def make_router(
         if clinic_id is None or care_commerce_service is None:
             return
         category = callback.data.split(":", 2)[2]
-        state = _care_state(callback.from_user.id)
+        state = await _care_state(callback.from_user.id)
         state.selected_category = category
+        flow = await _load_flow_state(callback.from_user.id)
+        flow.care = state
+        await _save_flow_state(callback.from_user.id, flow)
         await _render_care_product_list(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, category=category)
 
     @router.callback_query(F.data.startswith("care:product:"))
@@ -820,7 +911,11 @@ def make_router(
         if clinic_id is None:
             return
         _, _, _, product_id, branch_id = callback.data.split(":", 4)
-        _care_state(callback.from_user.id).selected_branch_by_product[product_id] = branch_id
+        state = await _care_state(callback.from_user.id)
+        state.selected_branch_by_product[product_id] = branch_id
+        flow = await _load_flow_state(callback.from_user.id)
+        flow.care = state
+        await _save_flow_state(callback.from_user.id, flow)
         await _render_product_card(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, product_id=product_id)
 
     @router.callback_query(F.data.startswith("care:reserve:"))
@@ -835,7 +930,7 @@ def make_router(
             await callback.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()), show_alert=True)
             return
         product_id = callback.data.split(":", 2)[2]
-        rec_id = _care_state(callback.from_user.id).recommendation_id
+        rec_id = (await _care_state(callback.from_user.id)).recommendation_id
         await _reserve_product(
             callback,
             actor_id=callback.from_user.id,
@@ -862,7 +957,7 @@ def make_router(
         if clinic_id is None:
             return
         category = callback.data.split(":", 3)[3]
-        chosen = _care_state(callback.from_user.id).selected_category if category == "-" else category
+        chosen = (await _care_state(callback.from_user.id)).selected_category if category == "-" else category
         if not chosen:
             await _render_care_categories_panel(callback, actor_id=callback.from_user.id, clinic_id=clinic_id)
             return
@@ -875,7 +970,7 @@ def make_router(
         clinic_id = _primary_clinic_id()
         if not clinic_id:
             return
-        if not session_by_user.get(callback.from_user.id):
+        if not (await _load_flow_state(callback.from_user.id)).booking_session_id:
             await callback.answer(i18n.t("patient.booking.session.missing", _locale()), show_alert=True)
             return
         _, _, callback_session_id, doctor_token = callback.data.split(":", 3)
@@ -900,7 +995,7 @@ def make_router(
         clinic_id = _primary_clinic_id()
         if not clinic_id:
             return
-        if not session_by_user.get(callback.from_user.id):
+        if not (await _load_flow_state(callback.from_user.id)).booking_session_id:
             await callback.answer(i18n.t("patient.booking.session.missing", locale), show_alert=True)
             return
         _, _, callback_session_id, slot_id = callback.data.split(":", 3)
@@ -912,7 +1007,9 @@ def make_router(
             await callback.answer(i18n.t("patient.booking.slot.unavailable", locale), show_alert=True)
             await _render_slot_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
             return
-        mode_by_user[callback.from_user.id] = "new_booking_contact"
+        flow = await _load_flow_state(callback.from_user.id)
+        flow.booking_mode = "new_booking_contact"
+        await _save_flow_state(callback.from_user.id, flow)
         contact_keyboard = ReplyKeyboardMarkup(
             keyboard=[[KeyboardButton(text=i18n.t("patient.booking.contact.share", locale), request_contact=True)]],
             resize_keyboard=True,
@@ -942,7 +1039,8 @@ def make_router(
         )
         if isinstance(result, OrchestrationSuccess):
             card = booking_flow.build_booking_card(booking=result.entity)
-            await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_by_user.get(callback.from_user.id, ""), text=_render_booking_card_text(card, locale=_locale()))
+            session_id = (await _load_flow_state(callback.from_user.id)).booking_session_id
+            await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=_render_booking_card_text(card, locale=_locale()))
             return
         await callback.answer(i18n.t("patient.booking.finalize.invalid_state", _locale()), show_alert=True)
 
@@ -992,7 +1090,8 @@ def make_router(
             booking_id=booking_id,
         )
         if isinstance(created, OrchestrationSuccess):
-            await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_by_user.get(callback.from_user.id, ""), text=i18n.t("patient.booking.waitlist.created", _locale()))
+            session_id = (await _load_flow_state(callback.from_user.id)).booking_session_id
+            await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=i18n.t("patient.booking.waitlist.created", _locale()))
             return
         await callback.answer(i18n.t("patient.booking.finalize.invalid_state", _locale()), show_alert=True)
 
@@ -1007,7 +1106,8 @@ def make_router(
                 [InlineKeyboardButton(text=i18n.t("common.no", _locale()), callback_data=f"mybk:cancel_abort:{callback_session_id}:{booking_id}")],
             ]
         )
-        await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_by_user.get(callback.from_user.id, ""), text=i18n.t("patient.booking.cancel.confirm", _locale()), keyboard=keyboard)
+        session_id = (await _load_flow_state(callback.from_user.id)).booking_session_id
+        await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=i18n.t("patient.booking.cancel.confirm", _locale()), keyboard=keyboard)
 
     @router.callback_query(F.data.startswith("mybk:cancel_abort:"))
     async def cancel_abort(callback: CallbackQuery) -> None:
@@ -1031,7 +1131,8 @@ def make_router(
         )
         if isinstance(result, OrchestrationSuccess):
             card = booking_flow.build_booking_card(booking=result.entity)
-            await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_by_user.get(callback.from_user.id, ""), text=_render_booking_card_text(card, locale=_locale()))
+            session_id = (await _load_flow_state(callback.from_user.id)).booking_session_id
+            await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=_render_booking_card_text(card, locale=_locale()))
             return
         await callback.answer(i18n.t("patient.booking.finalize.invalid_state", _locale()), show_alert=True)
 
@@ -1049,10 +1150,11 @@ def make_router(
 
     async def _handle_contact_submission(message: Message, *, actor_id: int, phone: str) -> None:
         locale = _locale()
-        session_id = session_by_user.get(actor_id)
+        flow = await _load_flow_state(actor_id)
+        session_id = flow.booking_session_id
         if not session_id:
             return
-        mode = mode_by_user.get(actor_id, "new_booking_contact")
+        mode = flow.booking_mode
         if mode == "existing_lookup_contact":
             clinic_id = _primary_clinic_id()
             if not clinic_id:
@@ -1129,7 +1231,9 @@ def make_router(
             await _render_slot_panel(message, actor_id=actor_id, session_id=session_id)
             return
         if resume.panel_key == "contact_collection":
-            mode_by_user[actor_id] = "new_booking_contact"
+            flow = await _load_flow_state(actor_id)
+            flow.booking_mode = "new_booking_contact"
+            await _save_flow_state(actor_id, flow)
             contact_keyboard = ReplyKeyboardMarkup(
                 keyboard=[[KeyboardButton(text=i18n.t("patient.booking.contact.share", _locale()), request_contact=True)]],
                 resize_keyboard=True,
@@ -1161,9 +1265,12 @@ def make_router(
 
     async def _show_existing_booking_result(message: Message, *, actor_id: int, result: BookingControlResolutionResult) -> None:
         locale = _locale()
-        effective_session_id = result.booking_session.booking_session_id if result.booking_session else session_by_user.get(actor_id, "")
+        current_session_id = (await _load_flow_state(actor_id)).booking_session_id
+        effective_session_id = result.booking_session.booking_session_id if result.booking_session else current_session_id
         if effective_session_id:
-            session_by_user[actor_id] = effective_session_id
+            flow = await _load_flow_state(actor_id)
+            flow.booking_session_id = effective_session_id
+            await _save_flow_state(actor_id, flow)
         if result.kind == "ambiguous_escalated":
             await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=effective_session_id, text=i18n.t("patient.booking.escalated", locale))
             return
