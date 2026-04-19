@@ -5,6 +5,7 @@ from datetime import datetime
 from functools import lru_cache
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
 from typing import Protocol
 from zoneinfo import ZoneInfo
@@ -192,7 +193,7 @@ def render_calendar_event(*, booking: CalendarProjectionBooking, dentflow_base_u
     description = "\n".join(
         [
             f"DentFlow booking: {booking.booking_id}",
-            f"Status: {booking.status}",
+            f"Status: {render_booking_status(booking.status, preferred_locale=booking.service_locale)}",
             f"Doctor: {booking.doctor_display_name}",
             f"Branch: {booking.branch_label}",
             f"Open in DentFlow: {dentflow_base_url}/admin/booking/{booking.booking_id}",
@@ -238,13 +239,41 @@ def _lookup_localized_service_label(service_label: str, *, preferred_locale: str
 
 @lru_cache(maxsize=1)
 def _service_locale_catalog() -> dict[str, dict[str, str]]:
-    base = Path("locales")
+    base = _resolve_locales_path()
     catalogs: dict[str, dict[str, str]] = {}
     for locale in ("ru", "en"):
         locale_file = base / f"{locale}.json"
         if locale_file.exists():
             catalogs[locale] = json.loads(locale_file.read_text(encoding="utf-8"))
     return catalogs
+
+
+def render_booking_status(status: str, *, preferred_locale: str) -> str:
+    key = f"booking.status.{status}"
+    locales = _service_locale_catalog()
+    for locale in (preferred_locale, "ru", "en"):
+        if not locale:
+            continue
+        value = locales.get(locale, {}).get(key)
+        if value:
+            return value
+    return _humanize_service_label(status)
+
+
+def _resolve_locales_path() -> Path:
+    env_override = os.environ.get("DENTFLOW_LOCALES_DIR")
+    if env_override:
+        candidate = Path(env_override).expanduser()
+        if candidate.exists():
+            return candidate
+    local_candidates = [
+        Path.cwd() / "locales",
+        Path(__file__).resolve().parents[3] / "locales",
+    ]
+    for candidate in local_candidates:
+        if candidate.exists():
+            return candidate
+    return Path("locales")
 
 
 def _humanize_service_label(value: str) -> str:

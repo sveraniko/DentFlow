@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import datetime, timezone
+import json
+from pathlib import Path
 
 from app.application.integration.google_calendar_projection import (
     CalendarEventMapping,
     CalendarProjectionBooking,
     GoogleCalendarProjectionService,
+    _service_locale_catalog,
     render_calendar_event,
 )
 from app.integrations.google_calendar import InMemoryGoogleCalendarGateway
@@ -150,6 +153,7 @@ def test_event_rendering_is_local_time_and_privacy_bounded() -> None:
     assert "Anna P." in payload.title
     assert "Diagnosis" not in payload.description
     assert "DentFlow booking: b1" in payload.description
+    assert "Status: Pending confirmation" in payload.description
     assert "Open in DentFlow: https://dentflow.example/admin/booking/b1" in payload.description
 
 
@@ -158,3 +162,16 @@ def test_event_rendering_humanizes_raw_service_title_key_when_missing_localized_
     payload = render_calendar_event(booking=booking, dentflow_base_url="https://dentflow.example")
     assert "Deep cleaning" in payload.title
     assert "service.deep_cleaning" not in payload.title
+
+
+def test_event_rendering_uses_env_override_for_locale_catalog(monkeypatch, tmp_path: Path) -> None:
+    base = tmp_path / "custom_locales"
+    base.mkdir()
+    for locale in ("en", "ru"):
+        (base / f"{locale}.json").write_text(json.dumps({"booking.status.pending_confirmation": "Queued"}), encoding="utf-8")
+    monkeypatch.setenv("DENTFLOW_LOCALES_DIR", str(base))
+    _service_locale_catalog.cache_clear()
+
+    payload = render_calendar_event(booking=_booking(), dentflow_base_url="https://dentflow.example")
+    assert "Status: Queued" in payload.description
+    _service_locale_catalog.cache_clear()

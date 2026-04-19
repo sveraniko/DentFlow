@@ -187,7 +187,23 @@ class _Workdesk:
                 summary_text="raw",
                 patient_display_name="Jane Roe",
                 updated_at=datetime.now(timezone.utc),
-            )
+            ),
+            OpsIssueQueueRow(
+                clinic_id="c1",
+                branch_id="br1",
+                issue_type="reminder_failed",
+                issue_ref_id="p1",
+                issue_status="open",
+                severity="medium",
+                patient_id="p1",
+                booking_id=None,
+                care_order_id=None,
+                local_related_date=date(2026, 4, 19),
+                local_related_time="10:00",
+                summary_text="raw",
+                patient_display_name="Jane Roe",
+                updated_at=datetime.now(timezone.utc),
+            ),
         ]
 
 
@@ -268,6 +284,22 @@ def test_admin_care_pickups_queue_and_action() -> None:
     assert any("Care Pickups Queue" in row[0] for row in callback.message.edits)
 
 
+def test_admin_care_pickups_detail_has_back_to_queue() -> None:
+    router, _ = _router()
+    msg = _Message("/admin_care_pickups")
+    asyncio.run(_handler(router, "admin_care_pickups")(msg))
+    _, keyboard = msg.answers[-1]
+    open_cb = keyboard.inline_keyboard[1][0].callback_data
+    callback = _Callback(open_cb)
+    asyncio.run(_handler(router, "admin_care_pickups_callback", kind="callback")(callback))
+    _, detail_markup = callback.message.edits[-1]
+    assert detail_markup is not None
+    back_cb = detail_markup.inline_keyboard[0][0].callback_data
+    back = _Callback(back_cb)
+    asyncio.run(_handler(router, "admin_care_pickups_callback", kind="callback")(back))
+    assert any("Care Pickups Queue" in row[0] for row in back.message.edits)
+
+
 def test_admin_issues_localized_and_booking_open() -> None:
     router, codec = _router()
     msg = _Message("/admin_issues")
@@ -278,6 +310,23 @@ def test_admin_issues_localized_and_booking_open() -> None:
     cb = keyboard.inline_keyboard[1][0].callback_data
     decoded = asyncio.run(codec.decode(cb))
     assert decoded.source_context == SourceContext.ADMIN_ISSUES
+
+
+def test_admin_issues_patient_linked_open_has_back_to_queue() -> None:
+    router, _ = _router()
+    msg = _Message("/admin_issues")
+    asyncio.run(_handler(router, "admin_issues")(msg))
+    _, keyboard = msg.answers[-1]
+    patient_cb = keyboard.inline_keyboard[2][0].callback_data
+    callback = _Callback(patient_cb)
+    asyncio.run(_handler(router, "admin_issues_object_callback", kind="callback")(callback))
+    panel_text, panel_markup = callback.message.edits[-1]
+    assert "Jane Roe" in panel_text
+    assert panel_markup is not None
+    back_cb = panel_markup.inline_keyboard[0][0].callback_data
+    back = _Callback(back_cb)
+    asyncio.run(_handler(router, "admin_issues_object_callback", kind="callback")(back))
+    assert any("Issues Queue" in row[0] for row in back.message.edits)
 
 
 def test_waitlist_detail_uses_localized_service_label() -> None:
