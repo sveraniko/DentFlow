@@ -321,5 +321,6 @@
   "card.booking.action.patient": "Patient",
   "card.booking.action.chart": "Chart",
   "card.booking.action.recommendation": "Recommendations",
-  "card.booking.action.care_order": "Care"
+  "card.booking.action.care_order": "Care",
+  "patient.care.products.open.indexed": "Open #{index}"
 }

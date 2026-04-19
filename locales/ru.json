@@ -321,5 +321,6 @@
   "card.booking.action.patient": "Пациент",
   "card.booking.action.chart": "Карта",
   "card.booking.action.recommendation": "Рекомендации",
-  "card.booking.action.care_order": "Уход"
+  "card.booking.action.care_order": "Уход",
+  "patient.care.products.open.indexed": "Открыть #{index}"
 }

@@ -130,6 +130,31 @@ class _CompactProductRowCard:
             parts.append(branch)
         return parts
 
+    def object_block_lines(self, *, index: int) -> list[str]:
+        lines = [f"{index}. {self.shell.title}"]
+        if self.short_label():
+            lines.append(f"   - {self.short_label()}")
+        lines.append(f"   - {self.price_label()}")
+        lines.append(f"   - {self.availability_label()}")
+        badge = self.recommendation_context_badge()
+        if badge:
+            lines.append(f"   - {badge}")
+        branch = self.branch_hint()
+        if branch:
+            lines.append(f"   - {branch}")
+        return lines
+
+
+def _compose_product_object_list_text(*, header_lines: list[str], row_cards: list[_CompactProductRowCard]) -> str:
+    lines: list[str] = list(header_lines)
+    if row_cards:
+        lines.append("")
+    for idx, row in enumerate(row_cards, start=1):
+        lines.extend(row.object_block_lines(index=idx))
+        if idx < len(row_cards):
+            lines.append("")
+    return "\n".join(lines)
+
 
 @dataclass(slots=True)
 class _ResolvedMediaRef:
@@ -535,12 +560,12 @@ def make_router(
         active_page, start, end = _page_slice(len(products), page_map.get(category, 0) if page is None else page)
         page_map[category] = active_page
         state.product_page_by_category = page_map
-        lines = [
+        header_lines = [
             i18n.t("patient.care.catalog.products.title", locale).format(
                 category=await _category_label(category_code=category, locale=locale)
             )
         ]
-        lines.append(i18n.t("patient.care.catalog.page_indicator", locale).format(page=active_page + 1))
+        header_lines.append(i18n.t("patient.care.catalog.page_indicator", locale).format(page=active_page + 1))
         rows: list[list[InlineKeyboardButton]] = []
         row_cards: list[_CompactProductRowCard] = []
         for product in products[start:end]:
@@ -553,13 +578,13 @@ def make_router(
                     source_context=SourceContext.CARE_CATALOG_CATEGORY,
                 )
             )
-        for item in row_cards:
+        for idx, item in enumerate(row_cards, start=1):
             if not item.supports_open_action():
                 continue
             rows.append(
                 [
                     InlineKeyboardButton(
-                        text=item.button_label(),
+                        text=i18n.t("patient.care.products.open.indexed", locale).format(index=idx),
                         callback_data=await _encode_runtime_callback(
                             profile=CardProfile.PRODUCT,
                             entity_type=EntityType.CARE_PRODUCT,
@@ -629,7 +654,7 @@ def make_router(
             actor_id=actor_id,
             message=message,
             session_id="care",
-            text="\n".join(lines),
+            text=_compose_product_object_list_text(header_lines=header_lines, row_cards=row_cards),
             keyboard=InlineKeyboardMarkup(inline_keyboard=rows),
         )
         flow = await _load_flow_state(actor_id)
@@ -1315,17 +1340,18 @@ def make_router(
             return
         active_page, start, end = _page_slice(len(rows_products), state.recommendation_page if page is None else page)
         state.recommendation_page = active_page
-        lines = [i18n.t("patient.care.products.title", locale), i18n.t("patient.care.catalog.page_indicator", locale).format(page=active_page + 1)]
+        header_lines = [i18n.t("patient.care.products.title", locale), i18n.t("patient.care.catalog.page_indicator", locale).format(page=active_page + 1)]
         if state.recommendation_reason:
-            lines.append(state.recommendation_reason.strip()[:180])
+            header_lines.append(state.recommendation_reason.strip()[:180])
         buttons: list[list[InlineKeyboardButton]] = []
-        for item in rows_products[start:end]:
+        page_rows = rows_products[start:end]
+        for idx, item in enumerate(page_rows, start=1):
             if not item.supports_open_action():
                 continue
             buttons.append(
                 [
                     InlineKeyboardButton(
-                        text=item.button_label(),
+                        text=i18n.t("patient.care.products.open.indexed", locale).format(index=idx),
                         callback_data=await _encode_runtime_callback(
                             profile=CardProfile.PRODUCT,
                             entity_type=EntityType.CARE_PRODUCT,
@@ -1398,7 +1424,7 @@ def make_router(
             actor_id=actor_id,
             message=message,
             session_id="care",
-            text="\n".join(lines),
+            text=_compose_product_object_list_text(header_lines=header_lines, row_cards=page_rows),
             keyboard=InlineKeyboardMarkup(inline_keyboard=buttons),
         )
 
