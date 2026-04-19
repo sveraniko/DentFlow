@@ -167,6 +167,8 @@ class _RepeatActionView:
     text: str
     choose_branch: bool = False
     branch_choices: tuple[str, ...] = ()
+    created_order_id: str | None = None
+    source_order_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -1047,11 +1049,27 @@ def make_router(
             allowed_branch_ids=candidate_branch_ids,
         )
         if outcome.ok and outcome.created_order and outcome.selected_branch_id:
-            return _RepeatActionView(
-                text=i18n.t("patient.care.orders.repeat.ok", locale).format(
-                    care_order_id=outcome.created_order.care_order_id,
-                    branch_id=outcome.selected_branch_id,
+            product_name = "-"
+            if outcome.product is not None:
+                content = await care_commerce_service.resolve_product_content(
+                    clinic_id=clinic_id,
+                    product=outcome.product,
+                    locale=locale,
+                    fallback_locale=locale,
                 )
+                product_name = content.title or i18n.t(outcome.product.title_key, locale)
+            quantity = outcome.source_item.quantity if outcome.source_item is not None else 1
+            return _RepeatActionView(
+                text=i18n.t("patient.care.orders.repeat.result", locale).format(
+                    care_order_id=outcome.created_order.care_order_id,
+                    product=product_name,
+                    quantity=quantity,
+                    branch_id=outcome.selected_branch_id,
+                    status=i18n.t(f"care.order.status.{outcome.created_order.status}", locale),
+                    next_step=i18n.t("patient.care.orders.repeat.next_step", locale),
+                ),
+                created_order_id=outcome.created_order.care_order_id,
+                source_order_id=care_order_id,
             )
         if outcome.reason in {"source_not_found", "source_empty"}:
             return _RepeatActionView(text=i18n.t("patient.care.orders.repeat.not_found", locale))
@@ -1081,6 +1099,64 @@ def make_router(
                 return _RepeatActionView(text=message, choose_branch=True, branch_choices=outcome.available_branch_ids)
             return _RepeatActionView(text=message)
         return _RepeatActionView(text=i18n.t("patient.care.orders.repeat.branch_required", locale))
+
+    async def _repeat_action_keyboard(*, actor_id: int, care_order_id: str, view: _RepeatActionView) -> InlineKeyboardMarkup | None:
+        rows: list[list[InlineKeyboardButton]] = []
+        if view.choose_branch and view.branch_choices:
+            for branch_id in view.branch_choices:
+                rows.append(
+                    [
+                        InlineKeyboardButton(
+                            text=i18n.t("patient.care.orders.repeat.branch_option", _locale()).format(branch_id=branch_id),
+                            callback_data=await _encode_runtime_callback(
+                                profile=CardProfile.CARE_ORDER,
+                                entity_type=EntityType.CARE_ORDER,
+                                entity_id=care_order_id,
+                                action=CardAction.CHANGE_BRANCH,
+                                source_context=SourceContext.CARE_ORDER_LIST,
+                                source_ref="care.orders.repeat.branch",
+                                page_or_index=f"repeat_branch:{branch_id}",
+                                state_token=f"care:{actor_id}",
+                            ),
+                        )
+                    ]
+                )
+        if view.created_order_id:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.care.orders.repeat.open_new", _locale()),
+                        callback_data=await _encode_runtime_callback(
+                            profile=CardProfile.CARE_ORDER,
+                            entity_type=EntityType.CARE_ORDER,
+                            entity_id=view.created_order_id,
+                            action=CardAction.OPEN,
+                            source_context=SourceContext.CARE_ORDER_LIST,
+                            source_ref="care.orders.repeat.result.open_new",
+                            page_or_index="open",
+                            state_token=f"care:{actor_id}",
+                        ),
+                    )
+                ]
+            )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=i18n.t("patient.care.orders.repeat.back_to_orders", _locale()),
+                    callback_data=await _encode_runtime_callback(
+                        profile=CardProfile.CARE_ORDER,
+                        entity_type=EntityType.CARE_ORDER,
+                        entity_id=care_order_id,
+                        action=CardAction.BACK,
+                        source_context=SourceContext.CARE_ORDER_LIST,
+                        source_ref="care.orders.repeat.result.back",
+                        page_or_index="back_orders",
+                        state_token=f"care:{actor_id}",
+                    ),
+                )
+            ]
+        )
+        return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
     async def _build_care_order_row_card(*, clinic_id: str, actor_id: int, order: Any, locale: str) -> _CompactCareOrderRowCard:
         items = await care_commerce_service.repository.list_order_items(order.care_order_id)
@@ -1850,7 +1926,14 @@ def make_router(
         view = await _reserve_again_from_order(clinic_id=clinic_id, patient_id=patient_id, care_order_id=care_order_id)
         await callback.answer()
         if callback.message:
-            await callback.message.answer(view.text)
+            keyboard = await _repeat_action_keyboard(actor_id=callback.from_user.id, care_order_id=care_order_id, view=view)
+            await _send_or_edit_panel(
+                actor_id=callback.from_user.id,
+                message=callback,
+                session_id="care",
+                text=view.text,
+                keyboard=keyboard,
+            )
 
     @router.callback_query(F.data.startswith("c2|"))
     async def runtime_card_callback(callback: CallbackQuery) -> None:
@@ -2165,29 +2248,14 @@ def make_router(
                     patient_id=patient_id,
                     care_order_id=decoded.entity_id,
                 )
-                if callback.message:
-                    keyboard = None
-                    if view.choose_branch and view.branch_choices:
-                        branch_buttons = [
-                            [
-                                InlineKeyboardButton(
-                                    text=i18n.t("patient.care.orders.repeat.branch_option", _locale()).format(branch_id=branch_id),
-                                    callback_data=await _encode_runtime_callback(
-                                        profile=CardProfile.CARE_ORDER,
-                                        entity_type=EntityType.CARE_ORDER,
-                                        entity_id=decoded.entity_id,
-                                        action=CardAction.CHANGE_BRANCH,
-                                        source_context=SourceContext.CARE_ORDER_LIST,
-                                        source_ref="care.orders.repeat.branch",
-                                        page_or_index=f"repeat_branch:{branch_id}",
-                                        state_token=decoded.state_token,
-                                    ),
-                                )
-                            ]
-                            for branch_id in view.branch_choices
-                        ]
-                        keyboard = InlineKeyboardMarkup(inline_keyboard=branch_buttons)
-                    await callback.message.answer(view.text, reply_markup=keyboard)
+                keyboard = await _repeat_action_keyboard(actor_id=callback.from_user.id, care_order_id=decoded.entity_id, view=view)
+                await _send_or_edit_panel(
+                    actor_id=callback.from_user.id,
+                    message=callback,
+                    session_id="care",
+                    text=view.text,
+                    keyboard=keyboard,
+                )
                 await callback.answer()
                 return
             if decoded.page_or_index == "back_orders":
@@ -2206,8 +2274,14 @@ def make_router(
                     care_order_id=decoded.entity_id,
                     selected_branch_id=branch_id,
                 )
-                if callback.message:
-                    await callback.message.answer(view.text)
+                keyboard = await _repeat_action_keyboard(actor_id=callback.from_user.id, care_order_id=decoded.entity_id, view=view)
+                await _send_or_edit_panel(
+                    actor_id=callback.from_user.id,
+                    message=callback,
+                    session_id="care",
+                    text=view.text,
+                    keyboard=keyboard,
+                )
                 await callback.answer()
                 return
             if decoded.page_or_index == "open":
