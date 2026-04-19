@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from hashlib import sha256
+import json
+from pathlib import Path
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
@@ -36,6 +39,7 @@ class CalendarProjectionBooking:
     patient_display_name: str
     doctor_display_name: str
     service_label: str
+    service_locale: str
     branch_label: str
 
 
@@ -183,7 +187,8 @@ def render_calendar_event(*, booking: CalendarProjectionBooking, dentflow_base_u
     tz = ZoneInfo(booking.timezone)
     local_start = booking.scheduled_start_at.astimezone(tz)
     local_end = booking.scheduled_end_at.astimezone(tz)
-    title = f"{local_start:%H:%M} • {mask_patient_name(booking.patient_display_name)} • {booking.service_label}"
+    service_label = render_service_label(booking.service_label, booking.service_locale)
+    title = f"{local_start:%H:%M} • {mask_patient_name(booking.patient_display_name)} • {service_label}"
     description = "\n".join(
         [
             f"DentFlow booking: {booking.booking_id}",
@@ -210,6 +215,48 @@ def mask_patient_name(value: str) -> str:
     if len(chunks) == 1:
         return chunks[0]
     return f"{chunks[0]} {chunks[1][0]}."
+
+
+def render_service_label(service_label: str, preferred_locale: str) -> str:
+    localized = _lookup_localized_service_label(service_label, preferred_locale=preferred_locale)
+    if localized:
+        return localized
+    return _humanize_service_label(service_label)
+
+
+def _lookup_localized_service_label(service_label: str, *, preferred_locale: str) -> str | None:
+    locales = _service_locale_catalog()
+    candidates = [preferred_locale, "ru", "en"]
+    for locale in candidates:
+        if not locale:
+            continue
+        value = locales.get(locale, {}).get(service_label)
+        if value:
+            return value
+    return None
+
+
+@lru_cache(maxsize=1)
+def _service_locale_catalog() -> dict[str, dict[str, str]]:
+    base = Path("locales")
+    catalogs: dict[str, dict[str, str]] = {}
+    for locale in ("ru", "en"):
+        locale_file = base / f"{locale}.json"
+        if locale_file.exists():
+            catalogs[locale] = json.loads(locale_file.read_text(encoding="utf-8"))
+    return catalogs
+
+
+def _humanize_service_label(value: str) -> str:
+    candidate = value.strip()
+    if not candidate:
+        return "Service"
+    if "." in candidate:
+        candidate = candidate.rsplit(".", 1)[-1]
+    candidate = candidate.replace("_", " ").replace("-", " ").strip()
+    if not candidate:
+        return "Service"
+    return candidate[:1].upper() + candidate[1:]
 
 
 def hash_payload(payload: CalendarEventPayload) -> str:

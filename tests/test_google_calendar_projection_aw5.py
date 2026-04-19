@@ -76,6 +76,7 @@ def _booking(status: str = "pending_confirmation") -> CalendarProjectionBooking:
         patient_display_name="Anna Petrova",
         doctor_display_name="Dr. Smith",
         service_label="Consultation",
+        service_locale="en",
         branch_label="Main Branch",
     )
 
@@ -150,3 +151,10 @@ def test_event_rendering_is_local_time_and_privacy_bounded() -> None:
     assert "Diagnosis" not in payload.description
     assert "DentFlow booking: b1" in payload.description
     assert "Open in DentFlow: https://dentflow.example/admin/booking/b1" in payload.description
+
+
+def test_event_rendering_humanizes_raw_service_title_key_when_missing_localized_label() -> None:
+    booking = replace(_booking(), service_label="service.deep_cleaning", service_locale="en")
+    payload = render_calendar_event(booking=booking, dentflow_base_url="https://dentflow.example")
+    assert "Deep cleaning" in payload.title
+    assert "service.deep_cleaning" not in payload.title
