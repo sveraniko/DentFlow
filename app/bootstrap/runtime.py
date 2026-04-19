@@ -125,7 +125,7 @@ class RuntimeRegistry:
             transaction_repository=self.booking_repository,
             booking_orchestration=self.booking_orchestration_service,
         )
-        self.voice_mode_store = VoiceSearchModeStore()
+        self.voice_mode_store = VoiceSearchModeStore(runtime=self.card_runtime)
         self.owner_analytics_service = OwnerAnalyticsService(settings.db)
         stt_provider = build_speech_to_text_provider(settings.stt)
         self.speech_to_text_service = SpeechToTextService(

@@ -71,7 +71,7 @@ class VoiceSearchHandler:
         if not allowed or not message.from_user:
             return
         locale = await resolve_locale(message, access_resolver=self._access_resolver, fallback_locale=self._default_locale)
-        self._mode_store.activate(actor_telegram_id=message.from_user.id, mode=mode, ttl_sec=self._mode_ttl_sec)
+        await self._mode_store.activate(actor_telegram_id=message.from_user.id, mode=mode, ttl_sec=self._mode_ttl_sec)
         await message.answer(self._i18n.t(f"voice.mode.{mode.value}.activated", locale).format(ttl=self._mode_ttl_sec))
 
     async def _handle_voice(self, message: Message) -> None:
@@ -89,7 +89,7 @@ class VoiceSearchHandler:
         if not actor:
             return
 
-        mode = self._mode_store.get_active_mode(actor_telegram_id=message.from_user.id)
+        mode = await self._mode_store.get_active_mode(actor_telegram_id=message.from_user.id)
         if mode is None:
             await self._reply_fallback(message, locale=locale, outcome=SpeechToTextOutcome.MODE_NOT_ACTIVE)
             return
@@ -125,7 +125,7 @@ class VoiceSearchHandler:
             await self._reply_fallback(message, locale=locale, outcome=stt.outcome)
             return
 
-        self._mode_store.clear(actor_telegram_id=message.from_user.id)
+        await self._mode_store.clear(actor_telegram_id=message.from_user.id)
         transcript = stt.transcript.strip()
         await message.answer(self._i18n.t("voice.transcript.echo", locale).format(transcript=transcript))
 
