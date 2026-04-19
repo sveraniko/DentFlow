@@ -34,6 +34,7 @@ class SourceContext(str, Enum):
     DOCTOR_QUEUE = "doctor_queue"
     ADMIN_TODAY = "admin_today"
     ADMIN_CONFIRMATIONS = "admin_confirmations"
+    ADMIN_RESCHEDULES = "admin_reschedules"
     RECOMMENDATION_DETAIL = "recommendation_detail"
     CARE_CATALOG_CATEGORY = "care_catalog_category"
     CARE_ORDER_LIST = "care_order_list"
