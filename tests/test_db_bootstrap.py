@@ -122,3 +122,14 @@ def test_stack9a_owner_projection_tables_declared() -> None:
     assert "CREATE TABLE IF NOT EXISTS owner_views.daily_service_metrics" in ddl
     assert "CREATE TABLE IF NOT EXISTS owner_views.owner_alerts" in ddl
     assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_owner_alerts_open_dedupe" in ddl
+
+
+def test_aw1_admin_projection_tables_declared() -> None:
+    ddl = "\n".join(db_bootstrap.STACK1_TABLES)
+    assert "admin_views" in db_bootstrap.SCHEMAS
+    assert "CREATE TABLE IF NOT EXISTS admin_views.today_schedule" in ddl
+    assert "CREATE TABLE IF NOT EXISTS admin_views.confirmation_queue" in ddl
+    assert "CREATE TABLE IF NOT EXISTS admin_views.reschedule_queue" in ddl
+    assert "CREATE TABLE IF NOT EXISTS admin_views.waitlist_queue" in ddl
+    assert "CREATE TABLE IF NOT EXISTS admin_views.care_pickup_queue" in ddl
+    assert "CREATE TABLE IF NOT EXISTS admin_views.ops_issue_queue" in ddl

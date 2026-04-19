@@ -19,6 +19,7 @@ SCHEMAS: tuple[str, ...] = (
     "integration",
     "analytics_raw",
     "owner_views",
+    "admin_views",
     "platform",
     "system_runtime",
 )
@@ -1110,6 +1111,153 @@ STACK1_TABLES: tuple[str, ...] = (
     )
     """,
 
+
+    """
+    CREATE TABLE IF NOT EXISTS admin_views.today_schedule (
+      clinic_id TEXT NOT NULL,
+      branch_id TEXT NULL,
+      booking_id TEXT PRIMARY KEY,
+      patient_id TEXT NOT NULL,
+      doctor_id TEXT NOT NULL,
+      service_id TEXT NOT NULL,
+      local_service_date DATE NOT NULL,
+      local_service_time TEXT NOT NULL,
+      scheduled_start_at_utc TIMESTAMPTZ NOT NULL,
+      scheduled_end_at_utc TIMESTAMPTZ NULL,
+      booking_status TEXT NOT NULL,
+      confirmation_state TEXT NOT NULL,
+      checkin_state TEXT NOT NULL,
+      no_show_flag BOOLEAN NOT NULL DEFAULT FALSE,
+      reschedule_requested_flag BOOLEAN NOT NULL DEFAULT FALSE,
+      waitlist_linked_flag BOOLEAN NULL,
+      recommendation_linked_flag BOOLEAN NULL,
+      care_order_linked_flag BOOLEAN NULL,
+      patient_display_name TEXT NOT NULL,
+      doctor_display_name TEXT NOT NULL,
+      service_label TEXT NOT NULL,
+      branch_label TEXT NOT NULL,
+      compact_flags_summary TEXT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_admin_today_schedule_clinic_day
+    ON admin_views.today_schedule (clinic_id, local_service_date, scheduled_start_at_utc)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_admin_today_schedule_clinic_branch_day
+    ON admin_views.today_schedule (clinic_id, branch_id, local_service_date, scheduled_start_at_utc)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS admin_views.confirmation_queue (
+      clinic_id TEXT NOT NULL,
+      branch_id TEXT NULL,
+      booking_id TEXT PRIMARY KEY,
+      patient_id TEXT NOT NULL,
+      doctor_id TEXT NOT NULL,
+      local_service_date DATE NOT NULL,
+      local_service_time TEXT NOT NULL,
+      booking_status TEXT NOT NULL,
+      confirmation_signal TEXT NOT NULL,
+      reminder_state_summary TEXT NULL,
+      no_response_flag BOOLEAN NOT NULL DEFAULT FALSE,
+      patient_display_name TEXT NOT NULL,
+      doctor_display_name TEXT NOT NULL,
+      service_label TEXT NOT NULL,
+      branch_label TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_admin_confirmation_queue_clinic_day
+    ON admin_views.confirmation_queue (clinic_id, local_service_date, no_response_flag, local_service_time)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS admin_views.reschedule_queue (
+      clinic_id TEXT NOT NULL,
+      branch_id TEXT NULL,
+      booking_id TEXT PRIMARY KEY,
+      patient_id TEXT NOT NULL,
+      doctor_id TEXT NOT NULL,
+      local_service_date DATE NOT NULL,
+      local_service_time TEXT NOT NULL,
+      booking_status TEXT NOT NULL,
+      reschedule_context TEXT NULL,
+      patient_display_name TEXT NOT NULL,
+      doctor_display_name TEXT NOT NULL,
+      service_label TEXT NOT NULL,
+      branch_label TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_admin_reschedule_queue_clinic_day
+    ON admin_views.reschedule_queue (clinic_id, local_service_date, local_service_time)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS admin_views.waitlist_queue (
+      clinic_id TEXT NOT NULL,
+      branch_id TEXT NULL,
+      waitlist_entry_id TEXT PRIMARY KEY,
+      patient_id TEXT NULL,
+      preferred_doctor_id TEXT NULL,
+      preferred_service_id TEXT NULL,
+      preferred_time_window_summary TEXT NULL,
+      status TEXT NOT NULL,
+      patient_display_name TEXT NOT NULL,
+      doctor_display_name TEXT NULL,
+      service_label TEXT NULL,
+      priority_rank INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_admin_waitlist_queue_clinic_status
+    ON admin_views.waitlist_queue (clinic_id, status, priority_rank DESC, updated_at DESC)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS admin_views.care_pickup_queue (
+      clinic_id TEXT NOT NULL,
+      branch_id TEXT NULL,
+      care_order_id TEXT PRIMARY KEY,
+      patient_id TEXT NOT NULL,
+      pickup_status TEXT NOT NULL,
+      local_ready_date DATE NULL,
+      local_ready_time TEXT NULL,
+      patient_display_name TEXT NOT NULL,
+      branch_label TEXT NOT NULL,
+      compact_item_summary TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_admin_care_pickup_queue_clinic_branch_status
+    ON admin_views.care_pickup_queue (clinic_id, branch_id, pickup_status, updated_at DESC)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS admin_views.ops_issue_queue (
+      clinic_id TEXT NOT NULL,
+      branch_id TEXT NULL,
+      issue_type TEXT NOT NULL,
+      issue_ref_id TEXT NOT NULL,
+      issue_status TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      patient_id TEXT NULL,
+      booking_id TEXT NULL,
+      care_order_id TEXT NULL,
+      local_related_date DATE NULL,
+      local_related_time TEXT NULL,
+      summary_text TEXT NOT NULL,
+      patient_display_name TEXT NULL,
+      severity_rank INTEGER NOT NULL DEFAULT 1,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY(issue_type, issue_ref_id)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_admin_ops_issue_queue_clinic_status
+    ON admin_views.ops_issue_queue (clinic_id, issue_status, severity_rank DESC, updated_at DESC)
+    """,
     """
     CREATE TABLE IF NOT EXISTS owner_views.daily_clinic_metrics (
       clinic_id TEXT NOT NULL,
