@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from app.common.i18n import I18nService
-from app.interfaces.bots.patient.router import _CompactProductRowCard, _resolve_media_ref
+from app.interfaces.bots.patient.router import _CompactProductRowCard, _parse_gallery_index, _resolve_media_ref
 from app.interfaces.cards import CardAction, CardMode, ProductCardAdapter, ProductCardSeed, SourceContext, SourceRef
 
 
@@ -62,6 +62,16 @@ def test_media_ref_resolution_supports_photo_video_and_missing_values() -> None:
     assert fallback_photo.media_kind == "photo"
 
     assert _resolve_media_ref("   ") is None
+
+
+def test_gallery_index_parser_is_bounded_and_stale_safe() -> None:
+    assert _parse_gallery_index("gallery:0", total=3) == 0
+    assert _parse_gallery_index("gallery:2", total=3) == 2
+    assert _parse_gallery_index("gallery:999", total=3) == 2
+    assert _parse_gallery_index("gallery:-5", total=3) == 0
+    assert _parse_gallery_index("gallery:not-a-number", total=3) == 0
+    assert _parse_gallery_index("gallery", total=3) == 0
+    assert _parse_gallery_index("gallery:1", total=0) == 0
 
 
 def test_compact_product_row_object_uses_unified_card_primitive_for_category_and_recommendation() -> None:

@@ -48,6 +48,9 @@ class _CareViewState:
     recommendation_source_ref: str | None = None
     selected_branch_by_product: dict[str, str] | None = None
     product_page_by_category: dict[str, int] | None = None
+    media_product_id: str | None = None
+    media_index_by_product: dict[str, int] | None = None
+    media_return_mode_by_product: dict[str, str] | None = None
 
 
 @dataclass(slots=True)
@@ -153,6 +156,19 @@ def _resolve_media_ref(media_ref: str) -> _ResolvedMediaRef | None:
     return _ResolvedMediaRef(media_kind="photo", media_value=ref)
 
 
+def _parse_gallery_index(page_or_index: str, *, total: int) -> int:
+    if total < 1:
+        return 0
+    if ":" not in page_or_index:
+        return 0
+    _, raw_idx = page_or_index.split(":", 1)
+    try:
+        parsed = int(raw_idx or "0")
+    except ValueError:
+        return 0
+    return min(max(parsed, 0), total - 1)
+
+
 def make_router(
     i18n: I18nService,
     booking_flow: BookingPatientFlowService,
@@ -198,6 +214,9 @@ def make_router(
             recommendation_source_ref=care_payload.get("recommendation_source_ref"),
             selected_branch_by_product=dict(care_payload.get("selected_branch_by_product") or {}),
             product_page_by_category=dict(care_payload.get("product_page_by_category") or {}),
+            media_product_id=care_payload.get("media_product_id"),
+            media_index_by_product=dict(care_payload.get("media_index_by_product") or {}),
+            media_return_mode_by_product=dict(care_payload.get("media_return_mode_by_product") or {}),
         )
         return _PatientFlowState(
             booking_session_id=payload.get("booking_session_id", ""),
@@ -224,6 +243,9 @@ def make_router(
                     "recommendation_source_ref": care_state.recommendation_source_ref,
                     "selected_branch_by_product": dict(care_state.selected_branch_by_product or {}),
                     "product_page_by_category": dict(care_state.product_page_by_category or {}),
+                    "media_product_id": care_state.media_product_id,
+                    "media_index_by_product": dict(care_state.media_index_by_product or {}),
+                    "media_return_mode_by_product": dict(care_state.media_return_mode_by_product or {}),
                 },
             },
         )
@@ -235,6 +257,10 @@ def make_router(
             current.selected_branch_by_product = {}
         if current.product_page_by_category is None:
             current.product_page_by_category = {}
+        if current.media_index_by_product is None:
+            current.media_index_by_product = {}
+        if current.media_return_mode_by_product is None:
+            current.media_return_mode_by_product = {}
         if current.recommendation_products is None:
             current.recommendation_products = []
         state.care = current
@@ -1629,6 +1655,9 @@ def make_router(
                     await callback.answer(i18n.t("patient.care.product.missing", _locale()), show_alert=True)
                     return
                 refs = care_commerce_service.resolve_product_media_refs(product=product)
+                state = await _care_state(callback.from_user.id)
+                state.media_product_id = decoded.entity_id
+                state.media_return_mode_by_product[decoded.entity_id] = CardMode.EXPANDED.value
                 if not refs:
                     await _send_or_edit_panel(
                         actor_id=callback.from_user.id,
@@ -1655,9 +1684,13 @@ def make_router(
                             ]
                         ),
                     )
+                    flow = await _load_flow_state(callback.from_user.id)
+                    flow.care = state
+                    await _save_flow_state(callback.from_user.id, flow)
                     return
                 if decoded.page_or_index == "cover":
                     cover_ref = refs[0]
+                    state.media_index_by_product[decoded.entity_id] = 0
                     cover_keyboard = InlineKeyboardMarkup(
                         inline_keyboard=[
                             [
@@ -1691,12 +1724,12 @@ def make_router(
                             text=i18n.t("patient.care.product.media.cover", _locale()),
                             keyboard=cover_keyboard,
                         )
+                    flow = await _load_flow_state(callback.from_user.id)
+                    flow.care = state
+                    await _save_flow_state(callback.from_user.id, flow)
                     return
-                index = 0
-                if ":" in decoded.page_or_index:
-                    _, idx = decoded.page_or_index.split(":", 1)
-                    index = int(idx or "0")
-                index = min(max(index, 0), len(refs) - 1)
+                index = _parse_gallery_index(decoded.page_or_index, total=len(refs))
+                state.media_index_by_product[decoded.entity_id] = index
                 nav: list[InlineKeyboardButton] = []
                 if index > 0:
                     nav.append(
@@ -1765,6 +1798,9 @@ def make_router(
                         text=i18n.t("patient.care.product.media.gallery", _locale()).format(index=index + 1, total=len(refs)),
                         keyboard=gallery_markup,
                     )
+                flow = await _load_flow_state(callback.from_user.id)
+                flow.care = state
+                await _save_flow_state(callback.from_user.id, flow)
                 return
             if decoded.page_or_index == "reserve":
                 patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
@@ -1802,7 +1838,16 @@ def make_router(
                 await _render_care_product_list(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, category=category)
                 return
             if decoded.page_or_index == "back_product":
-                await _render_product_card(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, product_id=decoded.entity_id)
+                state = await _care_state(callback.from_user.id)
+                return_mode_raw = state.media_return_mode_by_product.get(decoded.entity_id, CardMode.COMPACT.value)
+                return_mode = CardMode.EXPANDED if return_mode_raw == CardMode.EXPANDED.value else CardMode.COMPACT
+                await _render_product_card(
+                    callback,
+                    actor_id=callback.from_user.id,
+                    clinic_id=clinic_id,
+                    product_id=decoded.entity_id,
+                    mode=return_mode,
+                )
                 return
 
         if decoded.source_context == SourceContext.CARE_ORDER_LIST and decoded.profile == CardProfile.CARE_ORDER:
