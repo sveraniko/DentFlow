@@ -11,6 +11,7 @@ from app.application.care_commerce import CareCommerceService
 from app.application.booking.telegram_flow import BookingPatientFlowService
 from app.application.clinic_reference import ClinicReferenceService
 from app.application.search.service import HybridSearchService
+from app.application.search.models import PatientSearchResult, SearchQuery
 from app.application.voice import SpeechToTextService, VoiceSearchModeStore
 from app.common.i18n import I18nService
 from app.domain.access_identity.models import RoleCode
@@ -21,6 +22,9 @@ from app.interfaces.cards import CardCallbackCodec, CardRuntimeCoordinator
 from app.interfaces.cards import (
     BookingCardAdapter,
     BookingRuntimeViewBuilder,
+    PatientCardAdapter,
+    PatientRuntimeSnapshot,
+    PatientRuntimeViewBuilder,
     CardAction,
     CardCallback,
     CardCallbackError,
@@ -85,6 +89,10 @@ def make_router(
     admin_confirmations_scope = "admin_confirmations_filters"
     admin_reschedules_scope = "admin_reschedules_filters"
     admin_waitlist_scope = "admin_waitlist_filters"
+    admin_patients_scope = "admin_patients_state"
+    admin_care_pickups_scope = "admin_care_pickups_state"
+    admin_issues_scope = "admin_issues_state"
+    patient_builder = PatientRuntimeViewBuilder()
 
     def _resolved_service_label(*, clinic_id: str, service_id: str, raw_label: str, locale: str) -> str:
         translated = i18n.t(raw_label, locale)
@@ -119,6 +127,16 @@ def make_router(
     def _status_label(*, status: str, locale: str) -> str:
         translated = i18n.t(f"admin.queue.status.{status}", locale)
         return translated if translated != f"admin.queue.status.{status}" else _status_chip(status=status, locale=locale)
+
+    def _pickup_status_label(*, status: str, locale: str) -> str:
+        key = f"admin.care.pickups.status.{status}"
+        translated = i18n.t(key, locale)
+        return translated if translated != key else status
+
+    def _ops_issue_label(*, issue_type: str, locale: str) -> str:
+        key = f"admin.issues.type.{issue_type}"
+        translated = i18n.t(key, locale)
+        return translated if translated != key else issue_type
 
     def _confirmation_signal_label(*, signal: str, locale: str) -> str:
         translated = i18n.t(f"admin.confirmations.signal.{signal}", locale)
@@ -298,7 +316,16 @@ def make_router(
                 i18n.t("admin.waitlist.row", locale).format(
                     patient=row.patient_display_name,
                     doctor=row.doctor_display_name or i18n.t("admin.waitlist.preference.any", locale),
-                    service=row.service_label or i18n.t("admin.waitlist.preference.any", locale),
+                    service=(
+                        _resolved_service_label(
+                            clinic_id=clinic_id,
+                            service_id=row.preferred_service_id or "",
+                            raw_label=row.service_label or i18n.t("admin.waitlist.preference.any", locale),
+                            locale=locale,
+                        )
+                        if row.service_label
+                        else i18n.t("admin.waitlist.preference.any", locale)
+                    ),
                     window=row.preferred_time_window_summary or i18n.t("admin.waitlist.window.unspecified", locale),
                     status=_status_label(status=row.status, locale=locale),
                 )
@@ -419,6 +446,147 @@ def make_router(
         keyboard = InlineKeyboardMarkup(inline_keyboard=[filters_row_1, *booking_rows])
         return "\n".join(lines), keyboard
 
+    async def _render_admin_patients(
+        *,
+        actor_id: int,
+        clinic_id: str,
+        locale: str,
+        state: dict[str, str],
+    ) -> tuple[str, InlineKeyboardMarkup]:
+        query = state.get("query", "").strip()
+        lines = [i18n.t("admin.patients.title", locale)]
+        if not query:
+            lines.append(i18n.t("admin.patients.usage", locale))
+            await _save_queue_state(scope=admin_patients_scope, actor_id=actor_id, state=state)
+            return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=[])
+        response = await search_service.search_patients(SearchQuery(clinic_id=clinic_id, query=query, limit=12, locale=locale))
+        rows = [*response.exact_matches, *response.suggestions]
+        if not rows:
+            lines.append(i18n.t("admin.patients.empty", locale))
+        else:
+            for row in rows[:12]:
+                lines.append(
+                    i18n.t("admin.patients.row", locale).format(
+                        name=row.display_name,
+                        patient_number=row.patient_number or "-",
+                        phone=row.primary_phone_normalized or "-",
+                        flags=row.active_flags_summary or "-",
+                    )
+                )
+        token = f"{actor_id}-p-{len(rows)}-{query[:8]}"
+        next_state = dict(state)
+        next_state["state_token"] = token
+        await _save_queue_state(scope=admin_patients_scope, actor_id=actor_id, state=next_state)
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    text=f"{row.display_name} · {row.patient_number or row.patient_id}",
+                    callback_data=await _encode_patient_callback(
+                        patient_id=row.patient_id,
+                        action=CardAction.OPEN,
+                        page_or_index=f"patients_open:{token}",
+                        source_context=SourceContext.ADMIN_PATIENTS,
+                        source_ref=f"admin_patients:{query}",
+                        state_token=token,
+                    ),
+                )
+            ]
+            for row in rows[:8]
+        ]
+        return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    async def _render_admin_care_pickups(
+        *,
+        actor_id: int,
+        clinic_id: str,
+        locale: str,
+        state: dict[str, str],
+    ) -> tuple[str, InlineKeyboardMarkup]:
+        if admin_workdesk is None:
+            return i18n.t("common.placeholder", locale), InlineKeyboardMarkup(inline_keyboard=[])
+        status = state.get("status", "ready_for_pickup")
+        statuses = None if status == "all" else (status,)
+        rows = await admin_workdesk.get_care_pickup_queue(clinic_id=clinic_id, statuses=statuses, limit=40)
+        lines = [i18n.t("admin.care.pickups.title", locale)]
+        if not rows:
+            lines.append(i18n.t("admin.care.pickups.empty", locale))
+        for row in rows[:15]:
+            lines.append(
+                i18n.t("admin.care.pickups.row", locale).format(
+                    patient=row.patient_display_name,
+                    branch=row.branch_label,
+                    item=row.compact_item_summary,
+                    status=_pickup_status_label(status=row.pickup_status, locale=locale),
+                    ready=(f"{row.local_ready_date} {row.local_ready_time}" if row.local_ready_date else "-"),
+                )
+            )
+        token = f"{actor_id}-cp-{len(rows)}-{status}"
+        next_state = dict(state)
+        next_state["state_token"] = token
+        await _save_queue_state(scope=admin_care_pickups_scope, actor_id=actor_id, state=next_state)
+        controls = [[InlineKeyboardButton(text=i18n.t("admin.care.pickups.filter.status", locale), callback_data=f"aw4:care_pickups:status:{token}")]]
+        row_buttons: list[list[InlineKeyboardButton]] = []
+        for row in rows[:8]:
+            row_buttons.append([InlineKeyboardButton(text=f"{row.patient_display_name} · {row.compact_item_summary}", callback_data=f"aw4cp:open:{row.care_order_id}:{token}")])
+            if care_commerce_service is not None and row.pickup_status in {"ready_for_pickup", "paid"}:
+                row_buttons.append([InlineKeyboardButton(text=i18n.t("admin.care.pickups.action.issue", locale), callback_data=f"aw4cp:action:issue:{row.care_order_id}:{token}")])
+            if care_commerce_service is not None and row.pickup_status in {"ready_for_pickup", "issued"}:
+                row_buttons.append([InlineKeyboardButton(text=i18n.t("admin.care.pickups.action.fulfill", locale), callback_data=f"aw4cp:action:fulfill:{row.care_order_id}:{token}")])
+        return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=[*controls, *row_buttons])
+
+    async def _render_admin_issues(
+        *,
+        actor_id: int,
+        clinic_id: str,
+        locale: str,
+        state: dict[str, str],
+    ) -> tuple[str, InlineKeyboardMarkup]:
+        if admin_workdesk is None:
+            return i18n.t("common.placeholder", locale), InlineKeyboardMarkup(inline_keyboard=[])
+        status = state.get("status", "open")
+        statuses = None if status == "all" else (status,)
+        rows = await admin_workdesk.get_ops_issue_queue(clinic_id=clinic_id, statuses=statuses, limit=40)
+        lines = [i18n.t("admin.issues.title", locale)]
+        if not rows:
+            lines.append(i18n.t("admin.issues.empty", locale))
+        for row in rows[:15]:
+            lines.append(
+                i18n.t("admin.issues.row", locale).format(
+                    issue=_ops_issue_label(issue_type=row.issue_type, locale=locale),
+                    severity=row.severity,
+                    summary=(i18n.t(f"admin.issues.summary.{row.issue_type}", locale) if i18n.t(f"admin.issues.summary.{row.issue_type}", locale) != f"admin.issues.summary.{row.issue_type}" else row.summary_text),
+                    related=(row.patient_display_name or row.patient_id or row.booking_id or row.care_order_id or "-"),
+                )
+            )
+        token = f"{actor_id}-is-{len(rows)}-{status}"
+        next_state = dict(state)
+        next_state["state_token"] = token
+        await _save_queue_state(scope=admin_issues_scope, actor_id=actor_id, state=next_state)
+        controls = [[InlineKeyboardButton(text=i18n.t("admin.issues.filter.status", locale), callback_data=f"aw4:issues:status:{token}")]]
+        row_buttons: list[list[InlineKeyboardButton]] = []
+        for row in rows[:8]:
+            if row.booking_id:
+                row_buttons.append(
+                    [
+                        InlineKeyboardButton(
+                            text=f"{_ops_issue_label(issue_type=row.issue_type, locale=locale)} · {row.booking_id}",
+                            callback_data=await _encode_booking_callback(
+                                booking_id=row.booking_id,
+                                action=CardAction.OPEN,
+                                page_or_index=f"issues_open:{token}",
+                                source_context=SourceContext.ADMIN_ISSUES,
+                                source_ref=f"admin_issues:{status}",
+                                state_token=token,
+                            ),
+                        )
+                    ]
+                )
+            elif row.patient_id:
+                row_buttons.append([InlineKeyboardButton(text=f"{_ops_issue_label(issue_type=row.issue_type, locale=locale)} · {row.patient_display_name or row.patient_id}", callback_data=f"aw4i:patient:{row.patient_id}:{token}")])
+            elif row.care_order_id:
+                row_buttons.append([InlineKeyboardButton(text=f"{_ops_issue_label(issue_type=row.issue_type, locale=locale)} · {row.care_order_id}", callback_data=f"aw4i:care:{row.care_order_id}:{token}")])
+        return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=[*controls, *row_buttons])
+
 
     async def _encode_booking_callback(
         *,
@@ -444,6 +612,109 @@ def make_router(
                 state_token=state_token or booking_id,
             )
         )
+
+    async def _encode_patient_callback(
+        *,
+        patient_id: str,
+        action: CardAction,
+        page_or_index: str,
+        source_context: SourceContext,
+        source_ref: str,
+        state_token: str,
+        mode: CardMode = CardMode.EXPANDED,
+    ) -> str:
+        if card_callback_codec is None:
+            return f"adminpt:{page_or_index}:{patient_id}"
+        return await card_callback_codec.encode(
+            CardCallback(
+                profile=CardProfile.PATIENT,
+                entity_type=EntityType.PATIENT,
+                entity_id=patient_id,
+                action=action,
+                mode=mode,
+                source_context=source_context,
+                source_ref=source_ref,
+                page_or_index=page_or_index,
+                state_token=state_token,
+            )
+        )
+
+    async def _lookup_patient(*, clinic_id: str, patient_id: str, locale: str) -> PatientSearchResult | None:
+        response = await search_service.search_patients(
+            SearchQuery(clinic_id=clinic_id, query=f"id:{patient_id}", limit=1, locale=locale)
+        )
+        combined = [*response.exact_matches, *response.suggestions]
+        return combined[0] if combined else None
+
+    async def _build_patient_snapshot(
+        *,
+        clinic_id: str,
+        patient_id: str,
+        locale: str,
+        display_name: str | None = None,
+        patient_number: str | None = None,
+        phone_hint: str | None = None,
+        flags_summary: str | None = None,
+    ) -> PatientRuntimeSnapshot:
+        resolved = await _lookup_patient(clinic_id=clinic_id, patient_id=patient_id, locale=locale)
+        active_flags_summary = flags_summary or (resolved.active_flags_summary if resolved else None)
+        upcoming_rows = []
+        if admin_workdesk is not None:
+            upcoming_rows = await admin_workdesk.get_today_schedule(clinic_id=clinic_id, limit=80)
+        upcoming = next((row for row in upcoming_rows if row.patient_id == patient_id), None)
+        return PatientRuntimeSnapshot(
+            patient_id=patient_id,
+            display_name=display_name or (resolved.display_name if resolved else patient_id),
+            state_token=f"pt:{patient_id}",
+            patient_number=patient_number or (resolved.patient_number if resolved else None),
+            primary_contact=phone_hint or (resolved.primary_phone_normalized if resolved else None),
+            is_photo_present=False,
+            active_flags=tuple((active_flags_summary or "").split(", ")) if active_flags_summary else (),
+            upcoming_booking_label=(f"{upcoming.local_service_time} · {upcoming.service_label}" if upcoming else None),
+            recommendation_summary=(
+                i18n.t("admin.patient.summary.recommendation.linked", locale)
+                if upcoming and upcoming.recommendation_linked_flag
+                else i18n.t("admin.patient.summary.recommendation.none", locale)
+            ),
+            care_order_summary=(
+                i18n.t("admin.patient.summary.care_order.linked", locale)
+                if upcoming and upcoming.care_order_linked_flag
+                else i18n.t("admin.patient.summary.care_order.none", locale)
+            ),
+            chart_summary_entry=i18n.t("admin.patient.summary.chart.policy", locale),
+        )
+
+    async def _render_patient_panel(
+        *,
+        clinic_id: str,
+        patient_id: str,
+        locale: str,
+        source_context: SourceContext,
+        source_ref: str,
+        state_token: str,
+        display_name: str | None = None,
+        patient_number: str | None = None,
+        phone_hint: str | None = None,
+        flags_summary: str | None = None,
+    ) -> str:
+        snapshot = await _build_patient_snapshot(
+            clinic_id=clinic_id,
+            patient_id=patient_id,
+            locale=locale,
+            display_name=display_name,
+            patient_number=patient_number,
+            phone_hint=phone_hint,
+            flags_summary=flags_summary,
+        )
+        shell = PatientCardAdapter.build(
+            seed=patient_builder.build_seed(snapshot=snapshot),
+            source=SourceRef(context=source_context, source_ref=source_ref),
+            actor_roles={RoleCode.ADMIN},
+            i18n=i18n,
+            locale=locale,
+            mode=CardMode.EXPANDED,
+        )
+        return CardShellRenderer.to_panel(shell).text
 
     def _render_admin_booking_panel(*, booking, locale: str) -> str:
         snapshot = booking_flow.build_booking_snapshot(booking=booking, role_variant="admin")
@@ -494,7 +765,7 @@ def make_router(
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.chart", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.OPEN_CHART, page_or_index="open_chart", source_context=source_context, source_ref=source_ref, state_token=state_token))])
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.recommendation", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.OPEN_RECOMMENDATION, page_or_index="open_recommendation", source_context=source_context, source_ref=source_ref, state_token=state_token))])
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.care_order", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.OPEN_CARE_ORDER, page_or_index="open_care_order", source_context=source_context, source_ref=source_ref, state_token=state_token))])
-        if source_context in {SourceContext.ADMIN_TODAY, SourceContext.ADMIN_CONFIRMATIONS, SourceContext.ADMIN_RESCHEDULES}:
+        if source_context in {SourceContext.ADMIN_TODAY, SourceContext.ADMIN_CONFIRMATIONS, SourceContext.ADMIN_RESCHEDULES, SourceContext.ADMIN_ISSUES}:
             rows.append([InlineKeyboardButton(text=i18n.t("common.back", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.BACK, page_or_index=page_or_index, source_context=source_context, source_ref=source_ref, state_token=state_token))])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -580,7 +851,7 @@ def make_router(
         )
 
     @router.message(Command("search_service"))
-    async def search_service(message: Message) -> None:
+    async def search_service_handler(message: Message) -> None:
         locale = await _run_search(message, access_resolver=access_resolver, i18n=i18n, default_locale=default_locale)
         if locale is None:
             return
@@ -1055,6 +1326,108 @@ def make_router(
         )
         await message.answer(text, reply_markup=keyboard)
 
+    @router.message(Command("admin_patients"))
+    async def admin_patients(message: Message) -> None:
+        allowed = await guard_roles(
+            message,
+            i18n=i18n,
+            access_resolver=access_resolver,
+            allowed_roles={RoleCode.ADMIN},
+            fallback_locale=default_locale,
+        )
+        if not allowed or not message.from_user:
+            return
+        actor_context = access_resolver.resolve_actor_context(message.from_user.id)
+        if not actor_context:
+            return
+        locale = await resolve_locale(
+            message,
+            access_resolver=access_resolver,
+            fallback_locale=default_locale,
+            clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
+        )
+        query = (message.text or "").replace("/admin_patients", "", 1).strip()
+        state = await _load_queue_state(
+            scope=admin_patients_scope,
+            actor_id=message.from_user.id,
+            default_state={"query": query, "state_token": "na"},
+        )
+        if query:
+            state["query"] = query
+        text, keyboard = await _render_admin_patients(
+            actor_id=message.from_user.id,
+            clinic_id=actor_context.clinic_id,
+            locale=locale,
+            state=state,
+        )
+        await message.answer(text, reply_markup=keyboard)
+
+    @router.message(Command("admin_care_pickups"))
+    async def admin_care_pickups(message: Message) -> None:
+        allowed = await guard_roles(
+            message,
+            i18n=i18n,
+            access_resolver=access_resolver,
+            allowed_roles={RoleCode.ADMIN},
+            fallback_locale=default_locale,
+        )
+        if not allowed or not message.from_user:
+            return
+        actor_context = access_resolver.resolve_actor_context(message.from_user.id)
+        if not actor_context:
+            return
+        locale = await resolve_locale(
+            message,
+            access_resolver=access_resolver,
+            fallback_locale=default_locale,
+            clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
+        )
+        state = await _load_queue_state(
+            scope=admin_care_pickups_scope,
+            actor_id=message.from_user.id,
+            default_state={"status": "ready_for_pickup", "state_token": "na"},
+        )
+        text, keyboard = await _render_admin_care_pickups(
+            actor_id=message.from_user.id,
+            clinic_id=actor_context.clinic_id,
+            locale=locale,
+            state=state,
+        )
+        await message.answer(text, reply_markup=keyboard)
+
+    @router.message(Command("admin_issues"))
+    async def admin_issues(message: Message) -> None:
+        allowed = await guard_roles(
+            message,
+            i18n=i18n,
+            access_resolver=access_resolver,
+            allowed_roles={RoleCode.ADMIN},
+            fallback_locale=default_locale,
+        )
+        if not allowed or not message.from_user:
+            return
+        actor_context = access_resolver.resolve_actor_context(message.from_user.id)
+        if not actor_context:
+            return
+        locale = await resolve_locale(
+            message,
+            access_resolver=access_resolver,
+            fallback_locale=default_locale,
+            clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
+        )
+        state = await _load_queue_state(
+            scope=admin_issues_scope,
+            actor_id=message.from_user.id,
+            default_state={"status": "open", "state_token": "na"},
+        )
+        text, keyboard = await _render_admin_issues(
+            actor_id=message.from_user.id,
+            clinic_id=actor_context.clinic_id,
+            locale=locale,
+            state=state,
+        )
+        await message.answer(text, reply_markup=keyboard)
+
     @router.callback_query(F.data.startswith("aw2:"))
     async def admin_today_callback(callback: CallbackQuery) -> None:
         if not callback.from_user or not callback.data or not callback.message:
@@ -1201,11 +1574,147 @@ def make_router(
                 entry_id=row.waitlist_entry_id,
                 patient=row.patient_display_name,
                 doctor=row.doctor_display_name or i18n.t("admin.waitlist.preference.any", locale),
-                service=row.service_label or i18n.t("admin.waitlist.preference.any", locale),
+                service=(
+                    _resolved_service_label(
+                        clinic_id=actor_context.clinic_id,
+                        service_id=row.preferred_service_id or "",
+                        raw_label=row.service_label or i18n.t("admin.waitlist.preference.any", locale),
+                        locale=locale,
+                    )
+                    if row.service_label
+                    else i18n.t("admin.waitlist.preference.any", locale)
+                ),
                 window=row.preferred_time_window_summary or i18n.t("admin.waitlist.window.unspecified", locale),
                 status=_status_label(status=row.status, locale=locale),
             )
         )
+
+    @router.callback_query(F.data.startswith("aw4:"))
+    async def admin_aw4_queue_callback(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data or not callback.message:
+            return
+        actor_context = access_resolver.resolve_actor_context(callback.from_user.id)
+        if actor_context is None:
+            return
+        locale = await resolve_locale(
+            callback,
+            access_resolver=access_resolver,
+            fallback_locale=default_locale,
+            clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
+        )
+        parts = callback.data.split(":")
+        if len(parts) != 4:
+            await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+            return
+        _, queue, action, token = parts
+        if queue == "care_pickups":
+            state = await _load_queue_state(scope=admin_care_pickups_scope, actor_id=callback.from_user.id, default_state={"status": "ready_for_pickup", "state_token": "na"})
+            if card_runtime is not None and token != state.get("state_token"):
+                await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+                return
+            if action == "status":
+                statuses = ["ready_for_pickup", "issued", "fulfilled", "all"]
+                current = state.get("status", "ready_for_pickup")
+                state["status"] = statuses[(statuses.index(current) + 1) % len(statuses)] if current in statuses else "ready_for_pickup"
+            text, keyboard = await _render_admin_care_pickups(actor_id=callback.from_user.id, clinic_id=actor_context.clinic_id, locale=locale, state=state)
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            return
+        if queue == "issues":
+            state = await _load_queue_state(scope=admin_issues_scope, actor_id=callback.from_user.id, default_state={"status": "open", "state_token": "na"})
+            if card_runtime is not None and token != state.get("state_token"):
+                await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+                return
+            if action == "status":
+                statuses = ["open", "in_progress", "resolved", "all"]
+                current = state.get("status", "open")
+                state["status"] = statuses[(statuses.index(current) + 1) % len(statuses)] if current in statuses else "open"
+            text, keyboard = await _render_admin_issues(actor_id=callback.from_user.id, clinic_id=actor_context.clinic_id, locale=locale, state=state)
+            await callback.message.edit_text(text, reply_markup=keyboard)
+
+    @router.callback_query(F.data.startswith("aw4cp:"))
+    async def admin_care_pickups_callback(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data or not callback.message:
+            return
+        actor_context = access_resolver.resolve_actor_context(callback.from_user.id)
+        if actor_context is None:
+            return
+        locale = await resolve_locale(
+            callback,
+            access_resolver=access_resolver,
+            fallback_locale=default_locale,
+            clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
+        )
+        parts = callback.data.split(":")
+        if len(parts) not in {4, 5}:
+            await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+            return
+        state = await _load_queue_state(scope=admin_care_pickups_scope, actor_id=callback.from_user.id, default_state={"status": "ready_for_pickup", "state_token": "na"})
+        token = parts[-1]
+        if card_runtime is not None and token != state.get("state_token"):
+            await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+            return
+        if parts[1] == "open":
+            care_order_id = parts[2]
+            if care_commerce_service is None:
+                return
+            order = await care_commerce_service.get_order(care_order_id)
+            if order is None:
+                await callback.answer(i18n.t("admin.care.order.action.missing", locale), show_alert=True)
+                return
+            await callback.message.edit_text(
+                i18n.t("admin.care.pickups.detail", locale).format(
+                    care_order_id=order.care_order_id,
+                    patient_id=order.patient_id,
+                    status=_pickup_status_label(status=order.status, locale=locale),
+                )
+            )
+            return
+        if parts[1] == "action" and care_commerce_service is not None:
+            action = parts[2]
+            care_order_id = parts[3]
+            try:
+                await care_commerce_service.apply_admin_order_action(care_order_id=care_order_id, action=action)
+            except ValueError:
+                await callback.answer(i18n.t("admin.care.order.action.invalid", locale), show_alert=True)
+                return
+            text, keyboard = await _render_admin_care_pickups(actor_id=callback.from_user.id, clinic_id=actor_context.clinic_id, locale=locale, state=state)
+            await callback.message.edit_text(text, reply_markup=keyboard)
+
+    @router.callback_query(F.data.startswith("aw4i:"))
+    async def admin_issues_object_callback(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data or not callback.message:
+            return
+        actor_context = access_resolver.resolve_actor_context(callback.from_user.id)
+        if actor_context is None:
+            return
+        locale = await resolve_locale(
+            callback,
+            access_resolver=access_resolver,
+            fallback_locale=default_locale,
+            clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
+        )
+        parts = callback.data.split(":")
+        if len(parts) != 4:
+            await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+            return
+        kind, entity_id, token = parts[1], parts[2], parts[3]
+        state = await _load_queue_state(scope=admin_issues_scope, actor_id=callback.from_user.id, default_state={"status": "open", "state_token": "na"})
+        if card_runtime is not None and token != state.get("state_token"):
+            await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+            return
+        if kind == "patient":
+            panel = await _render_patient_panel(
+                clinic_id=actor_context.clinic_id,
+                patient_id=entity_id,
+                locale=locale,
+                source_context=SourceContext.ADMIN_ISSUES,
+                source_ref=f"admin_issues:{state.get('status', 'open')}",
+                state_token=token,
+            )
+            await callback.message.edit_text(panel)
+            return
+        if kind == "care":
+            await callback.message.edit_text(i18n.t("admin.issues.care_order.linked", locale).format(care_order_id=entity_id))
 
     @router.callback_query(F.data.startswith("c2|"))
     async def admin_runtime_card_callback(callback: CallbackQuery) -> None:
@@ -1224,7 +1733,9 @@ def make_router(
             SourceContext.ADMIN_TODAY,
             SourceContext.ADMIN_CONFIRMATIONS,
             SourceContext.ADMIN_RESCHEDULES,
-        } or decoded.profile != CardProfile.BOOKING:
+            SourceContext.ADMIN_ISSUES,
+            SourceContext.ADMIN_PATIENTS,
+        }:
             return
         if decoded.source_context == SourceContext.ADMIN_TODAY and callback.from_user:
             state = await _load_admin_today_state(actor_id=callback.from_user.id)
@@ -1249,6 +1760,69 @@ def make_router(
             if decoded.state_token != state.get("state_token"):
                 await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
                 return
+        if decoded.source_context == SourceContext.ADMIN_ISSUES and callback.from_user:
+            state = await _load_queue_state(
+                scope=admin_issues_scope,
+                actor_id=callback.from_user.id,
+                default_state={"status": "open", "state_token": "na"},
+            )
+            if decoded.state_token != state.get("state_token"):
+                await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+                return
+        if decoded.source_context == SourceContext.ADMIN_PATIENTS and callback.from_user:
+            state = await _load_queue_state(
+                scope=admin_patients_scope,
+                actor_id=callback.from_user.id,
+                default_state={"query": "", "state_token": "na"},
+            )
+            if decoded.state_token != state.get("state_token"):
+                await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+                return
+        if decoded.profile == CardProfile.PATIENT and decoded.source_context in {SourceContext.ADMIN_PATIENTS, SourceContext.ADMIN_ISSUES}:
+            actor_context = access_resolver.resolve_actor_context(callback.from_user.id)
+            if actor_context is None:
+                return
+            if decoded.source_context == SourceContext.ADMIN_PATIENTS:
+                state = await _load_queue_state(scope=admin_patients_scope, actor_id=callback.from_user.id, default_state={"query": "", "state_token": "na"})
+                if decoded.state_token != state.get("state_token"):
+                    await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+                    return
+            panel = await _render_patient_panel(
+                clinic_id=actor_context.clinic_id,
+                patient_id=decoded.entity_id,
+                locale=locale,
+                source_context=decoded.source_context,
+                source_ref=decoded.source_ref,
+                state_token=decoded.state_token,
+            )
+            if decoded.action == CardAction.BACK and decoded.source_context == SourceContext.ADMIN_PATIENTS:
+                state = await _load_queue_state(scope=admin_patients_scope, actor_id=callback.from_user.id, default_state={"query": "", "state_token": "na"})
+                text, keyboard = await _render_admin_patients(actor_id=callback.from_user.id, clinic_id=actor_context.clinic_id, locale=locale, state=state)
+                await callback.message.edit_text(text, reply_markup=keyboard)
+                return
+            await callback.message.edit_text(
+                panel,
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text=i18n.t("common.back", locale),
+                                callback_data=await _encode_patient_callback(
+                                    patient_id=decoded.entity_id,
+                                    action=CardAction.BACK,
+                                    page_or_index=decoded.page_or_index,
+                                    source_context=decoded.source_context,
+                                    source_ref=decoded.source_ref,
+                                    state_token=decoded.state_token,
+                                ),
+                            )
+                        ]
+                    ]
+                ),
+            )
+            return
+        if decoded.profile != CardProfile.BOOKING:
+            return
         booking = await booking_flow.reads.get_booking(decoded.entity_id)
         if booking is None:
             await callback.answer(i18n.t("admin.booking.open.missing", locale), show_alert=True)
@@ -1258,6 +1832,7 @@ def make_router(
             or decoded.page_or_index.startswith("today_open:")
             or decoded.page_or_index.startswith("confirmations_open:")
             or decoded.page_or_index.startswith("reschedules_open:")
+            or decoded.page_or_index.startswith("issues_open:")
         ):
             await callback.message.edit_text(_render_admin_booking_panel(booking=booking, locale=locale), reply_markup=await _admin_booking_keyboard(booking=booking, locale=locale, source_context=decoded.source_context, source_ref=decoded.source_ref, page_or_index=decoded.page_or_index, state_token=decoded.state_token))
             return
@@ -1277,18 +1852,18 @@ def make_router(
             if result.kind == "success":
                 booking = result.entity
         elif decoded.page_or_index == "open_patient":
-            await callback.message.edit_text(
-                i18n.t("doctor.patient.quick.card", locale).format(
-                    patient_id=booking.patient_id,
-                    display_name=booking.patient_id,
-                    patient_number="-",
-                    phone_hint="-",
-                    has_photo=i18n.t("common.no", locale),
-                    flags="-",
-                    next_booking=booking.booking_id,
-                ),
-                reply_markup=await _admin_linked_back_keyboard(booking_id=booking.booking_id, locale=locale),
+            actor_context = access_resolver.resolve_actor_context(callback.from_user.id)
+            if actor_context is None:
+                return
+            panel = await _render_patient_panel(
+                clinic_id=actor_context.clinic_id,
+                patient_id=booking.patient_id,
+                locale=locale,
+                source_context=decoded.source_context,
+                source_ref=decoded.source_ref,
+                state_token=decoded.state_token,
             )
+            await callback.message.edit_text(panel, reply_markup=await _admin_linked_back_keyboard(booking_id=booking.booking_id, locale=locale))
             return
         elif decoded.page_or_index == "open_chart":
             snapshot = booking_flow.build_booking_snapshot(booking=booking, role_variant="admin")
@@ -1357,6 +1932,23 @@ def make_router(
                 default_state={"state_token": "na"},
             )
             text, keyboard = await _render_admin_reschedules(
+                actor_id=callback.from_user.id,
+                clinic_id=actor_context.clinic_id,
+                locale=locale,
+                state=state,
+            )
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            return
+        if decoded.action == CardAction.BACK and decoded.source_context == SourceContext.ADMIN_ISSUES and decoded.page_or_index.startswith("issues_open:"):
+            actor_context = access_resolver.resolve_actor_context(callback.from_user.id)
+            if actor_context is None:
+                return
+            state = await _load_queue_state(
+                scope=admin_issues_scope,
+                actor_id=callback.from_user.id,
+                default_state={"status": "open", "state_token": "na"},
+            )
+            text, keyboard = await _render_admin_issues(
                 actor_id=callback.from_user.id,
                 clinic_id=actor_context.clinic_id,
                 locale=locale,
