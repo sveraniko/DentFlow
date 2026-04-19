@@ -326,5 +326,14 @@
   "card.booking.action.chart": "Chart",
   "card.booking.action.recommendation": "Recommendations",
   "card.booking.action.care_order": "Care",
-  "patient.care.products.open.indexed": "Open #{index}"
+  "patient.care.products.open.indexed": "Open #{index}",
+  "admin.today.title": "Today Workdesk",
+  "admin.today.filters": "Filters · branch: {branch} · doctor: {doctor} · status: {status}",
+  "admin.today.empty": "No bookings for the selected today filters.",
+  "admin.today.row": "• {time} · {patient} · {doctor} · {service} · {branch} · {status} · {flags}{issue_hint}",
+  "admin.today.filter.branch": "Branch",
+  "admin.today.filter.doctor": "Doctor",
+  "admin.today.filter.status": "Status",
+  "admin.today.issue.confirmation_no_response": "No response",
+  "admin.today.issue.reminder_failed": "Reminder failed"
 }

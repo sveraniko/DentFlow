@@ -286,12 +286,13 @@ class BookingRuntimeViewBuilder:
         status_label = i18n.t(f"booking.status.{snapshot.status}", locale)
         next_step_note = i18n.t(snapshot.next_step_note_key, locale) if snapshot.next_step_note_key else None
         visibility = _booking_visibility(snapshot.role_variant, snapshot.status)
+        service_label = _resolve_booking_service_label(snapshot.service_label, i18n=i18n, locale=locale)
         return BookingCardSeed(
             booking_id=snapshot.booking_id,
             role_variant=snapshot.role_variant,
             patient_label=snapshot.patient_label,
             doctor_label=snapshot.doctor_label,
-            service_label=snapshot.service_label,
+            service_label=service_label,
             branch_label=snapshot.branch_label,
             datetime_label=local_dt.strftime("%Y-%m-%d %H:%M"),
             local_time_hint=snapshot.timezone_name,
@@ -317,6 +318,19 @@ class BookingRuntimeViewBuilder:
             can_open_recommendation=visibility["open_recommendation"] and bool(snapshot.recommendation_summary),
             can_open_care_order=visibility["open_care_order"] and bool(snapshot.care_order_summary),
         )
+
+
+def _resolve_booking_service_label(raw: str, *, i18n: CardLocalizer, locale: str) -> str:
+    direct = i18n.t(raw, locale)
+    if direct != raw:
+        return direct
+    if "(" in raw and raw.endswith(")"):
+        prefix, suffix = raw.rsplit("(", 1)
+        key = suffix[:-1].strip()
+        translated = i18n.t(key, locale)
+        if translated != key:
+            return f"{prefix.strip()} ({translated})"
+    return raw
 
 
 @dataclass(slots=True, frozen=True)
