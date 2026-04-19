@@ -15,6 +15,7 @@ from app.application.booking.telegram_flow import BookingCardView, BookingContro
 from app.application.clinic_reference import ClinicReferenceService
 from app.common.i18n import I18nService
 from app.application.recommendation import RecommendationService
+from app.interfaces.cards import CardCallbackCodec, CardRuntimeCoordinator
 
 
 @dataclass(slots=True)
@@ -42,6 +43,8 @@ def make_router(
     recommendation_repository=None,
     *,
     default_locale: str,
+    card_runtime: CardRuntimeCoordinator | None = None,
+    card_callback_codec: CardCallbackCodec | None = None,
 ) -> Router:
     router = Router(name="patient_router")
     panel_by_user: dict[int, _PanelState] = {}
