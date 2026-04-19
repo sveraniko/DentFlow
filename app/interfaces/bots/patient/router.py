@@ -184,6 +184,34 @@ class _CompactCareOrderRowCard:
         action = next((item for item in self.shell.actions if item.action == CardAction.RESERVE), None)
         return action.label if action else ""
 
+    def object_block_lines(self, *, index: int) -> list[str]:
+        meta = {row.key: row.value for row in self.shell.meta_lines}
+        lines = [f"{index}. {self.shell.title}"]
+        item = meta.get("item")
+        if item:
+            lines.append(f"   - {item}")
+        branch = meta.get("branch")
+        if branch:
+            lines.append(f"   - {branch}")
+        status = self.shell.badges[0].text if self.shell.badges else None
+        if status:
+            lines.append(f"   - {status}")
+        pickup = meta.get("pickup")
+        if pickup:
+            lines.append(f"   - {pickup}")
+        return lines
+
+
+def _compose_care_order_object_list_text(*, header_lines: list[str], row_cards: list[_CompactCareOrderRowCard]) -> str:
+    lines: list[str] = list(header_lines)
+    if row_cards:
+        lines.append("")
+    for idx, row in enumerate(row_cards, start=1):
+        lines.extend(row.object_block_lines(index=idx))
+        if idx < len(row_cards):
+            lines.append("")
+    return "\n".join(lines)
+
 
 def _resolve_media_ref(media_ref: str) -> _ResolvedMediaRef | None:
     ref = (media_ref or "").strip()
@@ -1204,7 +1232,13 @@ def make_router(
             actor_id=actor_id,
             message=message,
             session_id="care",
-            text=f"{i18n.t('patient.care.orders.title', locale)}\n{i18n.t('patient.care.catalog.page_indicator', locale).format(page=active_page + 1)}",
+            text=_compose_care_order_object_list_text(
+                header_lines=[
+                    i18n.t("patient.care.orders.title", locale),
+                    i18n.t("patient.care.catalog.page_indicator", locale).format(page=active_page + 1),
+                ],
+                row_cards=compact_rows,
+            ),
             keyboard=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
         )
 

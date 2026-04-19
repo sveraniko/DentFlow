@@ -1,6 +1,10 @@
 from pathlib import Path
 
 from app.common.i18n import I18nService
+from app.interfaces.bots.patient.router import (
+    _CompactCareOrderRowCard,
+    _compose_care_order_object_list_text,
+)
 from app.interfaces.cards import (
     CareOrderCardAdapter,
     CareOrderRuntimeSnapshot,
@@ -133,6 +137,72 @@ def test_care_order_object_rows_and_expanded_view_expose_object_actions() -> Non
     assert any(action.action == CardAction.RESERVE for action in row.actions)
     assert any(action.action == CardAction.RESERVE for action in expanded.actions)
     assert any(action.action == CardAction.BACK for action in expanded.actions)
+
+
+def test_care_order_row_object_block_renders_identity_item_branch_status_and_pickup() -> None:
+    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+    seed = CareOrderRuntimeViewBuilder().build_seed(
+        snapshot=CareOrderRuntimeSnapshot(
+            care_order_id="co-cc4f-2",
+            status="ready_for_pickup",
+            total_amount=41,
+            currency_code="GEL",
+            item_summary="Night Gel x1",
+            branch_label="North branch",
+            pickup_ready=True,
+            state_token="care:11",
+        ),
+        i18n=i18n,
+        locale="en",
+    )
+    shell = CareOrderCardAdapter.build(
+        seed=seed,
+        source=SourceRef(context=SourceContext.CARE_ORDER_LIST, source_ref="care.orders.row"),
+        i18n=i18n,
+        locale="en",
+        mode=CardMode.LIST_ROW,
+    )
+    row = _CompactCareOrderRowCard(care_order_id=seed.care_order_id, shell=shell)
+    block = row.object_block_lines(index=1)
+
+    assert block[0] == "1. Order co-cc4f-2"
+    assert "   - Night Gel x1" in block
+    assert "   - North branch" in block
+    assert "   - Ready for pickup" in block
+    assert any("Pickup" in line for line in block)
+
+
+def test_care_order_list_panel_text_is_object_rows_not_header_only() -> None:
+    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+    seed = CareOrderRuntimeViewBuilder().build_seed(
+        snapshot=CareOrderRuntimeSnapshot(
+            care_order_id="co-cc4f-3",
+            status="confirmed",
+            total_amount=19,
+            currency_code="GEL",
+            item_summary="Hydro Rinse x1",
+            branch_label="Central branch",
+            pickup_ready=False,
+            state_token="care:12",
+        ),
+        i18n=i18n,
+        locale="en",
+    )
+    shell = CareOrderCardAdapter.build(
+        seed=seed,
+        source=SourceRef(context=SourceContext.CARE_ORDER_LIST, source_ref="care.orders.row"),
+        i18n=i18n,
+        locale="en",
+        mode=CardMode.LIST_ROW,
+    )
+    text = _compose_care_order_object_list_text(
+        header_lines=["Care orders", "Page 1"],
+        row_cards=[_CompactCareOrderRowCard(care_order_id=seed.care_order_id, shell=shell)],
+    )
+
+    assert "1. Order co-cc4f-3" in text
+    assert "   - Hydro Rinse x1" in text
+    assert "   - Central branch" in text
 
 
 def test_reserve_again_localization_stays_object_action_oriented() -> None:
