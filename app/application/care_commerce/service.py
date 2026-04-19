@@ -103,6 +103,19 @@ class RecommendationTargetResolution:
     manual_target_code: str | None = None
 
 
+@dataclass(frozen=True)
+class RepeatOrderOutcome:
+    ok: bool
+    reason: str | None
+    source_order: CareOrder | None
+    source_item: CareOrderItem | None
+    product: CareProduct | None
+    selected_branch_id: str | None
+    available_branch_ids: tuple[str, ...]
+    created_order: CareOrder | None
+    created_reservation: CareReservation | None
+
+
 @dataclass(slots=True)
 class CareCommerceService:
     repository: CareCommerceRepository
@@ -571,6 +584,135 @@ class CareCommerceService:
 
     async def list_admin_orders(self, *, clinic_id: str, statuses: tuple[str, ...], limit: int = 30) -> list[CareOrder]:
         return await self.repository.list_orders_for_admin(clinic_id=clinic_id, statuses=statuses, limit=limit)
+
+    async def repeat_order_as_new(
+        self,
+        *,
+        clinic_id: str,
+        patient_id: str,
+        source_order_id: str,
+        requested_branch_id: str | None,
+        allowed_branch_ids: tuple[str, ...] = (),
+    ) -> RepeatOrderOutcome:
+        source = await self.repository.get_order(source_order_id)
+        if source is None or source.patient_id != patient_id or source.clinic_id != clinic_id:
+            return RepeatOrderOutcome(
+                ok=False,
+                reason="source_not_found",
+                source_order=None,
+                source_item=None,
+                product=None,
+                selected_branch_id=None,
+                available_branch_ids=(),
+                created_order=None,
+                created_reservation=None,
+            )
+        items = await self.repository.list_order_items(source.care_order_id)
+        if not items:
+            return RepeatOrderOutcome(
+                ok=False,
+                reason="source_empty",
+                source_order=source,
+                source_item=None,
+                product=None,
+                selected_branch_id=None,
+                available_branch_ids=(),
+                created_order=None,
+                created_reservation=None,
+            )
+        source_item = items[0]
+        product = await self.repository.get_product(source_item.care_product_id)
+        if product is None or product.status != "active":
+            return RepeatOrderOutcome(
+                ok=False,
+                reason="product_unavailable",
+                source_order=source,
+                source_item=source_item,
+                product=product,
+                selected_branch_id=None,
+                available_branch_ids=(),
+                created_order=None,
+                created_reservation=None,
+            )
+        effective_allowed = set(allowed_branch_ids)
+        if requested_branch_id:
+            selected_branch_id = requested_branch_id
+        elif source.pickup_branch_id:
+            selected_branch_id = source.pickup_branch_id
+        else:
+            selected_branch_id = None
+        if selected_branch_id and effective_allowed and selected_branch_id not in effective_allowed:
+            selected_branch_id = None
+
+        available_branch_ids: list[str] = []
+        branch_scan = sorted(effective_allowed) if effective_allowed else ([selected_branch_id] if selected_branch_id else [])
+        for branch_id in branch_scan:
+            row = await self.repository.get_branch_product_availability(branch_id=branch_id, care_product_id=product.care_product_id)
+            if row is not None and row.status == "active" and row.free_qty >= source_item.quantity:
+                available_branch_ids.append(branch_id)
+
+        if selected_branch_id and selected_branch_id not in available_branch_ids:
+            reason = "branch_unavailable"
+            row = await self.repository.get_branch_product_availability(branch_id=selected_branch_id, care_product_id=product.care_product_id)
+            if row is None:
+                reason = "branch_invalid"
+            elif row.status != "active":
+                reason = "availability_inactive"
+            elif row.free_qty < source_item.quantity:
+                reason = "insufficient_stock"
+            return RepeatOrderOutcome(
+                ok=False,
+                reason=reason,
+                source_order=source,
+                source_item=source_item,
+                product=product,
+                selected_branch_id=selected_branch_id,
+                available_branch_ids=tuple(available_branch_ids),
+                created_order=None,
+                created_reservation=None,
+            )
+
+        if not selected_branch_id:
+            return RepeatOrderOutcome(
+                ok=False,
+                reason=("branch_required" if not available_branch_ids else "branch_selection_required"),
+                source_order=source,
+                source_item=source_item,
+                product=product,
+                selected_branch_id=None,
+                available_branch_ids=tuple(available_branch_ids),
+                created_order=None,
+                created_reservation=None,
+            )
+
+        order = await self.create_order(
+            clinic_id=clinic_id,
+            patient_id=patient_id,
+            payment_mode=source.payment_mode,
+            currency_code=source.currency_code,
+            pickup_branch_id=selected_branch_id,
+            recommendation_id=None,
+            booking_id=None,
+            items=[(product, source_item.quantity)],
+        )
+        confirmed = await self.transition_order(care_order_id=order.care_order_id, to_status="confirmed")
+        reservation = await self.create_reservation(
+            care_order_id=order.care_order_id,
+            care_product_id=product.care_product_id,
+            branch_id=selected_branch_id,
+            reserved_qty=source_item.quantity,
+        )
+        return RepeatOrderOutcome(
+            ok=True,
+            reason=None,
+            source_order=source,
+            source_item=source_item,
+            product=product,
+            selected_branch_id=selected_branch_id,
+            available_branch_ids=tuple(available_branch_ids),
+            created_order=confirmed or order,
+            created_reservation=reservation,
+        )
 
     async def set_branch_product_availability(
         self,

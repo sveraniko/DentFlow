@@ -108,5 +108,13 @@ def test_media_caption_templates_avoid_raw_media_refs() -> None:
 
 def test_reserve_again_object_action_labels_are_localized() -> None:
     i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+    assert "Open" in i18n.t("patient.care.orders.open.action", "en")
     assert "Reserve again" in i18n.t("patient.care.orders.repeat.action", "en")
     assert "Повторить" in i18n.t("patient.care.orders.repeat.action", "ru")
+
+
+def test_repeat_order_object_detail_and_branch_reselect_strings_exist() -> None:
+    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+    assert "Order {care_order_id}" in i18n.t("patient.care.orders.object.detail", "en")
+    assert "Pick another branch" in i18n.t("patient.care.orders.repeat.branch_select_required", "en")
+    assert "режим совместимости" not in i18n.t("patient.care.orders.repeat.compat_hint", "en").lower()
