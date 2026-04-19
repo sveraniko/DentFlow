@@ -8,6 +8,7 @@ import asyncio
 
 from app.config.settings import get_settings
 from app.infrastructure.outbox.repository import OutboxRepository, ProjectorCheckpointRepository
+from app.projections.admin import AdminWorkdeskProjector
 from app.projections.analytics import AnalyticsEventLedgerProjector
 from app.projections.owner.daily_metrics_projector import OwnerDailyMetricsProjector
 from app.projections.runtime import ProjectorRunner
@@ -23,6 +24,7 @@ async def _run(limit: int) -> None:
             AnalyticsEventLedgerProjector(settings.db),
             PatientSearchProjector(settings.db),
             OwnerDailyMetricsProjector(settings.db),
+            AdminWorkdeskProjector(settings.db, app_default_timezone=settings.app.default_timezone),
         ),
     )
     print(await runner.run_once(limit=limit))
