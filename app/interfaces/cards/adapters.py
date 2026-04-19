@@ -105,6 +105,20 @@ class BookingCardSeed:
 
 
 @dataclass(slots=True, frozen=True)
+class CareOrderCardSeed:
+    care_order_id: str
+    title: str
+    status_label: str
+    item_summary: str
+    branch_label: str
+    amount_label: str
+    pickup_hint: str | None
+    reservation_hint: str | None
+    timeline_hint: str | None
+    state_token: str
+
+
+@dataclass(slots=True, frozen=True)
 class ProductRuntimeSnapshot:
     product_id: str
     sku: str
@@ -174,6 +188,21 @@ class BookingRuntimeSnapshot:
     care_order_summary: str | None = None
     chart_summary_entry: str | None = None
     next_step_note_key: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class CareOrderRuntimeSnapshot:
+    care_order_id: str
+    status: str
+    total_amount: int
+    currency_code: str
+    state_token: str
+    item_summary: str = "-"
+    branch_label: str = "-"
+    pickup_ready: bool = False
+    reservation_hint: str | None = None
+    issued: bool = False
+    fulfilled: bool = False
 
 
 @dataclass(slots=True, frozen=True)
@@ -287,6 +316,32 @@ class BookingRuntimeViewBuilder:
             can_open_chart=visibility["open_chart"],
             can_open_recommendation=visibility["open_recommendation"] and bool(snapshot.recommendation_summary),
             can_open_care_order=visibility["open_care_order"] and bool(snapshot.care_order_summary),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class CareOrderRuntimeViewBuilder:
+    def build_seed(self, *, snapshot: CareOrderRuntimeSnapshot, i18n: CardLocalizer, locale: str) -> CareOrderCardSeed:
+        status_label = i18n.t(f"care.order.status.{snapshot.status}", locale)
+        if status_label == f"care.order.status.{snapshot.status}":
+            status_label = snapshot.status
+        pickup_hint = i18n.t("card.care_order.pickup.ready", locale) if snapshot.pickup_ready else i18n.t("card.care_order.pickup.pending", locale)
+        timeline_key = "card.care_order.timeline.in_progress"
+        if snapshot.fulfilled:
+            timeline_key = "card.care_order.timeline.fulfilled"
+        elif snapshot.issued:
+            timeline_key = "card.care_order.timeline.issued"
+        return CareOrderCardSeed(
+            care_order_id=snapshot.care_order_id,
+            title=i18n.t("card.care_order.title", locale).format(care_order_id=snapshot.care_order_id),
+            status_label=status_label,
+            item_summary=snapshot.item_summary,
+            branch_label=snapshot.branch_label,
+            amount_label=f"{snapshot.total_amount} {snapshot.currency_code}",
+            pickup_hint=pickup_hint,
+            reservation_hint=snapshot.reservation_hint,
+            timeline_hint=i18n.t(timeline_key, locale),
+            state_token=snapshot.state_token,
         )
 
 
@@ -620,4 +675,60 @@ class BookingCardAdapter:
             meta_lines=tuple(meta_lines),
             detail_lines=tuple(detail_lines),
             actions=tuple(actions),
+        )
+
+
+class CareOrderCardAdapter:
+    @staticmethod
+    def build(*, seed: CareOrderCardSeed, source: SourceRef, i18n: CardLocalizer, locale: str, mode: CardMode = CardMode.COMPACT) -> CardShell:
+        badges = [CardBadge(seed.status_label)]
+        meta_lines = [
+            CardMetaLine(key="item", value=seed.item_summary),
+            CardMetaLine(key="amount", value=seed.amount_label),
+            CardMetaLine(key="branch", value=seed.branch_label),
+        ]
+        if seed.pickup_hint:
+            meta_lines.append(CardMetaLine(key="pickup", value=seed.pickup_hint))
+
+        detail_lines: list[str] = []
+        if mode == CardMode.EXPANDED:
+            detail_lines.append(i18n.t("card.care_order.detail.item", locale).format(value=seed.item_summary))
+            detail_lines.append(i18n.t("card.care_order.detail.amount", locale).format(value=seed.amount_label))
+            detail_lines.append(i18n.t("card.care_order.detail.branch", locale).format(value=seed.branch_label))
+            if seed.pickup_hint:
+                detail_lines.append(i18n.t("card.care_order.detail.pickup", locale).format(value=seed.pickup_hint))
+            if seed.timeline_hint:
+                detail_lines.append(i18n.t("card.care_order.detail.timeline", locale).format(value=seed.timeline_hint))
+            if seed.reservation_hint:
+                detail_lines.append(i18n.t("card.care_order.detail.reservation", locale).format(value=seed.reservation_hint))
+
+        if mode in {CardMode.LIST_ROW, CardMode.PICKER}:
+            actions = (
+                CardActionButton(action=CardAction.OPEN, label=i18n.t("card.action.expand", locale)),
+                CardActionButton(action=CardAction.RESERVE, label=i18n.t("card.care_order.action.reserve_again", locale)),
+            )
+        else:
+            actions = [
+                CardActionButton(
+                    action=(CardAction.EXPAND if mode == CardMode.COMPACT else CardAction.COLLAPSE),
+                    label=(i18n.t("card.action.expand", locale) if mode == CardMode.COMPACT else i18n.t("card.action.collapse", locale)),
+                ),
+                CardActionButton(action=CardAction.RESERVE, label=i18n.t("card.care_order.action.reserve_again", locale)),
+                CardActionButton(action=CardAction.BACK, label=i18n.t("common.back", locale)),
+            ]
+            actions = tuple(actions)
+
+        return CardShell(
+            profile=CardProfile.CARE_ORDER,
+            entity_type=EntityType.CARE_ORDER,
+            entity_id=seed.care_order_id,
+            mode=mode,
+            title=seed.title,
+            subtitle=seed.item_summary,
+            source=source,
+            state_token=seed.state_token,
+            badges=tuple(badges),
+            meta_lines=tuple(meta_lines),
+            detail_lines=tuple(detail_lines),
+            actions=actions,
         )
