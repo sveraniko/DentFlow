@@ -208,3 +208,6 @@ class CardRuntimeCoordinator:
 
     async def resolve_actor_session_state(self, *, scope: str, actor_id: int) -> dict[str, Any] | None:
         return await self._store.resolve_actor_session_state(scope=scope, actor_id=actor_id)
+
+    async def clear_actor_session_state(self, *, scope: str, actor_id: int) -> None:
+        await self._store.clear_actor_session_state(scope=scope, actor_id=actor_id)

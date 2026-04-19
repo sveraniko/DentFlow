@@ -15,7 +15,18 @@ from app.application.booking.telegram_flow import BookingCardView, BookingContro
 from app.application.clinic_reference import ClinicReferenceService
 from app.common.i18n import I18nService
 from app.application.recommendation import RecommendationService
-from app.interfaces.cards import CardCallbackCodec, CardRuntimeCoordinator, PanelFamily, SourceContext
+from app.interfaces.cards import (
+    CardAction,
+    CardCallback,
+    CardCallbackCodec,
+    CardCallbackError,
+    CardMode,
+    CardProfile,
+    CardRuntimeCoordinator,
+    EntityType,
+    PanelFamily,
+    SourceContext,
+)
 
 
 @dataclass(slots=True)
@@ -50,6 +61,8 @@ def make_router(
     router = Router(name="patient_router")
     if card_runtime is None:
         raise RuntimeError("patient router requires shared card runtime coordinator")
+    if card_callback_codec is None:
+        raise RuntimeError("patient router requires shared card callback codec")
     _SESSION_SCOPE = "patient_flow"
 
     def _locale() -> str:
@@ -104,6 +117,31 @@ def make_router(
         await _save_flow_state(actor_id, state)
         return current
 
+    async def _encode_runtime_callback(
+        *,
+        profile: CardProfile,
+        entity_type: EntityType,
+        entity_id: str,
+        action: CardAction,
+        source_context: SourceContext,
+        source_ref: str,
+        page_or_index: str,
+        state_token: str,
+    ) -> str:
+        return await card_callback_codec.encode(
+            CardCallback(
+                profile=profile,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                action=action,
+                mode=CardMode.COMPACT,
+                source_context=source_context,
+                source_ref=source_ref,
+                page_or_index=page_or_index,
+                state_token=state_token,
+            )
+        )
+
     def _is_in_stock(row: Any) -> bool:
         return row is not None and row.status == "active" and row.free_qty > 0
 
@@ -150,11 +188,21 @@ def make_router(
             return
         rows: list[list[InlineKeyboardButton]] = []
         for category in categories[:8]:
+            callback_data = await _encode_runtime_callback(
+                profile=CardProfile.PRODUCT,
+                entity_type=EntityType.CARE_PRODUCT,
+                entity_id=category,
+                action=CardAction.OPEN,
+                source_context=SourceContext.CARE_CATALOG_CATEGORY,
+                source_ref="care.catalog.category",
+                page_or_index="cat",
+                state_token=f"care:{actor_id}",
+            )
             rows.append(
                 [
                     InlineKeyboardButton(
                         text=await _category_label(category_code=category, locale=locale),
-                        callback_data=f"care:cat:{category}",
+                        callback_data=callback_data,
                     )
                 ]
             )
@@ -182,7 +230,23 @@ def make_router(
                 session_id="care",
                 text=i18n.t("patient.care.catalog.category.empty", locale),
                 keyboard=InlineKeyboardMarkup(
-                    inline_keyboard=[[InlineKeyboardButton(text=i18n.t("common.back", locale), callback_data="care:back:categories")]]
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text=i18n.t("common.back", locale),
+                                callback_data=await _encode_runtime_callback(
+                                    profile=CardProfile.PRODUCT,
+                                    entity_type=EntityType.CARE_PRODUCT,
+                                    entity_id="categories",
+                                    action=CardAction.BACK,
+                                    source_context=SourceContext.CARE_CATALOG_CATEGORY,
+                                    source_ref="care.catalog.back",
+                                    page_or_index="back_categories",
+                                    state_token=f"care:{actor_id}",
+                                ),
+                            )
+                        ]
+                    ]
                 ),
             )
             return
@@ -219,8 +283,40 @@ def make_router(
                     availability=_availability_label(availability, locale=locale),
                 )
             )
-            rows.append([InlineKeyboardButton(text=title[:48], callback_data=f"care:product:{product.care_product_id}")])
-        rows.append([InlineKeyboardButton(text=i18n.t("common.back", locale), callback_data="care:back:categories")])
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=title[:48],
+                        callback_data=await _encode_runtime_callback(
+                            profile=CardProfile.PRODUCT,
+                            entity_type=EntityType.CARE_PRODUCT,
+                            entity_id=product.care_product_id,
+                            action=CardAction.OPEN,
+                            source_context=SourceContext.CARE_CATALOG_CATEGORY,
+                            source_ref="care.product.open",
+                            page_or_index="product",
+                            state_token=f"care:{actor_id}",
+                        ),
+                    )
+                ]
+            )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=i18n.t("common.back", locale),
+                    callback_data=await _encode_runtime_callback(
+                        profile=CardProfile.PRODUCT,
+                        entity_type=EntityType.CARE_PRODUCT,
+                        entity_id="categories",
+                        action=CardAction.BACK,
+                        source_context=SourceContext.CARE_CATALOG_CATEGORY,
+                        source_ref="care.catalog.back",
+                        page_or_index="back_categories",
+                        state_token=f"care:{actor_id}",
+                    ),
+                )
+            ]
+        )
         await _send_or_edit_panel(
             actor_id=actor_id,
             message=message,
@@ -267,9 +363,51 @@ def make_router(
             lines.append(i18n.t("patient.care.product.recommendation_context", locale).format(reason=state.recommendation_reason[:180]))
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text=i18n.t("patient.care.product.reserve", locale), callback_data=f"care:reserve:{product_id}")],
-                [InlineKeyboardButton(text=i18n.t("patient.care.product.change_branch", locale), callback_data=f"care:branch:{product_id}")],
-                [InlineKeyboardButton(text=i18n.t("common.back", locale), callback_data=f"care:back:products:{state.selected_category or '-'}")],
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.care.product.reserve", locale),
+                        callback_data=await _encode_runtime_callback(
+                            profile=CardProfile.PRODUCT,
+                            entity_type=EntityType.CARE_PRODUCT,
+                            entity_id=product_id,
+                            action=CardAction.RESERVE,
+                            source_context=SourceContext.CARE_CATALOG_CATEGORY,
+                            source_ref="care.product.reserve",
+                            page_or_index="reserve",
+                            state_token=f"care:{actor_id}",
+                        ),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.care.product.change_branch", locale),
+                        callback_data=await _encode_runtime_callback(
+                            profile=CardProfile.PRODUCT,
+                            entity_type=EntityType.CARE_PRODUCT,
+                            entity_id=product_id,
+                            action=CardAction.CHANGE_BRANCH,
+                            source_context=SourceContext.CARE_CATALOG_CATEGORY,
+                            source_ref="care.product.branch",
+                            page_or_index="branch",
+                            state_token=f"care:{actor_id}",
+                        ),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("common.back", locale),
+                        callback_data=await _encode_runtime_callback(
+                            profile=CardProfile.PRODUCT,
+                            entity_type=EntityType.CARE_PRODUCT,
+                            entity_id=state.selected_category or "-",
+                            action=CardAction.BACK,
+                            source_context=SourceContext.CARE_CATALOG_CATEGORY,
+                            source_ref="care.product.back",
+                            page_or_index="back_products",
+                            state_token=f"care:{actor_id}",
+                        ),
+                    )
+                ],
             ]
         )
         await _send_or_edit_panel(actor_id=actor_id, message=message, session_id="care", text="\n".join(lines), keyboard=keyboard)
@@ -283,8 +421,40 @@ def make_router(
         for branch in branches[:10]:
             availability = await care_commerce_service.get_branch_product_availability(branch_id=branch.branch_id, care_product_id=product_id)
             label = i18n.t("patient.care.branch.option", locale).format(branch=branch.display_name, status=_availability_label(availability, locale=locale))
-            rows.append([InlineKeyboardButton(text=label[:62], callback_data=f"care:branch_select:{product_id}:{branch.branch_id}")])
-        rows.append([InlineKeyboardButton(text=i18n.t("common.back", locale), callback_data=f"care:product:{product_id}")])
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=label[:62],
+                        callback_data=await _encode_runtime_callback(
+                            profile=CardProfile.PRODUCT,
+                            entity_type=EntityType.CARE_PRODUCT,
+                            entity_id=product_id,
+                            action=CardAction.CHANGE_BRANCH,
+                            source_context=SourceContext.CARE_CATALOG_CATEGORY,
+                            source_ref=f"care.branch.select:{branch.branch_id}",
+                            page_or_index="branch_select",
+                            state_token=f"care:{actor_id}",
+                        ),
+                    )
+                ]
+            )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=i18n.t("common.back", locale),
+                    callback_data=await _encode_runtime_callback(
+                        profile=CardProfile.PRODUCT,
+                        entity_type=EntityType.CARE_PRODUCT,
+                        entity_id=product_id,
+                        action=CardAction.BACK,
+                        source_context=SourceContext.CARE_CATALOG_CATEGORY,
+                        source_ref="care.branch.back",
+                        page_or_index="back_product",
+                        state_token=f"care:{actor_id}",
+                    ),
+                )
+            ]
+        )
         await _send_or_edit_panel(
             actor_id=actor_id,
             message=message,
@@ -322,7 +492,23 @@ def make_router(
                 session_id="care",
                 text=i18n.t("patient.care.order.out_of_stock", locale).format(branch_id=branch_id, title=i18n.t(product.title_key, locale)),
                 keyboard=InlineKeyboardMarkup(
-                    inline_keyboard=[[InlineKeyboardButton(text=i18n.t("patient.care.product.change_branch", locale), callback_data=f"care:branch:{product_id}")]]
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text=i18n.t("patient.care.product.change_branch", locale),
+                                callback_data=await _encode_runtime_callback(
+                                    profile=CardProfile.PRODUCT,
+                                    entity_type=EntityType.CARE_PRODUCT,
+                                    entity_id=product_id,
+                                    action=CardAction.CHANGE_BRANCH,
+                                    source_context=SourceContext.CARE_CATALOG_CATEGORY,
+                                    source_ref="care.product.branch",
+                                    page_or_index="branch",
+                                    state_token=f"care:{actor_id}",
+                                ),
+                            )
+                        ]
+                    ]
                 ),
             )
             return
@@ -868,6 +1054,131 @@ def make_router(
             branch_id=session.branch_id,
         )
 
+    @router.callback_query(F.data.startswith("c2|"))
+    async def runtime_card_callback(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        try:
+            decoded = await card_callback_codec.decode(callback.data)
+        except CardCallbackError:
+            await callback.answer(i18n.t("common.card.callback.stale", _locale()), show_alert=True)
+            return
+
+        if decoded.source_context == SourceContext.CARE_CATALOG_CATEGORY and decoded.profile == CardProfile.PRODUCT:
+            clinic_id = _primary_clinic_id()
+            if clinic_id is None:
+                await callback.answer(i18n.t("patient.booking.unavailable", _locale()), show_alert=True)
+                return
+            if decoded.page_or_index == "cat":
+                state = await _care_state(callback.from_user.id)
+                state.selected_category = decoded.entity_id
+                flow = await _load_flow_state(callback.from_user.id)
+                flow.care = state
+                await _save_flow_state(callback.from_user.id, flow)
+                await _render_care_product_list(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, category=decoded.entity_id)
+                return
+            if decoded.page_or_index == "product":
+                await _render_product_card(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, product_id=decoded.entity_id)
+                return
+            if decoded.page_or_index == "branch":
+                await _render_branch_picker(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, product_id=decoded.entity_id)
+                return
+            if decoded.page_or_index == "branch_select":
+                if ":" not in decoded.source_ref:
+                    await callback.answer(i18n.t("common.card.callback.stale", _locale()), show_alert=True)
+                    return
+                _, branch_id = decoded.source_ref.rsplit(":", 1)
+                state = await _care_state(callback.from_user.id)
+                state.selected_branch_by_product[decoded.entity_id] = branch_id
+                flow = await _load_flow_state(callback.from_user.id)
+                flow.care = state
+                await _save_flow_state(callback.from_user.id, flow)
+                await _render_product_card(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, product_id=decoded.entity_id)
+                return
+            if decoded.page_or_index == "reserve":
+                patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
+                if not patient_id:
+                    await callback.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()), show_alert=True)
+                    return
+                rec_id = (await _care_state(callback.from_user.id)).recommendation_id
+                await _reserve_product(
+                    callback,
+                    actor_id=callback.from_user.id,
+                    clinic_id=clinic_id,
+                    patient_id=patient_id,
+                    product_id=decoded.entity_id,
+                    recommendation_id=rec_id,
+                )
+                return
+            if decoded.page_or_index == "back_categories":
+                await _render_care_categories_panel(callback, actor_id=callback.from_user.id, clinic_id=clinic_id)
+                return
+            if decoded.page_or_index == "back_products":
+                category = (await _care_state(callback.from_user.id)).selected_category if decoded.entity_id == "-" else decoded.entity_id
+                if not category:
+                    await _render_care_categories_panel(callback, actor_id=callback.from_user.id, clinic_id=clinic_id)
+                    return
+                await _render_care_product_list(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, category=category)
+                return
+            if decoded.page_or_index == "back_product":
+                await _render_product_card(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, product_id=decoded.entity_id)
+                return
+
+        if decoded.source_context == SourceContext.BOOKING_LIST and decoded.profile == CardProfile.BOOKING:
+            clinic_id = _primary_clinic_id()
+            if clinic_id is None:
+                await callback.answer(i18n.t("patient.booking.unavailable", _locale()), show_alert=True)
+                return
+            callback_session_id = decoded.state_token
+            booking_id = decoded.entity_id
+            if decoded.page_or_index == "reschedule":
+                result = await booking_flow.request_reschedule(
+                    clinic_id=clinic_id,
+                    telegram_user_id=callback.from_user.id,
+                    callback_session_id=callback_session_id,
+                    booking_id=booking_id,
+                )
+                if isinstance(result, OrchestrationSuccess):
+                    card = booking_flow.build_booking_card(booking=result.entity)
+                    session_id = (await _load_flow_state(callback.from_user.id)).booking_session_id
+                    await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=_render_booking_card_text(card, locale=_locale()))
+                    return
+                await callback.answer(i18n.t("patient.booking.finalize.invalid_state", _locale()), show_alert=True)
+                return
+            if decoded.page_or_index == "waitlist":
+                created = await booking_flow.join_earlier_slot_waitlist(
+                    clinic_id=clinic_id,
+                    telegram_user_id=callback.from_user.id,
+                    callback_session_id=callback_session_id,
+                    booking_id=booking_id,
+                )
+                if isinstance(created, OrchestrationSuccess):
+                    session_id = (await _load_flow_state(callback.from_user.id)).booking_session_id
+                    await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=i18n.t("patient.booking.waitlist.created", _locale()))
+                    return
+                await callback.answer(i18n.t("patient.booking.finalize.invalid_state", _locale()), show_alert=True)
+                return
+            if decoded.page_or_index == "cancel_prompt":
+                await cancel_prompt_by_runtime(callback, callback_session_id=callback_session_id, booking_id=booking_id)
+                return
+            if decoded.page_or_index == "cancel_abort":
+                await callback.answer(i18n.t("patient.booking.cancel.aborted", _locale()), show_alert=True)
+                return
+            if decoded.page_or_index == "cancel_confirm":
+                result = await booking_flow.cancel_booking(
+                    clinic_id=clinic_id,
+                    telegram_user_id=callback.from_user.id,
+                    callback_session_id=callback_session_id,
+                    booking_id=booking_id,
+                )
+                if isinstance(result, OrchestrationSuccess):
+                    card = booking_flow.build_booking_card(booking=result.entity)
+                    session_id = (await _load_flow_state(callback.from_user.id)).booking_session_id
+                    await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=_render_booking_card_text(card, locale=_locale()))
+                    return
+                await callback.answer(i18n.t("patient.booking.finalize.invalid_state", _locale()), show_alert=True)
+                return
+
     @router.callback_query(F.data.startswith("care:cat:"))
     async def care_category_pick(callback: CallbackQuery) -> None:
         if not callback.from_user or not callback.data:
@@ -1095,19 +1406,50 @@ def make_router(
             return
         await callback.answer(i18n.t("patient.booking.finalize.invalid_state", _locale()), show_alert=True)
 
+    async def cancel_prompt_by_runtime(callback: CallbackQuery, *, callback_session_id: str, booking_id: str) -> None:
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("common.yes", _locale()),
+                        callback_data=await _encode_runtime_callback(
+                            profile=CardProfile.BOOKING,
+                            entity_type=EntityType.BOOKING,
+                            entity_id=booking_id,
+                            action=CardAction.BOOKINGS,
+                            source_context=SourceContext.BOOKING_LIST,
+                            source_ref="mybk.cancel_confirm",
+                            page_or_index="cancel_confirm",
+                            state_token=callback_session_id,
+                        ),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("common.no", _locale()),
+                        callback_data=await _encode_runtime_callback(
+                            profile=CardProfile.BOOKING,
+                            entity_type=EntityType.BOOKING,
+                            entity_id=booking_id,
+                            action=CardAction.BOOKINGS,
+                            source_context=SourceContext.BOOKING_LIST,
+                            source_ref="mybk.cancel_abort",
+                            page_or_index="cancel_abort",
+                            state_token=callback_session_id,
+                        ),
+                    )
+                ],
+            ]
+        )
+        session_id = (await _load_flow_state(callback.from_user.id)).booking_session_id
+        await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=i18n.t("patient.booking.cancel.confirm", _locale()), keyboard=keyboard)
+
     @router.callback_query(F.data.startswith("mybk:cancel_prompt:"))
     async def cancel_prompt(callback: CallbackQuery) -> None:
         if not callback.from_user:
             return
         _, _, callback_session_id, booking_id = callback.data.split(":", 3)
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text=i18n.t("common.yes", _locale()), callback_data=f"mybk:cancel_confirm:{callback_session_id}:{booking_id}")],
-                [InlineKeyboardButton(text=i18n.t("common.no", _locale()), callback_data=f"mybk:cancel_abort:{callback_session_id}:{booking_id}")],
-            ]
-        )
-        session_id = (await _load_flow_state(callback.from_user.id)).booking_session_id
-        await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=i18n.t("patient.booking.cancel.confirm", _locale()), keyboard=keyboard)
+        await cancel_prompt_by_runtime(callback, callback_session_id=callback_session_id, booking_id=booking_id)
 
     @router.callback_query(F.data.startswith("mybk:cancel_abort:"))
     async def cancel_abort(callback: CallbackQuery) -> None:
@@ -1284,9 +1626,51 @@ def make_router(
         card = booking_flow.build_booking_card(booking=booking)
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text=i18n.t("patient.booking.my.reschedule", locale), callback_data=f"mybk:reschedule:{effective_session_id}:{booking.booking_id}")],
-                [InlineKeyboardButton(text=i18n.t("patient.booking.my.earlier_slot", locale), callback_data=f"mybk:waitlist:{effective_session_id}:{booking.booking_id}")],
-                [InlineKeyboardButton(text=i18n.t("patient.booking.my.cancel", locale), callback_data=f"mybk:cancel_prompt:{effective_session_id}:{booking.booking_id}")],
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.booking.my.reschedule", locale),
+                        callback_data=await _encode_runtime_callback(
+                            profile=CardProfile.BOOKING,
+                            entity_type=EntityType.BOOKING,
+                            entity_id=booking.booking_id,
+                            action=CardAction.BOOKINGS,
+                            source_context=SourceContext.BOOKING_LIST,
+                            source_ref="mybk.reschedule",
+                            page_or_index="reschedule",
+                            state_token=effective_session_id,
+                        ),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.booking.my.earlier_slot", locale),
+                        callback_data=await _encode_runtime_callback(
+                            profile=CardProfile.BOOKING,
+                            entity_type=EntityType.BOOKING,
+                            entity_id=booking.booking_id,
+                            action=CardAction.BOOKINGS,
+                            source_context=SourceContext.BOOKING_LIST,
+                            source_ref="mybk.waitlist",
+                            page_or_index="waitlist",
+                            state_token=effective_session_id,
+                        ),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.booking.my.cancel", locale),
+                        callback_data=await _encode_runtime_callback(
+                            profile=CardProfile.BOOKING,
+                            entity_type=EntityType.BOOKING,
+                            entity_id=booking.booking_id,
+                            action=CardAction.BOOKINGS,
+                            source_context=SourceContext.BOOKING_LIST,
+                            source_ref="mybk.cancel_prompt",
+                            page_or_index="cancel_prompt",
+                            state_token=effective_session_id,
+                        ),
+                    )
+                ],
             ]
         )
         await _send_or_edit_panel(

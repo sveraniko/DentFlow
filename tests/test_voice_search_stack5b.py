@@ -10,6 +10,7 @@ from app.application.voice.models import SpeechToTextResult
 from app.application.voice.provider import SpeechToTextInput, SpeechToTextProvider
 from app.common.i18n import I18nService
 from app.domain.access_identity.models import RoleCode
+from app.interfaces.cards import CardRuntimeCoordinator, CardRuntimeStateStore, InMemoryRedis
 from app.infrastructure.speech.fake_provider import FakeSpeechToTextProvider
 from app.interfaces.bots.voice_search import VoiceSearchHandler
 
@@ -146,7 +147,7 @@ def test_voice_patient_search_success_uses_patient_search_path_and_cleans_temp_f
     search = h._search_service
     bot = _BotStub(b"ignored")
     message = _Message(bot=bot)
-    h._mode_store.activate(actor_telegram_id=message.from_user.id, mode=VoiceSearchMode.PATIENT, ttl_sec=60)
+    asyncio.run(h._mode_store.activate(actor_telegram_id=message.from_user.id, mode=VoiceSearchMode.PATIENT, ttl_sec=60))
 
     asyncio.run(h._handle_voice(message))
 
@@ -163,11 +164,11 @@ def test_voice_doctor_and_service_modes_call_canonical_services() -> None:
     search = h._search_service
 
     doctor_message = _Message(bot=_BotStub(b"0.95|ortho"), user_id=21)
-    h._mode_store.activate(actor_telegram_id=21, mode=VoiceSearchMode.DOCTOR, ttl_sec=60)
+    asyncio.run(h._mode_store.activate(actor_telegram_id=21, mode=VoiceSearchMode.DOCTOR, ttl_sec=60))
     asyncio.run(h._handle_voice(doctor_message))
 
     service_message = _Message(bot=_BotStub(b"0.95|clean"), user_id=22)
-    h._mode_store.activate(actor_telegram_id=22, mode=VoiceSearchMode.SERVICE, ttl_sec=60)
+    asyncio.run(h._mode_store.activate(actor_telegram_id=22, mode=VoiceSearchMode.SERVICE, ttl_sec=60))
     asyncio.run(h._handle_voice(service_message))
 
     assert search.doctor_queries == ["ortho"]
@@ -177,19 +178,19 @@ def test_voice_doctor_and_service_modes_call_canonical_services() -> None:
 def test_voice_low_confidence_and_transcription_failures_fallback_safely() -> None:
     low = _handler(roles={RoleCode.ADMIN}, confidence_threshold=0.8)
     low_message = _Message(bot=_BotStub(b"0.5|john"), user_id=31)
-    low._mode_store.activate(actor_telegram_id=31, mode=VoiceSearchMode.PATIENT, ttl_sec=60)
+    asyncio.run(low._mode_store.activate(actor_telegram_id=31, mode=VoiceSearchMode.PATIENT, ttl_sec=60))
     asyncio.run(low._handle_voice(low_message))
     assert "confidence" in low_message.answers[0].lower()
 
     failed = _handler(roles={RoleCode.ADMIN})
     fail_message = _Message(bot=_BotStub(b"fail"), user_id=32)
-    failed._mode_store.activate(actor_telegram_id=32, mode=VoiceSearchMode.PATIENT, ttl_sec=60)
+    asyncio.run(failed._mode_store.activate(actor_telegram_id=32, mode=VoiceSearchMode.PATIENT, ttl_sec=60))
     asyncio.run(failed._handle_voice(fail_message))
     assert "transcribe" in fail_message.answers[0].lower()
 
     unsupported = _handler(roles={RoleCode.ADMIN})
     unsupported_message = _Message(bot=_BotStub(b"unsupported"), user_id=33)
-    unsupported._mode_store.activate(actor_telegram_id=33, mode=VoiceSearchMode.PATIENT, ttl_sec=60)
+    asyncio.run(unsupported._mode_store.activate(actor_telegram_id=33, mode=VoiceSearchMode.PATIENT, ttl_sec=60))
     asyncio.run(unsupported._handle_voice(unsupported_message))
     assert "unsupported" in unsupported_message.answers[0].lower()
 
@@ -197,7 +198,7 @@ def test_voice_low_confidence_and_transcription_failures_fallback_safely() -> No
 def test_voice_stale_mode_rejected_safely() -> None:
     h = _handler(roles={RoleCode.ADMIN})
     message = _Message(bot=_BotStub(b"0.9|john"), user_id=41)
-    h._mode_store.activate(actor_telegram_id=41, mode=VoiceSearchMode.PATIENT, ttl_sec=-1)
+    asyncio.run(h._mode_store.activate(actor_telegram_id=41, mode=VoiceSearchMode.PATIENT, ttl_sec=-1))
     asyncio.run(h._handle_voice(message))
     assert "not active" in message.answers[0].lower()
 
@@ -205,7 +206,7 @@ def test_voice_stale_mode_rejected_safely() -> None:
 def test_voice_get_file_failure_becomes_safe_fallback() -> None:
     h = _handler(roles={RoleCode.ADMIN})
     message = _Message(bot=_GetFileFailingBot(b"irrelevant"), user_id=51)
-    h._mode_store.activate(actor_telegram_id=51, mode=VoiceSearchMode.PATIENT, ttl_sec=60)
+    asyncio.run(h._mode_store.activate(actor_telegram_id=51, mode=VoiceSearchMode.PATIENT, ttl_sec=60))
 
     asyncio.run(h._handle_voice(message))
 
@@ -217,7 +218,7 @@ def test_voice_download_failure_becomes_safe_fallback_and_cleans_temp_file() -> 
     h = _handler(roles={RoleCode.ADMIN})
     bot = _DownloadFailingBot(b"irrelevant")
     message = _Message(bot=bot, user_id=52)
-    h._mode_store.activate(actor_telegram_id=52, mode=VoiceSearchMode.PATIENT, ttl_sec=60)
+    asyncio.run(h._mode_store.activate(actor_telegram_id=52, mode=VoiceSearchMode.PATIENT, ttl_sec=60))
 
     asyncio.run(h._handle_voice(message))
 
@@ -230,7 +231,7 @@ def test_voice_download_failure_becomes_safe_fallback_and_cleans_temp_file() -> 
 def test_voice_provider_exception_becomes_safe_fallback() -> None:
     h = _handler(roles={RoleCode.ADMIN}, provider=_ProviderRaises())
     message = _Message(bot=_BotStub(b"whatever"), user_id=53)
-    h._mode_store.activate(actor_telegram_id=53, mode=VoiceSearchMode.PATIENT, ttl_sec=60)
+    asyncio.run(h._mode_store.activate(actor_telegram_id=53, mode=VoiceSearchMode.PATIENT, ttl_sec=60))
 
     asyncio.run(h._handle_voice(message))
 
@@ -241,7 +242,7 @@ def test_voice_provider_exception_becomes_safe_fallback() -> None:
 def test_voice_provider_timeout_becomes_safe_fallback() -> None:
     h = _handler(roles={RoleCode.ADMIN}, provider=_ProviderTimeout())
     message = _Message(bot=_BotStub(b"whatever"), user_id=54)
-    h._mode_store.activate(actor_telegram_id=54, mode=VoiceSearchMode.PATIENT, ttl_sec=60)
+    asyncio.run(h._mode_store.activate(actor_telegram_id=54, mode=VoiceSearchMode.PATIENT, ttl_sec=60))
 
     asyncio.run(h._handle_voice(message))
 
@@ -252,9 +253,25 @@ def test_voice_provider_timeout_becomes_safe_fallback() -> None:
 def test_voice_malformed_provider_success_becomes_safe_fallback() -> None:
     h = _handler(roles={RoleCode.ADMIN}, provider=_ProviderMalformedSuccess())
     message = _Message(bot=_BotStub(b"whatever"), user_id=55)
-    h._mode_store.activate(actor_telegram_id=55, mode=VoiceSearchMode.PATIENT, ttl_sec=60)
+    asyncio.run(h._mode_store.activate(actor_telegram_id=55, mode=VoiceSearchMode.PATIENT, ttl_sec=60))
 
     asyncio.run(h._handle_voice(message))
 
     assert message.answers
     assert "transcribe" in message.answers[0].lower()
+
+
+def test_voice_mode_store_uses_shared_runtime_state_across_coordinators() -> None:
+    async def _run() -> None:
+        redis = InMemoryRedis()
+        runtime_a = CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=redis))
+        runtime_b = CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=redis))
+        store_a = VoiceSearchModeStore(runtime=runtime_a)
+        store_b = VoiceSearchModeStore(runtime=runtime_b)
+
+        await store_a.activate(actor_telegram_id=501, mode=VoiceSearchMode.DOCTOR, ttl_sec=60)
+        assert await store_b.get_active_mode(actor_telegram_id=501) == VoiceSearchMode.DOCTOR
+        await store_b.clear(actor_telegram_id=501)
+        assert await store_a.get_active_mode(actor_telegram_id=501) is None
+
+    asyncio.run(_run())
