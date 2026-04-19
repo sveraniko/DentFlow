@@ -210,4 +210,8 @@ def test_reserve_again_localization_stays_object_action_oriented() -> None:
 
     assert "Reserve again" in i18n.t("patient.care.orders.repeat.action", "en")
     assert "Повторить резерв" in i18n.t("patient.care.orders.repeat.action", "ru")
+    assert "/" not in i18n.t("patient.care.orders.repeat.action", "en")
+    assert "Open new order" in i18n.t("patient.care.orders.repeat.open_new", "en")
+    assert "Back to orders" in i18n.t("patient.care.orders.repeat.back_to_orders", "en")
+    assert "Status: {status}" in i18n.t("patient.care.orders.repeat.result", "en")
     assert "Order {care_order_id}" in i18n.t("patient.care.orders.object.detail", "en")
