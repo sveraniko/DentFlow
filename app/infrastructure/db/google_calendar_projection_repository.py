@@ -36,6 +36,7 @@ class DbGoogleCalendarProjectionRepository:
                               p.display_name AS patient_display_name,
                               d.display_name AS doctor_display_name,
                               s.title_key AS service_label,
+                              COALESCE(c.default_locale, 'ru') AS service_locale,
                               COALESCE(br.display_name, 'Main Branch') AS branch_label
                             FROM booking.bookings b
                             JOIN core_reference.clinics c ON c.clinic_id=b.clinic_id

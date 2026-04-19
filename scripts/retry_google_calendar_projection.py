@@ -9,7 +9,7 @@ import asyncio
 from app.application.integration.google_calendar_projection import GoogleCalendarProjectionService
 from app.config.settings import get_settings
 from app.infrastructure.db.google_calendar_projection_repository import DbGoogleCalendarProjectionRepository
-from app.integrations.google_calendar import DisabledGoogleCalendarGateway
+from app.integrations.google_calendar import create_google_calendar_gateway
 
 
 async def _run(limit: int, booking_id: str | None) -> None:
@@ -17,7 +17,13 @@ async def _run(limit: int, booking_id: str | None) -> None:
     repo = DbGoogleCalendarProjectionRepository(settings.db, app_default_timezone=settings.app.default_timezone)
     service = GoogleCalendarProjectionService(
         repository=repo,
-        gateway=DisabledGoogleCalendarGateway(enabled=settings.integrations.google_calendar_enabled),
+        gateway=create_google_calendar_gateway(
+            enabled=settings.integrations.google_calendar_enabled,
+            credentials_path=settings.integrations.google_calendar_credentials_path,
+            subject_email=settings.integrations.google_calendar_subject_email,
+            application_name=settings.integrations.google_calendar_application_name,
+            timeout_sec=settings.integrations.google_calendar_timeout_sec,
+        ),
         dentflow_base_url=settings.integrations.dentflow_base_url,
     )
 

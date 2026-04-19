@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from app.application.integration.google_calendar_projection import GoogleCalendarProjectionService
 from app.domain.events import EventEnvelope
 from app.infrastructure.db.google_calendar_projection_repository import DbGoogleCalendarProjectionRepository
-from app.integrations.google_calendar import DisabledGoogleCalendarGateway
+from app.integrations.google_calendar import create_google_calendar_gateway
 
 
 @dataclass(slots=True)
@@ -13,6 +13,10 @@ class GoogleCalendarScheduleProjector:
     db_config: object
     app_default_timezone: str = "UTC"
     google_calendar_enabled: bool = False
+    google_calendar_credentials_path: str | None = None
+    google_calendar_subject_email: str | None = None
+    google_calendar_application_name: str = "DentFlow"
+    google_calendar_timeout_sec: float = 10.0
     dentflow_base_url: str = "https://dentflow.local"
     name: str = "integrations.google_calendar_schedule"
 
@@ -23,7 +27,13 @@ class GoogleCalendarScheduleProjector:
             return False
 
         repository = DbGoogleCalendarProjectionRepository(self.db_config, app_default_timezone=self.app_default_timezone)
-        gateway = DisabledGoogleCalendarGateway(enabled=self.google_calendar_enabled)
+        gateway = create_google_calendar_gateway(
+            enabled=self.google_calendar_enabled,
+            credentials_path=self.google_calendar_credentials_path,
+            subject_email=self.google_calendar_subject_email,
+            application_name=self.google_calendar_application_name,
+            timeout_sec=self.google_calendar_timeout_sec,
+        )
         service = GoogleCalendarProjectionService(repository=repository, gateway=gateway, dentflow_base_url=self.dentflow_base_url)
         await service.handle_event(event)
         return True

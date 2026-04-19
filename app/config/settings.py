@@ -80,6 +80,10 @@ class IntegrationsConfig(BaseSettings):
 
     google_sheets_enabled: bool = False
     google_calendar_enabled: bool = False
+    google_calendar_credentials_path: str | None = None
+    google_calendar_subject_email: str | None = None
+    google_calendar_application_name: str = "DentFlow"
+    google_calendar_timeout_sec: float = 10.0
     dentflow_base_url: str = "https://dentflow.local"
 
 
