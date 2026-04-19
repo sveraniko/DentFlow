@@ -133,3 +133,11 @@ def test_aw1_admin_projection_tables_declared() -> None:
     assert "CREATE TABLE IF NOT EXISTS admin_views.waitlist_queue" in ddl
     assert "CREATE TABLE IF NOT EXISTS admin_views.care_pickup_queue" in ddl
     assert "CREATE TABLE IF NOT EXISTS admin_views.ops_issue_queue" in ddl
+
+
+def test_aw5_google_calendar_projection_tables_declared() -> None:
+    ddl = "\n".join(db_bootstrap.STACK1_TABLES)
+    assert "integration" in db_bootstrap.SCHEMAS
+    assert "CREATE TABLE IF NOT EXISTS integration.google_calendar_doctor_calendars" in ddl
+    assert "CREATE TABLE IF NOT EXISTS integration.google_calendar_booking_event_map" in ddl
+    assert "CHECK (sync_status IN ('synced', 'failed', 'canceled', 'cancel_failed'))" in ddl
