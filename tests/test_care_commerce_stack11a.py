@@ -715,6 +715,101 @@ def test_repeat_reserve_path_revalidates_current_stock_truth() -> None:
     assert second.reason == "insufficient_stock"
 
 
+def test_repeat_order_creates_new_order_and_keeps_source_historical_truth() -> None:
+    repo = InMemoryCareRepo()
+    service = CareCommerceService(repo)
+    product = asyncio.run(
+        service.create_or_update_product(
+            clinic_id="c1",
+            sku="SKU-REPEAT",
+            title_key="repeat",
+            description_key=None,
+            category="h",
+            price_amount=1000,
+            currency_code="RUB",
+            status="active",
+        )
+    )
+    asyncio.run(service.set_branch_product_availability(clinic_id="c1", branch_id="b1", care_product_id=product.care_product_id, available_qty=3, reserved_qty=0))
+    source_order = asyncio.run(
+        service.create_order(
+            clinic_id="c1",
+            patient_id="p1",
+            payment_mode="pay_at_pickup",
+            currency_code="RUB",
+            pickup_branch_id="b1",
+            recommendation_id="rec-1",
+            booking_id="bk-1",
+            items=[(product, 1)],
+        )
+    )
+    source_status_before = source_order.status
+    repeated = asyncio.run(
+        service.repeat_order_as_new(
+            clinic_id="c1",
+            patient_id="p1",
+            source_order_id=source_order.care_order_id,
+            requested_branch_id="b1",
+            allowed_branch_ids=("b1",),
+        )
+    )
+
+    assert repeated.ok is True
+    assert repeated.created_order is not None
+    assert repeated.created_reservation is not None
+    assert repeated.created_order.care_order_id != source_order.care_order_id
+    assert repeated.created_order.status == "confirmed"
+    assert repeated.created_reservation.care_order_id == repeated.created_order.care_order_id
+    assert repo.orders[source_order.care_order_id].status == source_status_before
+    assert repo.orders[source_order.care_order_id].recommendation_id == "rec-1"
+    assert repo.orders[source_order.care_order_id].booking_id == "bk-1"
+
+
+def test_repeat_order_with_stale_branch_prompts_valid_alternative_branch() -> None:
+    repo = InMemoryCareRepo()
+    service = CareCommerceService(repo)
+    product = asyncio.run(
+        service.create_or_update_product(
+            clinic_id="c1",
+            sku="SKU-STOCK",
+            title_key="stock",
+            description_key=None,
+            category="h",
+            price_amount=1000,
+            currency_code="RUB",
+            status="active",
+        )
+    )
+    asyncio.run(service.set_branch_product_availability(clinic_id="c1", branch_id="b1", care_product_id=product.care_product_id, available_qty=0, reserved_qty=0))
+    asyncio.run(service.set_branch_product_availability(clinic_id="c1", branch_id="b2", care_product_id=product.care_product_id, available_qty=2, reserved_qty=0))
+    source_order = asyncio.run(
+        service.create_order(
+            clinic_id="c1",
+            patient_id="p1",
+            payment_mode="pay_at_pickup",
+            currency_code="RUB",
+            pickup_branch_id="b1",
+            recommendation_id=None,
+            booking_id=None,
+            items=[(product, 1)],
+        )
+    )
+    repeated = asyncio.run(
+        service.repeat_order_as_new(
+            clinic_id="c1",
+            patient_id="p1",
+            source_order_id=source_order.care_order_id,
+            requested_branch_id="b1",
+            allowed_branch_ids=("b1", "b2"),
+        )
+    )
+
+    assert repeated.ok is False
+    assert repeated.reason == "insufficient_stock"
+    assert repeated.available_branch_ids == ("b2",)
+    assert repeated.created_order is None
+
+
 def test_doctor_issue_recommendation_with_set_target_persists_manual_override() -> None:
     now = datetime.now(timezone.utc)
     booking = Booking(

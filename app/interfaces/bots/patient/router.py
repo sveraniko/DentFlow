@@ -130,6 +130,13 @@ class _ResolvedMediaRef:
     media_value: str
 
 
+@dataclass(slots=True, frozen=True)
+class _RepeatActionView:
+    text: str
+    choose_branch: bool = False
+    branch_choices: tuple[str, ...] = ()
+
+
 def _resolve_media_ref(media_ref: str) -> _ResolvedMediaRef | None:
     ref = (media_ref or "").strip()
     if not ref:
@@ -926,42 +933,52 @@ def make_router(
         clinic_id: str,
         patient_id: str,
         care_order_id: str,
-    ) -> tuple[bool, str]:
+        selected_branch_id: str | None = None,
+    ) -> _RepeatActionView:
         locale = _locale()
-        source = await care_commerce_service.get_order(care_order_id)
-        if source is None or source.patient_id != patient_id:
-            return False, i18n.t("patient.care.orders.repeat.not_found", locale)
-        items = await care_commerce_service.repository.list_order_items(source.care_order_id)
-        if not items:
-            return False, i18n.t("patient.care.orders.repeat.not_found", locale)
-        first_item = items[0]
-        product = await care_commerce_service.repository.get_product(first_item.care_product_id)
-        if product is None or product.status != "active":
-            return False, i18n.t("patient.care.orders.repeat.unavailable", locale)
-        branch_id = source.pickup_branch_id or await _resolve_preferred_branch_for_product(clinic_id=clinic_id, product_id=product.care_product_id)
-        if not branch_id:
-            return False, i18n.t("patient.care.orders.repeat.branch_required", locale)
-        free_qty = await care_commerce_service.compute_free_qty(branch_id=branch_id, care_product_id=product.care_product_id)
-        if free_qty < first_item.quantity:
-            return False, i18n.t("patient.care.orders.repeat.out_of_stock", locale).format(branch_id=branch_id)
-        order = await care_commerce_service.create_order(
+        candidate_branch_ids = tuple(branch.branch_id for branch in reference.list_branches(clinic_id))
+        outcome = await care_commerce_service.repeat_order_as_new(
             clinic_id=clinic_id,
             patient_id=patient_id,
-            payment_mode=source.payment_mode,
-            currency_code=source.currency_code,
-            pickup_branch_id=branch_id,
-            recommendation_id=None,
-            booking_id=None,
-            items=[(product, first_item.quantity)],
+            source_order_id=care_order_id,
+            requested_branch_id=selected_branch_id,
+            allowed_branch_ids=candidate_branch_ids,
         )
-        await care_commerce_service.transition_order(care_order_id=order.care_order_id, to_status="confirmed")
-        await care_commerce_service.create_reservation(
-            care_order_id=order.care_order_id,
-            care_product_id=product.care_product_id,
-            branch_id=branch_id,
-            reserved_qty=first_item.quantity,
-        )
-        return True, i18n.t("patient.care.orders.repeat.ok", locale).format(care_order_id=order.care_order_id, branch_id=branch_id)
+        if outcome.ok and outcome.created_order and outcome.selected_branch_id:
+            return _RepeatActionView(
+                text=i18n.t("patient.care.orders.repeat.ok", locale).format(
+                    care_order_id=outcome.created_order.care_order_id,
+                    branch_id=outcome.selected_branch_id,
+                )
+            )
+        if outcome.reason in {"source_not_found", "source_empty"}:
+            return _RepeatActionView(text=i18n.t("patient.care.orders.repeat.not_found", locale))
+        if outcome.reason == "product_unavailable":
+            return _RepeatActionView(text=i18n.t("patient.care.orders.repeat.unavailable", locale))
+        if outcome.reason in {"branch_selection_required", "branch_required"} and outcome.available_branch_ids:
+            return _RepeatActionView(
+                text=i18n.t("patient.care.orders.repeat.branch_select_required", locale),
+                choose_branch=True,
+                branch_choices=outcome.available_branch_ids,
+            )
+        if outcome.reason == "branch_invalid":
+            if outcome.available_branch_ids:
+                return _RepeatActionView(
+                    text=i18n.t("patient.care.orders.repeat.branch_changed", locale),
+                    choose_branch=True,
+                    branch_choices=outcome.available_branch_ids,
+                )
+            return _RepeatActionView(text=i18n.t("patient.care.orders.repeat.branch_required", locale))
+        if outcome.reason in {"availability_inactive", "insufficient_stock", "branch_unavailable"}:
+            if outcome.selected_branch_id:
+                message = i18n.t("patient.care.orders.repeat.out_of_stock", locale).format(branch_id=outcome.selected_branch_id)
+            else:
+                message = i18n.t("patient.care.orders.repeat.branch_required", locale)
+            if outcome.available_branch_ids:
+                message = f"{message}\n{i18n.t('patient.care.orders.repeat.branch_select_required', locale)}"
+                return _RepeatActionView(text=message, choose_branch=True, branch_choices=outcome.available_branch_ids)
+            return _RepeatActionView(text=message)
+        return _RepeatActionView(text=i18n.t("patient.care.orders.repeat.branch_required", locale))
 
     async def _render_service_panel(message: Message | CallbackQuery, *, actor_id: int, session_id: str, clinic_id: str) -> None:
         locale = _locale()
@@ -1399,8 +1416,30 @@ def make_router(
             keyboard_rows.append(
                 [
                     InlineKeyboardButton(
+                        text=i18n.t("patient.care.orders.open.action", _locale()).format(care_order_id=row.care_order_id),
+                        callback_data=await _encode_runtime_callback(
+                            profile=CardProfile.CARE_ORDER,
+                            entity_type=EntityType.CARE_ORDER,
+                            entity_id=row.care_order_id,
+                            action=CardAction.OPEN,
+                            source_context=SourceContext.CARE_ORDER_LIST,
+                            source_ref="care.orders.list.open",
+                            page_or_index="open",
+                            state_token=f"care:{message.from_user.id}",
+                        ),
+                    ),
+                    InlineKeyboardButton(
                         text=i18n.t("patient.care.orders.repeat.action", _locale()).format(care_order_id=row.care_order_id),
-                        callback_data=f"care:repeat:{row.care_order_id}",
+                        callback_data=await _encode_runtime_callback(
+                            profile=CardProfile.CARE_ORDER,
+                            entity_type=EntityType.CARE_ORDER,
+                            entity_id=row.care_order_id,
+                            action=CardAction.RESERVE,
+                            source_context=SourceContext.CARE_ORDER_LIST,
+                            source_ref="care.orders.list.repeat",
+                            page_or_index="repeat",
+                            state_token=f"care:{message.from_user.id}",
+                        ),
                     )
                 ]
             )
@@ -1420,8 +1459,8 @@ def make_router(
         if clinic_id is None or patient_id is None:
             await message.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()))
             return
-        _, text = await _reserve_again_from_order(clinic_id=clinic_id, patient_id=patient_id, care_order_id=parts[1].strip())
-        await message.answer(text)
+        view = await _reserve_again_from_order(clinic_id=clinic_id, patient_id=patient_id, care_order_id=parts[1].strip())
+        await message.answer(view.text)
 
     @router.message(Command("book"))
     async def book_entry(message: Message) -> None:
@@ -1492,10 +1531,10 @@ def make_router(
             await callback.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()), show_alert=True)
             return
         care_order_id = callback.data.split(":", 2)[2]
-        _, text = await _reserve_again_from_order(clinic_id=clinic_id, patient_id=patient_id, care_order_id=care_order_id)
+        view = await _reserve_again_from_order(clinic_id=clinic_id, patient_id=patient_id, care_order_id=care_order_id)
         await callback.answer()
         if callback.message:
-            await callback.message.answer(text)
+            await callback.message.answer(view.text)
 
     @router.callback_query(F.data.startswith("c2|"))
     async def runtime_card_callback(callback: CallbackQuery) -> None:
@@ -1764,6 +1803,120 @@ def make_router(
                 return
             if decoded.page_or_index == "back_product":
                 await _render_product_card(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, product_id=decoded.entity_id)
+                return
+
+        if decoded.source_context == SourceContext.CARE_ORDER_LIST and decoded.profile == CardProfile.CARE_ORDER:
+            clinic_id = _primary_clinic_id()
+            if clinic_id is None:
+                await callback.answer(i18n.t("patient.booking.unavailable", _locale()), show_alert=True)
+                return
+            patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
+            if patient_id is None:
+                await callback.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()), show_alert=True)
+                return
+            if decoded.page_or_index == "repeat":
+                view = await _reserve_again_from_order(
+                    clinic_id=clinic_id,
+                    patient_id=patient_id,
+                    care_order_id=decoded.entity_id,
+                )
+                if callback.message:
+                    keyboard = None
+                    if view.choose_branch and view.branch_choices:
+                        branch_buttons = [
+                            [
+                                InlineKeyboardButton(
+                                    text=i18n.t("patient.care.orders.repeat.branch_option", _locale()).format(branch_id=branch_id),
+                                    callback_data=await _encode_runtime_callback(
+                                        profile=CardProfile.CARE_ORDER,
+                                        entity_type=EntityType.CARE_ORDER,
+                                        entity_id=decoded.entity_id,
+                                        action=CardAction.CHANGE_BRANCH,
+                                        source_context=SourceContext.CARE_ORDER_LIST,
+                                        source_ref="care.orders.repeat.branch",
+                                        page_or_index=f"repeat_branch:{branch_id}",
+                                        state_token=decoded.state_token,
+                                    ),
+                                )
+                            ]
+                            for branch_id in view.branch_choices
+                        ]
+                        keyboard = InlineKeyboardMarkup(inline_keyboard=branch_buttons)
+                    await callback.message.answer(view.text, reply_markup=keyboard)
+                await callback.answer()
+                return
+            if decoded.page_or_index.startswith("repeat_branch:"):
+                branch_id = decoded.page_or_index.split(":", 1)[1]
+                view = await _reserve_again_from_order(
+                    clinic_id=clinic_id,
+                    patient_id=patient_id,
+                    care_order_id=decoded.entity_id,
+                    selected_branch_id=branch_id,
+                )
+                if callback.message:
+                    await callback.message.answer(view.text)
+                await callback.answer()
+                return
+            if decoded.page_or_index == "open":
+                order = await care_commerce_service.get_order(decoded.entity_id)
+                if order is None or order.patient_id != patient_id:
+                    await callback.answer(i18n.t("patient.care.orders.repeat.not_found", _locale()), show_alert=True)
+                    return
+                items = await care_commerce_service.repository.list_order_items(order.care_order_id)
+                product_line = "-"
+                qty = 0
+                if items:
+                    qty = items[0].quantity
+                    product = await care_commerce_service.repository.get_product(items[0].care_product_id)
+                    if product is not None:
+                        content = await care_commerce_service.resolve_product_content(
+                            clinic_id=clinic_id,
+                            product=product,
+                            locale=_locale(),
+                            fallback_locale=_locale(),
+                        )
+                        product_line = content.title or i18n.t(product.title_key, _locale())
+                selected_branch = order.pickup_branch_id or "-"
+                availability_note = i18n.t("patient.care.orders.repeat.branch_required", _locale())
+                if items and order.pickup_branch_id:
+                    row = await care_commerce_service.get_branch_product_availability(
+                        branch_id=order.pickup_branch_id,
+                        care_product_id=items[0].care_product_id,
+                    )
+                    if row is not None and row.status == "active" and row.free_qty >= items[0].quantity:
+                        availability_note = i18n.t("patient.care.orders.repeat.availability_ok", _locale()).format(branch_id=order.pickup_branch_id)
+                    else:
+                        availability_note = i18n.t("patient.care.orders.repeat.out_of_stock", _locale()).format(branch_id=selected_branch)
+                text = i18n.t("patient.care.orders.object.detail", _locale()).format(
+                    care_order_id=order.care_order_id,
+                    status=order.status,
+                    product=product_line,
+                    quantity=qty,
+                    branch_id=selected_branch,
+                    availability=availability_note,
+                )
+                keyboard = InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text=i18n.t("patient.care.orders.repeat.action", _locale()).format(care_order_id=order.care_order_id),
+                                callback_data=await _encode_runtime_callback(
+                                    profile=CardProfile.CARE_ORDER,
+                                    entity_type=EntityType.CARE_ORDER,
+                                    entity_id=order.care_order_id,
+                                    action=CardAction.RESERVE,
+                                    source_context=SourceContext.CARE_ORDER_LIST,
+                                    source_ref="care.orders.object.repeat",
+                                    page_or_index="repeat",
+                                    state_token=decoded.state_token,
+                                ),
+                            )
+                        ]
+                    ]
+                )
+                if callback.message:
+                    await callback.message.answer(text, reply_markup=keyboard)
+                await callback.answer()
                 return
 
         if decoded.source_context == SourceContext.BOOKING_LIST and decoded.profile == CardProfile.BOOKING:
