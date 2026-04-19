@@ -355,11 +355,14 @@ class ProductCardAdapter:
                 detail_lines.append(i18n.t("card.product.detail.opened_from_category", locale).format(value=seed.category))
 
         actions: list[CardActionButton] = []
-        actions.append(
-            CardActionButton(action=CardAction.EXPAND, label=i18n.t("card.action.expand", locale))
-            if mode == CardMode.COMPACT
-            else CardActionButton(action=CardAction.COLLAPSE, label=i18n.t("card.action.collapse", locale))
-        )
+        if mode in {CardMode.LIST_ROW, CardMode.PICKER}:
+            actions.append(CardActionButton(action=CardAction.OPEN, label=i18n.t("card.action.expand", locale)))
+        else:
+            actions.append(
+                CardActionButton(action=CardAction.EXPAND, label=i18n.t("card.action.expand", locale))
+                if mode == CardMode.COMPACT
+                else CardActionButton(action=CardAction.COLLAPSE, label=i18n.t("card.action.collapse", locale))
+            )
         if mode == CardMode.EXPANDED:
             actions.extend(
                 [
@@ -371,7 +374,8 @@ class ProductCardAdapter:
                 actions.append(CardActionButton(action=CardAction.COVER, label=i18n.t("card.action.cover", locale)))
             if seed.media_count > 1:
                 actions.append(CardActionButton(action=CardAction.GALLERY, label=i18n.t("card.action.gallery", locale)))
-        actions.append(CardActionButton(action=CardAction.BACK, label=i18n.t("common.back", locale)))
+        if mode not in {CardMode.LIST_ROW, CardMode.PICKER}:
+            actions.append(CardActionButton(action=CardAction.BACK, label=i18n.t("common.back", locale)))
 
         return CardShell(
             profile=CardProfile.PRODUCT,
