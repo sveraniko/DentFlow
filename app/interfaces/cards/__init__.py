@@ -1,4 +1,13 @@
-from app.interfaces.cards.adapters import BookingCardAdapter, BookingCardSeed, ProductCardAdapter, ProductCardSeed
+from app.interfaces.cards.adapters import (
+    BookingCardAdapter,
+    BookingCardSeed,
+    DoctorCardAdapter,
+    DoctorCardSeed,
+    PatientCardAdapter,
+    PatientCardSeed,
+    ProductCardAdapter,
+    ProductCardSeed,
+)
 from app.interfaces.cards.callbacks import (
     CardCallback,
     CardCallbackCodec,
@@ -43,8 +52,12 @@ __all__ = [
     "CardProfile",
     "CardShell",
     "CardShellRenderer",
+    "DoctorCardAdapter",
+    "DoctorCardSeed",
     "EntityType",
     "PanelUpdateInstruction",
+    "PatientCardAdapter",
+    "PatientCardSeed",
     "ProductCardAdapter",
     "ProductCardSeed",
     "SourceContext",
