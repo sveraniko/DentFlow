@@ -22,15 +22,18 @@ from app.interfaces.cards import (
     CardShellRenderer,
     DoctorCardAdapter,
     DoctorCardSeed,
+    DoctorRuntimeSnapshot,
     DoctorRuntimeViewBuilder,
     EntityType,
     InMemoryRedis,
     PanelFamily,
     PatientCardAdapter,
     PatientCardSeed,
+    PatientRuntimeSnapshot,
     PatientRuntimeViewBuilder,
     ProductCardAdapter,
     ProductCardSeed,
+    ProductRuntimeSnapshot,
     ProductRuntimeViewBuilder,
     RuntimeTtlConfig,
     SourceContext,
@@ -112,18 +115,23 @@ def test_active_panel_registry_is_family_aware_and_supersedes() -> None:
 
 def test_product_patient_doctor_localization_and_runtime_builders(i18n: I18nService) -> None:
     product_seed = ProductRuntimeViewBuilder().build_seed(
-        snapshot=ProductCardSeed(
+        snapshot=ProductRuntimeSnapshot(
             product_id="prod_2",
-            title="Nano Paste",
-            short_label="Sensitive",
-            price_label="30 GEL",
-            availability_label="low stock",
-            localized_description="Synced localized description from catalog DB",
+            sku="Sensitive",
+            price_amount=30,
+            currency_code="GEL",
+            status="active",
+            available_qty=2,
+            title_by_locale={"en": "Nano Paste", "ru": "Нано паста"},
+            description_by_locale={"en": "Synced localized description from catalog DB"},
             usage_hint="Use twice daily",
             category="aftercare",
             recommendation_rationale="Based on enamel sensitivity",
+            selected_branch_label="Main branch",
             state_token="rev-2",
-        )
+        ),
+        i18n=i18n,
+        locale="en",
     )
     product = ProductCardAdapter.build(
         seed=product_seed,
@@ -134,15 +142,17 @@ def test_product_patient_doctor_localization_and_runtime_builders(i18n: I18nServ
     )
     assert any("Usage:" in line for line in product.detail_lines)
     assert any("Recommendation:" in line for line in product.detail_lines)
+    assert any(meta.key == "branch" for meta in product.meta_lines)
 
     patient_seed = PatientRuntimeViewBuilder().build_seed(
-        snapshot=PatientCardSeed(
+        snapshot=PatientRuntimeSnapshot(
             patient_id="pat_2",
-            display_name="Nina D.",
+            first_name="Nina",
+            last_name="D.",
             state_token="rev-6",
-            contact_block="phone:+995***99",
-            active_flags_summary="needs follow-up",
-            booking_snippet="Today 16:00",
+            primary_contact="phone:+9955990099",
+            active_flags=("needs follow-up", "allergy"),
+            upcoming_booking_label="Today 16:00",
             recommendation_summary="2 active",
             care_order_summary="1 ready pickup",
             chart_summary_entry="Last visit: hygiene",
@@ -157,15 +167,16 @@ def test_product_patient_doctor_localization_and_runtime_builders(i18n: I18nServ
         mode=CardMode.EXPANDED,
     )
     assert any("Chart:" in line for line in patient.detail_lines)
+    assert any(meta.key == "contact" and meta.value.endswith("0099") for meta in patient.meta_lines)
 
     doctor_seed = DoctorRuntimeViewBuilder().build_seed(
-        snapshot=DoctorCardSeed(
+        snapshot=DoctorRuntimeSnapshot(
             doctor_id="doc_1",
             display_name="Dr. Smith",
             specialty="orthodontist",
-            operational_hint="Queue active",
+            today_bookings=8,
             schedule_summary="09:00-17:00",
-            queue_summary="5 waiting",
+            today_queue_size=5,
             service_tags=("ortho",),
             state_token="rev-3",
         )
@@ -179,6 +190,7 @@ def test_product_patient_doctor_localization_and_runtime_builders(i18n: I18nServ
         mode=CardMode.EXPANDED,
     )
     assert any("Schedule:" in line for line in doctor.detail_lines)
+    assert any("Queue:" in line for line in doctor.detail_lines)
 
 
 def test_mode_transition_back_and_stale_protection_in_profile_flow(i18n: I18nService) -> None:

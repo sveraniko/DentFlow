@@ -49,9 +49,11 @@ from app.infrastructure.db.recommendation_repository import DbRecommendationRepo
 from app.infrastructure.search.meili_backend import MeiliSearchBackend
 from app.infrastructure.search.meili_client import HttpMeiliClient
 from app.infrastructure.search.postgres_backend import PostgresSearchBackend
+from app.infrastructure.cache import build_card_runtime_redis
 from app.infrastructure.speech.disabled_provider import DisabledSpeechToTextProvider
 from app.infrastructure.speech.fake_provider import FakeSpeechToTextProvider
 from app.infrastructure.speech.openai_provider import OpenAITranscriptionConfig, OpenAISpeechToTextProvider
+from app.interfaces.cards import CardCallbackCodec, CardRuntimeCoordinator, CardRuntimeStateStore
 from app.interfaces.bots.admin.router import make_router as make_admin_router
 from app.interfaces.bots.doctor.router import make_router as make_doctor_router
 from app.interfaces.bots.owner.router import make_router as make_owner_router
@@ -75,6 +77,9 @@ class RuntimeRegistry:
         self.recommendation_repository = DbRecommendationRepository(settings.db)
         self.care_commerce_repository = DbCareCommerceRepository(settings.db)
         self.patient_registry_service = DbPatientRegistryService(self.patient_registry_repository)
+        self.card_runtime_store = CardRuntimeStateStore(redis_client=build_card_runtime_redis(settings))
+        self.card_runtime = CardRuntimeCoordinator(store=self.card_runtime_store)
+        self.card_callback_codec = CardCallbackCodec(runtime=self.card_runtime)
 
         self.reference_service = ClinicReferenceService(self.clinic_reference_repository)
         self.clinical_chart_service = ClinicalChartService(self.clinical_repository)
@@ -162,6 +167,8 @@ class RuntimeRegistry:
                 care_commerce_service=self.care_commerce_service,
                 recommendation_repository=self.recommendation_repository,
                 default_locale=self.settings.app.default_locale,
+                card_runtime=self.card_runtime,
+                card_callback_codec=self.card_callback_codec,
             )
         )
         dispatcher.include_router(
@@ -178,6 +185,8 @@ class RuntimeRegistry:
                 max_voice_duration_sec=self.settings.stt.max_voice_duration_sec,
                 max_voice_file_size_bytes=self.settings.stt.max_voice_file_size_bytes,
                 voice_mode_ttl_sec=self.settings.stt.mode_ttl_sec,
+                card_runtime=self.card_runtime,
+                card_callback_codec=self.card_callback_codec,
             )
         )
         dispatcher.include_router(
@@ -199,6 +208,8 @@ class RuntimeRegistry:
                 max_voice_duration_sec=self.settings.stt.max_voice_duration_sec,
                 max_voice_file_size_bytes=self.settings.stt.max_voice_file_size_bytes,
                 voice_mode_ttl_sec=self.settings.stt.mode_ttl_sec,
+                card_runtime=self.card_runtime,
+                card_callback_codec=self.card_callback_codec,
             )
         )
         dispatcher.include_router(

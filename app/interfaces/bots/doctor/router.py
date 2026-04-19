@@ -17,6 +17,7 @@ from app.domain.access_identity.models import RoleCode
 from app.interfaces.bots.common import build_role_router, guard_roles, resolve_locale
 from app.interfaces.bots.search_handlers import run_doctor_search, run_patient_search, run_service_search
 from app.interfaces.bots.voice_search import attach_voice_search_handlers
+from app.interfaces.cards import CardCallbackCodec, CardRuntimeCoordinator
 
 
 def make_router(
@@ -37,6 +38,8 @@ def make_router(
     max_voice_duration_sec: int,
     max_voice_file_size_bytes: int,
     voice_mode_ttl_sec: int,
+    card_runtime: CardRuntimeCoordinator | None = None,
+    card_callback_codec: CardCallbackCodec | None = None,
 ) -> Router:
     search_backend = search_service
     router = build_role_router(

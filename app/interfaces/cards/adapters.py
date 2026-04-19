@@ -79,21 +79,133 @@ class BookingCardSeed:
 
 
 @dataclass(slots=True, frozen=True)
+class ProductRuntimeSnapshot:
+    product_id: str
+    sku: str
+    state_token: str
+    price_amount: int
+    currency_code: str
+    status: str
+    available_qty: int | None = None
+    title_by_locale: dict[str, str] | None = None
+    description_by_locale: dict[str, str] | None = None
+    category: str | None = None
+    usage_hint: str | None = None
+    selected_branch_label: str | None = None
+    recommendation_badge: str | None = None
+    recommendation_rationale: str | None = None
+    media_count: int = 0
+
+
+@dataclass(slots=True, frozen=True)
+class PatientRuntimeSnapshot:
+    patient_id: str
+    state_token: str
+    display_name: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    patient_number: str | None = None
+    primary_contact: str | None = None
+    is_photo_present: bool = False
+    active_flags: tuple[str, ...] = ()
+    upcoming_booking_label: str | None = None
+    recommendation_summary: str | None = None
+    care_order_summary: str | None = None
+    chart_summary_entry: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class DoctorRuntimeSnapshot:
+    doctor_id: str
+    state_token: str
+    display_name: str
+    specialty: str | None = None
+    branch_label: str | None = None
+    today_queue_size: int | None = None
+    today_bookings: int | None = None
+    schedule_summary: str | None = None
+    service_tags: tuple[str, ...] = ()
+
+
+@dataclass(slots=True, frozen=True)
 class ProductRuntimeViewBuilder:
-    def build_seed(self, *, snapshot: ProductCardSeed) -> ProductCardSeed:
-        return snapshot
+    def build_seed(self, *, snapshot: ProductRuntimeSnapshot, i18n: CardLocalizer, locale: str) -> ProductCardSeed:
+        title = (snapshot.title_by_locale or {}).get(locale) or (snapshot.title_by_locale or {}).get("en") or snapshot.sku
+        description = None
+        if snapshot.description_by_locale:
+            description = snapshot.description_by_locale.get(locale) or snapshot.description_by_locale.get("en")
+        availability = i18n.t("patient.care.availability.out", locale)
+        if snapshot.status == "active" and (snapshot.available_qty or 0) > 0:
+            availability = i18n.t("patient.care.availability.low", locale) if (snapshot.available_qty or 0) <= 2 else i18n.t("patient.care.availability.in", locale)
+        return ProductCardSeed(
+            product_id=snapshot.product_id,
+            title=title,
+            short_label=snapshot.sku,
+            price_label=f"{snapshot.price_amount} {snapshot.currency_code}",
+            availability_label=availability,
+            localized_description=description,
+            usage_hint=snapshot.usage_hint,
+            category=snapshot.category,
+            selected_branch_label=snapshot.selected_branch_label,
+            recommendation_badge=snapshot.recommendation_badge,
+            recommendation_rationale=snapshot.recommendation_rationale,
+            media_count=snapshot.media_count,
+            state_token=snapshot.state_token,
+        )
 
 
 @dataclass(slots=True, frozen=True)
 class PatientRuntimeViewBuilder:
-    def build_seed(self, *, snapshot: PatientCardSeed) -> PatientCardSeed:
-        return snapshot
+    def build_seed(self, *, snapshot: PatientRuntimeSnapshot) -> PatientCardSeed:
+        display_name = snapshot.display_name
+        if not display_name:
+            parts = [part for part in (snapshot.first_name, snapshot.last_name) if part]
+            display_name = " ".join(parts) if parts else snapshot.patient_id
+        active_flags_summary = ", ".join(snapshot.active_flags) if snapshot.active_flags else None
+        return PatientCardSeed(
+            patient_id=snapshot.patient_id,
+            display_name=display_name,
+            state_token=snapshot.state_token,
+            patient_number=snapshot.patient_number,
+            contact_hint=_masked_contact(snapshot.primary_contact),
+            photo_present=snapshot.is_photo_present,
+            active_flags_summary=active_flags_summary,
+            booking_snippet=snapshot.upcoming_booking_label,
+            contact_block=snapshot.primary_contact,
+            recommendation_summary=snapshot.recommendation_summary,
+            care_order_summary=snapshot.care_order_summary,
+            chart_summary_entry=snapshot.chart_summary_entry,
+        )
 
 
 @dataclass(slots=True, frozen=True)
 class DoctorRuntimeViewBuilder:
-    def build_seed(self, *, snapshot: DoctorCardSeed) -> DoctorCardSeed:
-        return snapshot
+    def build_seed(self, *, snapshot: DoctorRuntimeSnapshot) -> DoctorCardSeed:
+        queue_summary = None
+        if snapshot.today_queue_size is not None:
+            queue_summary = f"{snapshot.today_queue_size} waiting"
+        operational_hint = None
+        if snapshot.today_bookings is not None:
+            operational_hint = f"Today: {snapshot.today_bookings} bookings"
+        return DoctorCardSeed(
+            doctor_id=snapshot.doctor_id,
+            display_name=snapshot.display_name,
+            specialty=snapshot.specialty or "general",
+            state_token=snapshot.state_token,
+            branch_label=snapshot.branch_label,
+            operational_hint=operational_hint,
+            schedule_summary=snapshot.schedule_summary,
+            queue_summary=queue_summary,
+            service_tags=snapshot.service_tags,
+        )
+
+
+def _masked_contact(contact: str | None) -> str | None:
+    if not contact:
+        return None
+    if len(contact) <= 4:
+        return "***"
+    return f"***{contact[-4:]}"
 
 
 class ProductCardAdapter:

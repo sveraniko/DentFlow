@@ -15,6 +15,7 @@ from app.domain.access_identity.models import RoleCode
 from app.interfaces.bots.common import guard_roles, resolve_locale
 from app.interfaces.bots.search_handlers import run_doctor_search, run_patient_search, run_service_search
 from app.interfaces.bots.voice_search import attach_voice_search_handlers
+from app.interfaces.cards import CardCallbackCodec, CardRuntimeCoordinator
 
 
 def _clinic_locale(reference_service: ClinicReferenceService, clinic_id: str) -> str | None:
@@ -59,6 +60,8 @@ def make_router(
     max_voice_duration_sec: int,
     max_voice_file_size_bytes: int,
     voice_mode_ttl_sec: int,
+    card_runtime: CardRuntimeCoordinator | None = None,
+    card_callback_codec: CardCallbackCodec | None = None,
 ) -> Router:
     router = Router(name="admin_router")
 
