@@ -11,11 +11,13 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from app.application.communication import ReminderActionService
 from app.application.care_commerce import CareCommerceService
 from app.application.booking.orchestration_outcomes import ConflictOutcome, InvalidStateOutcome, OrchestrationSuccess, SlotUnavailableOutcome
-from app.application.booking.telegram_flow import BookingCardView, BookingControlResolutionResult, BookingPatientFlowService
+from app.application.booking.telegram_flow import BookingControlResolutionResult, BookingPatientFlowService
 from app.application.clinic_reference import ClinicReferenceService
 from app.common.i18n import I18nService
 from app.application.recommendation import RecommendationService
 from app.interfaces.cards import (
+    BookingCardAdapter,
+    BookingRuntimeViewBuilder,
     CardAction,
     CardCallback,
     CardCallbackCodec,
@@ -23,9 +25,11 @@ from app.interfaces.cards import (
     CardMode,
     CardProfile,
     CardRuntimeCoordinator,
+    CardShellRenderer,
     EntityType,
     PanelFamily,
     SourceContext,
+    SourceRef,
 )
 
 
@@ -64,6 +68,7 @@ def make_router(
     if card_callback_codec is None:
         raise RuntimeError("patient router requires shared card callback codec")
     _SESSION_SCOPE = "patient_flow"
+    booking_builder = BookingRuntimeViewBuilder()
 
     def _locale() -> str:
         return default_locale
@@ -1139,9 +1144,9 @@ def make_router(
                     booking_id=booking_id,
                 )
                 if isinstance(result, OrchestrationSuccess):
-                    card = booking_flow.build_booking_card(booking=result.entity)
+                    panel = _render_patient_booking_panel(booking=result.entity, session_state_token=callback_session_id, locale=_locale())
                     session_id = (await _load_flow_state(callback.from_user.id)).booking_session_id
-                    await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=_render_booking_card_text(card, locale=_locale()))
+                    await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=panel)
                     return
                 await callback.answer(i18n.t("patient.booking.finalize.invalid_state", _locale()), show_alert=True)
                 return
@@ -1153,9 +1158,9 @@ def make_router(
                     booking_id=booking_id,
                 )
                 if isinstance(result, OrchestrationSuccess):
-                    card = booking_flow.build_booking_card(booking=result.entity)
+                    panel = _render_patient_booking_panel(booking=result.entity, session_state_token=callback_session_id, locale=_locale())
                     session_id = (await _load_flow_state(callback.from_user.id)).booking_session_id
-                    await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=_render_booking_card_text(card, locale=_locale()))
+                    await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=panel)
                     return
                 await callback.answer(i18n.t("patient.booking.finalize.invalid_state", _locale()), show_alert=True)
                 return
@@ -1186,9 +1191,9 @@ def make_router(
                     booking_id=booking_id,
                 )
                 if isinstance(result, OrchestrationSuccess):
-                    card = booking_flow.build_booking_card(booking=result.entity)
+                    panel = _render_patient_booking_panel(booking=result.entity, session_state_token=callback_session_id, locale=_locale())
                     session_id = (await _load_flow_state(callback.from_user.id)).booking_session_id
-                    await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=_render_booking_card_text(card, locale=_locale()))
+                    await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=panel)
                     return
                 await callback.answer(i18n.t("patient.booking.finalize.invalid_state", _locale()), show_alert=True)
                 return
@@ -1363,9 +1368,9 @@ def make_router(
             booking_id=booking_id,
         )
         if isinstance(result, OrchestrationSuccess):
-            card = booking_flow.build_booking_card(booking=result.entity)
+            panel = _render_patient_booking_panel(booking=result.entity, session_state_token=callback_session_id, locale=_locale())
             session_id = (await _load_flow_state(callback.from_user.id)).booking_session_id
-            await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=_render_booking_card_text(card, locale=_locale()))
+            await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=panel)
             return
         await callback.answer(i18n.t("patient.booking.finalize.invalid_state", _locale()), show_alert=True)
 
@@ -1486,9 +1491,9 @@ def make_router(
             booking_id=booking_id,
         )
         if isinstance(result, OrchestrationSuccess):
-            card = booking_flow.build_booking_card(booking=result.entity)
+            panel = _render_patient_booking_panel(booking=result.entity, session_state_token=callback_session_id, locale=_locale())
             session_id = (await _load_flow_state(callback.from_user.id)).booking_session_id
-            await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=_render_booking_card_text(card, locale=_locale()))
+            await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=panel)
             return
         await callback.answer(i18n.t("patient.booking.finalize.invalid_state", _locale()), show_alert=True)
 
@@ -1608,16 +1613,22 @@ def make_router(
             return
         await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=session_id, text=i18n.t("patient.booking.resume.terminal", _locale()))
 
-    def _render_booking_card_text(card: BookingCardView, *, locale: str) -> str:
-        return i18n.t("patient.booking.card", locale).format(
-            booking_id=card.booking_id,
-            doctor=card.doctor_label,
-            service=card.service_label,
-            datetime=card.datetime_label,
-            branch=card.branch_label,
-            status=i18n.t(card.status_label, locale),
-            next_step=i18n.t(card.next_step_key, locale),
+    def _render_patient_booking_panel(*, booking, session_state_token: str, locale: str) -> str:
+        snapshot = booking_flow.build_booking_snapshot(
+            booking=booking,
+            role_variant="patient",
+            state_token=session_state_token,
+            patient_label="You",
         )
+        seed = booking_builder.build_seed(snapshot=snapshot, i18n=i18n, locale=locale)
+        shell = BookingCardAdapter.build(
+            seed=seed,
+            source=SourceRef(context=SourceContext.BOOKING_LIST, source_ref="patient_my_booking"),
+            i18n=i18n,
+            locale=locale,
+            mode=CardMode.EXPANDED,
+        )
+        return CardShellRenderer.to_panel(shell).text
 
     async def _show_existing_booking_result(message: Message, *, actor_id: int, result: BookingControlResolutionResult) -> None:
         locale = _locale()
@@ -1637,7 +1648,6 @@ def make_router(
             await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=effective_session_id, text=i18n.t("patient.booking.finalize.invalid_state", locale))
             return
         booking = result.bookings[0]
-        card = booking_flow.build_booking_card(booking=booking)
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 *(
@@ -1712,7 +1722,7 @@ def make_router(
             actor_id=actor_id,
             message=message,
             session_id=effective_session_id,
-            text=_render_booking_card_text(card, locale=locale),
+            text=_render_patient_booking_panel(booking=booking, session_state_token=effective_session_id, locale=locale),
             keyboard=keyboard,
         )
 

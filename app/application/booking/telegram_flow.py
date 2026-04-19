@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.application.booking.orchestration import BookingOrchestrationService
 from app.application.booking.orchestration_outcomes import (
@@ -17,6 +18,7 @@ from app.application.booking.orchestration_outcomes import (
 from app.application.clinic_reference import ClinicReferenceService
 from app.domain.booking import AdminEscalation, AvailabilitySlot, Booking, BookingSession
 from app.domain.clinic_reference.models import Branch, Doctor, Service
+from app.interfaces.cards import BookingRuntimeSnapshot
 
 ACTIVE_SESSION_STATUSES: tuple[str, ...] = (
     "initiated",
@@ -454,14 +456,48 @@ class BookingPatientFlowService:
         branch = self._branch_by_id(booking.clinic_id).get(booking.branch_id or "")
         doctor = self._doctor_by_id(booking.clinic_id).get(booking.doctor_id)
         service = self._service_by_id(booking.clinic_id).get(booking.service_id)
+        timezone_name = self._resolve_timezone_name(clinic_id=booking.clinic_id, branch_id=booking.branch_id)
+        zone = self._zone_or_utc(timezone_name)
         return BookingCardView(
             booking_id=booking.booking_id,
             doctor_label=doctor.display_name if doctor else booking.doctor_id,
             service_label=self._service_label(service, booking.service_id),
-            datetime_label=booking.scheduled_start_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            datetime_label=booking.scheduled_start_at.astimezone(zone).strftime("%Y-%m-%d %H:%M %Z"),
             branch_label=branch.display_name if branch else (booking.branch_id or "-"),
             status_label=f"booking.status.{booking.status}",
             next_step_key=self._next_step_key_for_booking(booking.status),
+        )
+
+    def build_booking_snapshot(
+        self,
+        *,
+        booking: Booking,
+        role_variant: str,
+        state_token: str | None = None,
+        patient_label: str | None = None,
+        patient_contact: str | None = None,
+        chart_summary_entry: str | None = None,
+        recommendation_summary: str | None = None,
+        care_order_summary: str | None = None,
+    ) -> BookingRuntimeSnapshot:
+        card = self.build_booking_card(booking=booking)
+        return BookingRuntimeSnapshot(
+            booking_id=booking.booking_id,
+            state_token=state_token or booking.booking_id,
+            role_variant=role_variant,
+            scheduled_start_at=booking.scheduled_start_at,
+            timezone_name=self._resolve_timezone_name(clinic_id=booking.clinic_id, branch_id=booking.branch_id),
+            patient_label=patient_label or booking.patient_id,
+            doctor_label=card.doctor_label,
+            service_label=card.service_label,
+            branch_label=card.branch_label,
+            status=booking.status,
+            source_channel=booking.source_channel,
+            patient_contact=patient_contact,
+            chart_summary_entry=chart_summary_entry,
+            recommendation_summary=recommendation_summary,
+            care_order_summary=care_order_summary,
+            next_step_note_key=card.next_step_key,
         )
 
     async def get_admin_escalation_detail(self, *, clinic_id: str, escalation_id: str) -> AdminEscalation | None:
@@ -580,3 +616,19 @@ class BookingPatientFlowService:
         if not matched:
             return None
         return sorted(matched, key=lambda row: row.updated_at, reverse=True)[0]
+
+    def _resolve_timezone_name(self, *, clinic_id: str, branch_id: str | None) -> str:
+        if branch_id:
+            branch = self._branch_by_id(clinic_id).get(branch_id)
+            if branch and branch.timezone:
+                return branch.timezone
+        clinic = self.reference.get_clinic(clinic_id)
+        if clinic and clinic.timezone:
+            return clinic.timezone
+        return "UTC"
+
+    def _zone_or_utc(self, timezone_name: str) -> ZoneInfo:
+        try:
+            return ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError:
+            return ZoneInfo("UTC")

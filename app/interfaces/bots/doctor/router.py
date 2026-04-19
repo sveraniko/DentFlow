@@ -96,6 +96,18 @@ def make_router(
     )
     booking_builder = BookingRuntimeViewBuilder()
 
+    def _resolve_booking_timezone(*, clinic_id: str, branch_id: str | None) -> str:
+        if reference_service is None:
+            return "UTC"
+        if branch_id:
+            branch = next((row for row in reference_service.list_branches(clinic_id) if row.branch_id == branch_id), None)
+            if branch and branch.timezone:
+                return branch.timezone
+        clinic = reference_service.get_clinic(clinic_id)
+        if clinic and clinic.timezone:
+            return clinic.timezone
+        return "UTC"
+
     async def _encode_booking_callback(*, booking_id: str, action: CardAction, page_or_index: str) -> str:
         if card_callback_codec is None:
             return f"doctorbk:{page_or_index}:{booking_id}"
@@ -123,7 +135,7 @@ def make_router(
                 state_token=detail.booking_id,
                 role_variant="doctor",
                 scheduled_start_at=booking.scheduled_start_at,
-                timezone_name="UTC",
+                timezone_name=_resolve_booking_timezone(clinic_id=booking.clinic_id, branch_id=booking.branch_id),
                 patient_label=detail.patient_card.display_name,
                 doctor_label=booking.doctor_id,
                 service_label=detail.service_label,
@@ -155,6 +167,22 @@ def make_router(
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.recommendation", locale), callback_data=await _encode_booking_callback(booking_id=detail.booking_id, action=CardAction.OPEN_RECOMMENDATION, page_or_index="open_recommendation"))])
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.care_order", locale), callback_data=await _encode_booking_callback(booking_id=detail.booking_id, action=CardAction.OPEN_CARE_ORDER, page_or_index="open_care_order"))])
         return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    async def _doctor_linked_back_keyboard(*, booking_id: str, locale: str) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("common.back", locale),
+                        callback_data=await _encode_booking_callback(
+                            booking_id=booking_id,
+                            action=CardAction.OPEN,
+                            page_or_index="open_booking",
+                        ),
+                    )
+                ]
+            ]
+        )
 
     async def _resolve_doctor_context(message: Message) -> tuple[str | None, str, str | None]:
         locale = await resolve_locale(message, access_resolver=access_resolver, fallback_locale=default_locale)
@@ -521,21 +549,51 @@ def make_router(
         elif decoded.page_or_index == "open_patient":
             card = await operations.build_patient_quick_card(patient_id=detail.patient_card.patient_id, doctor_id=doctor_id)
             if card:
-                await callback.message.answer(i18n.t("doctor.patient.quick.card", locale).format(patient_id=card.patient_id, display_name=card.display_name, patient_number=card.patient_number or "-", phone_hint=card.phone_hint or "-", has_photo=i18n.t("common.yes", locale) if card.has_photo else i18n.t("common.no", locale), flags=card.active_flags_summary or "-", next_booking=card.upcoming_booking_snippet or "-"))
+                await callback.message.edit_text(
+                    i18n.t("doctor.patient.quick.card", locale).format(
+                        patient_id=card.patient_id,
+                        display_name=card.display_name,
+                        patient_number=card.patient_number or "-",
+                        phone_hint=card.phone_hint or "-",
+                        has_photo=i18n.t("common.yes", locale) if card.has_photo else i18n.t("common.no", locale),
+                        flags=card.active_flags_summary or "-",
+                        next_booking=card.upcoming_booking_snippet or "-",
+                    ),
+                    reply_markup=await _doctor_linked_back_keyboard(booking_id=detail.booking_id, locale=locale),
+                )
             return
         elif decoded.page_or_index == "open_chart":
             chart = await operations.open_chart_summary(doctor_id=doctor_id, clinic_id=clinic_id, patient_id=detail.patient_card.patient_id)
             if chart:
-                await callback.message.answer(i18n.t("doctor.chart.summary.card", locale).format(chart_id=chart.chart_id, patient_id=chart.patient_id, status=chart.status, diagnosis=chart.latest_diagnosis_text or "-", plan=chart.latest_treatment_plan_text or "-", note=chart.latest_note_snippet or "-", note_count=chart.note_count, imaging_count=chart.imaging_count, updated_at=chart.updated_at_label))
+                await callback.message.edit_text(
+                    i18n.t("doctor.chart.summary.card", locale).format(
+                        chart_id=chart.chart_id,
+                        patient_id=chart.patient_id,
+                        status=chart.status,
+                        diagnosis=chart.latest_diagnosis_text or "-",
+                        plan=chart.latest_treatment_plan_text or "-",
+                        note=chart.latest_note_snippet or "-",
+                        note_count=chart.note_count,
+                        imaging_count=chart.imaging_count,
+                        updated_at=chart.updated_at_label,
+                    ),
+                    reply_markup=await _doctor_linked_back_keyboard(booking_id=detail.booking_id, locale=locale),
+                )
             return
         elif decoded.page_or_index == "open_recommendation":
             if recommendation_service is None:
                 return
             recs = await recommendation_service.list_for_patient(patient_id=detail.patient_card.patient_id, include_terminal=False)
-            await callback.message.answer(recs[0].title if recs else "-")
+            await callback.message.edit_text(
+                recs[0].title if recs else "-",
+                reply_markup=await _doctor_linked_back_keyboard(booking_id=detail.booking_id, locale=locale),
+            )
             return
         elif decoded.page_or_index == "open_care_order":
-            await callback.message.answer(f"/care_orders patient:{detail.patient_card.patient_id}")
+            await callback.message.edit_text(
+                f"care_order :: patient={detail.patient_card.patient_id}",
+                reply_markup=await _doctor_linked_back_keyboard(booking_id=detail.booking_id, locale=locale),
+            )
             return
         if detail is None:
             await callback.answer(i18n.t("doctor.booking.open.missing", locale), show_alert=True)

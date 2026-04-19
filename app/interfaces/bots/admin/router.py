@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import timezone
-
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -20,7 +18,6 @@ from app.interfaces.bots.voice_search import attach_voice_search_handlers
 from app.interfaces.cards import CardCallbackCodec, CardRuntimeCoordinator
 from app.interfaces.cards import (
     BookingCardAdapter,
-    BookingRuntimeSnapshot,
     BookingRuntimeViewBuilder,
     CardAction,
     CardCallback,
@@ -100,21 +97,7 @@ def make_router(
         )
 
     def _render_admin_booking_panel(*, booking, locale: str) -> str:
-        snapshot = BookingRuntimeSnapshot(
-            booking_id=booking.booking_id,
-            state_token=booking.booking_id,
-            role_variant="admin",
-            scheduled_start_at=booking.scheduled_start_at,
-            timezone_name="UTC",
-            patient_label=booking.patient_id,
-            doctor_label=booking_flow.build_booking_card(booking=booking).doctor_label,
-            service_label=booking_flow.build_booking_card(booking=booking).service_label,
-            branch_label=booking.branch_id or "-",
-            status=booking.status,
-            source_channel=booking.source_channel,
-            patient_contact=None,
-            next_step_note_key=booking_flow.build_booking_card(booking=booking).next_step_key,
-        )
+        snapshot = booking_flow.build_booking_snapshot(booking=booking, role_variant="admin")
         seed = booking_builder.build_seed(snapshot=snapshot, i18n=i18n, locale=locale)
         shell = BookingCardAdapter.build(
             seed=seed,
@@ -124,6 +107,22 @@ def make_router(
             mode=CardMode.EXPANDED,
         )
         return CardShellRenderer.to_panel(shell).text
+
+    async def _admin_linked_back_keyboard(*, booking_id: str, locale: str) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("common.back", locale),
+                        callback_data=await _encode_booking_callback(
+                            booking_id=booking_id,
+                            action=CardAction.OPEN,
+                            page_or_index="open_booking",
+                        ),
+                    )
+                ]
+            ]
+        )
 
     async def _admin_booking_keyboard(*, booking, locale: str) -> InlineKeyboardMarkup:
         rows: list[list[InlineKeyboardButton]] = []
@@ -606,19 +605,45 @@ def make_router(
             if result.kind == "success":
                 booking = result.entity
         elif decoded.page_or_index == "open_patient":
-            await callback.answer()
-            await callback.message.answer(i18n.t("doctor.patient.quick.card", locale).format(patient_id=booking.patient_id, display_name=booking.patient_id, patient_number="-", phone_hint="-", has_photo=i18n.t("common.no", locale), flags="-", next_booking=booking.booking_id))
+            await callback.message.edit_text(
+                i18n.t("doctor.patient.quick.card", locale).format(
+                    patient_id=booking.patient_id,
+                    display_name=booking.patient_id,
+                    patient_number="-",
+                    phone_hint="-",
+                    has_photo=i18n.t("common.no", locale),
+                    flags="-",
+                    next_booking=booking.booking_id,
+                ),
+                reply_markup=await _admin_linked_back_keyboard(booking_id=booking.booking_id, locale=locale),
+            )
             return
         elif decoded.page_or_index == "open_chart":
-            await callback.answer(i18n.t("admin.booking.open.panel", locale).format(booking_id=booking.booking_id, doctor=booking.doctor_id, service=booking.service_id, datetime=booking.scheduled_start_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"), branch=booking.branch_id or "-", status=i18n.t(f"booking.status.{booking.status}", locale), next_step=i18n.t("patient.booking.card.next.default", locale)), show_alert=True)
+            snapshot = booking_flow.build_booking_snapshot(booking=booking, role_variant="admin")
+            await callback.message.edit_text(
+                i18n.t("admin.booking.open.panel", locale).format(
+                    booking_id=booking.booking_id,
+                    doctor=snapshot.doctor_label,
+                    service=snapshot.service_label,
+                    datetime=booking_builder.build_seed(snapshot=snapshot, i18n=i18n, locale=locale).datetime_label,
+                    branch=snapshot.branch_label,
+                    status=i18n.t(f"booking.status.{booking.status}", locale),
+                    next_step=i18n.t("patient.booking.card.next.default", locale),
+                ),
+                reply_markup=await _admin_linked_back_keyboard(booking_id=booking.booking_id, locale=locale),
+            )
             return
         elif decoded.page_or_index == "open_recommendation":
-            await callback.answer()
-            await callback.message.answer(f"/recommendations patient:{booking.patient_id}")
+            await callback.message.edit_text(
+                f"recommendation :: patient={booking.patient_id}",
+                reply_markup=await _admin_linked_back_keyboard(booking_id=booking.booking_id, locale=locale),
+            )
             return
         elif decoded.page_or_index == "open_care_order":
-            await callback.answer()
-            await callback.message.answer(f"/care_orders patient:{booking.patient_id}")
+            await callback.message.edit_text(
+                f"care_order :: patient={booking.patient_id}",
+                reply_markup=await _admin_linked_back_keyboard(booking_id=booking.booking_id, locale=locale),
+            )
             return
         await callback.message.edit_text(_render_admin_booking_panel(booking=booking, locale=locale), reply_markup=await _admin_booking_keyboard(booking=booking, locale=locale))
 
