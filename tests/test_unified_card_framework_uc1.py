@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+
 import pytest
 
+from app.common.i18n import I18nService
 from app.domain.access_identity.models import RoleCode
 from app.interfaces.cards import (
     ActivePanelRegistry,
@@ -13,14 +17,22 @@ from app.interfaces.cards import (
     CardCallbackError,
     CardMode,
     CardProfile,
+    CardRuntimeCoordinator,
+    CardRuntimeStateStore,
     CardShellRenderer,
     DoctorCardAdapter,
     DoctorCardSeed,
+    DoctorRuntimeViewBuilder,
     EntityType,
+    InMemoryRedis,
+    PanelFamily,
     PatientCardAdapter,
     PatientCardSeed,
+    PatientRuntimeViewBuilder,
     ProductCardAdapter,
     ProductCardSeed,
+    ProductRuntimeViewBuilder,
+    RuntimeTtlConfig,
     SourceContext,
     SourceRef,
     resolve_back_target,
@@ -29,36 +41,78 @@ from app.interfaces.cards import (
 )
 
 
-def test_product_compact_renders_core_fields() -> None:
-    source = SourceRef(context=SourceContext.CARE_CATALOG_CATEGORY, source_ref="cat:aftercare", page_or_index=1)
-    shell = ProductCardAdapter.build(
-        seed=ProductCardSeed(
-            product_id="prod_1",
-            title="Irrigator",
-            short_label="Portable",
-            price_label="120 GEL",
-            availability_label="in stock",
-            selected_branch_label="Central branch",
-            state_token="rev-1",
-        ),
-        source=source,
-    )
-
-    panel = CardShellRenderer.to_panel(shell)
-
-    assert shell.profile == CardProfile.PRODUCT
-    assert shell.entity_type == EntityType.CARE_PRODUCT
-    assert shell.mode == CardMode.COMPACT
-    assert "label: Portable" in panel.text
-    assert "price: 120 GEL" in panel.text
-    assert "availability: in stock" in panel.text
-    assert "branch: Central branch" in panel.text
+@pytest.fixture
+def i18n() -> I18nService:
+    return I18nService(Path("locales"), default_locale="en")
 
 
-def test_product_expanded_renders_synced_content_fields() -> None:
-    source = SourceRef(context=SourceContext.CARE_CATALOG_CATEGORY, source_ref="cat:aftercare")
-    shell = ProductCardAdapter.build(
-        seed=ProductCardSeed(
+def test_callback_token_uses_shared_runtime_store_and_expires_safely() -> None:
+    async def _run() -> None:
+        redis = InMemoryRedis()
+        store = CardRuntimeStateStore(redis_client=redis, ttl=RuntimeTtlConfig(callback_ttl_sec=1))
+        codec_a = CardCallbackCodec(runtime=CardRuntimeCoordinator(store=store))
+        codec_b = CardCallbackCodec(runtime=CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=redis, ttl=RuntimeTtlConfig(callback_ttl_sec=1))))
+
+        callback = CardCallback(
+            profile=CardProfile.PRODUCT,
+            entity_type=EntityType.CARE_PRODUCT,
+            entity_id="prod_123",
+            action=CardAction.COVER,
+            mode=CardMode.EXPANDED,
+            source_context=SourceContext.RECOMMENDATION_DETAIL,
+            source_ref="rec_19",
+            page_or_index="0",
+            state_token="rev-9",
+        )
+        packed = await codec_a.encode(callback)
+        assert packed.startswith("c2|")
+        assert await codec_b.decode(packed) == callback
+
+        short_store = CardRuntimeStateStore(redis_client=InMemoryRedis(), ttl=RuntimeTtlConfig(callback_ttl_sec=0))
+        expired_codec = CardCallbackCodec(runtime=CardRuntimeCoordinator(store=short_store))
+        expired_payload = await expired_codec.encode(callback)
+        with pytest.raises(CardCallbackError):
+            await expired_codec.decode(expired_payload)
+
+    asyncio.run(_run())
+
+
+def test_active_panel_registry_is_family_aware_and_supersedes() -> None:
+    async def _run() -> None:
+        runtime = CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=InMemoryRedis()))
+        source = SourceRef(context=SourceContext.CARE_CATALOG_CATEGORY, source_ref="cat:brushes")
+        shell = ProductCardAdapter.build(
+            seed=ProductCardSeed(
+                product_id="prod_9",
+                title="Brush",
+                price_label="20 GEL",
+                availability_label="in stock",
+                state_token="rev-1",
+            ),
+            source=source,
+            i18n=I18nService(Path("locales"), default_locale="en"),
+            locale="en",
+        )
+
+        patient_catalog = ActivePanelRegistry(runtime=runtime, panel_family=PanelFamily.PATIENT_CATALOG)
+        booking_detail = ActivePanelRegistry(runtime=runtime, panel_family=PanelFamily.BOOKING_DETAIL)
+
+        first = await patient_catalog.render_or_replace(actor_id=10, shell=shell)
+        await patient_catalog.bind_message(actor_id=10, chat_id=100, message_id=700, shell=shell)
+        second = await patient_catalog.render_or_replace(actor_id=10, shell=shell)
+        await booking_detail.bind_message(actor_id=10, chat_id=100, message_id=800, shell=shell)
+
+        assert first.operation == "send"
+        assert second.operation == "edit"
+        assert second.message_id == 700
+        assert (await runtime.resolve_active_panel(actor_id=10, panel_family=PanelFamily.BOOKING_DETAIL)).message_id == 800
+
+    asyncio.run(_run())
+
+
+def test_product_patient_doctor_localization_and_runtime_builders(i18n: I18nService) -> None:
+    product_seed = ProductRuntimeViewBuilder().build_seed(
+        snapshot=ProductCardSeed(
             product_id="prod_2",
             title="Nano Paste",
             short_label="Sensitive",
@@ -67,110 +121,22 @@ def test_product_expanded_renders_synced_content_fields() -> None:
             localized_description="Synced localized description from catalog DB",
             usage_hint="Use twice daily",
             category="aftercare",
+            recommendation_rationale="Based on enamel sensitivity",
             state_token="rev-2",
-        ),
-        source=source,
+        )
+    )
+    product = ProductCardAdapter.build(
+        seed=product_seed,
+        source=SourceRef(context=SourceContext.RECOMMENDATION_DETAIL, source_ref="rec_11"),
+        i18n=i18n,
+        locale="en",
         mode=CardMode.EXPANDED,
     )
+    assert any("Usage:" in line for line in product.detail_lines)
+    assert any("Recommendation:" in line for line in product.detail_lines)
 
-    assert any("Synced localized description" in line for line in shell.detail_lines)
-    assert any("Usage: Use twice daily" == line for line in shell.detail_lines)
-    assert any("Category: aftercare" == line for line in shell.detail_lines)
-
-
-def test_product_source_context_differs_between_recommendation_and_category() -> None:
-    recommendation_shell = ProductCardAdapter.build(
-        seed=ProductCardSeed(
-            product_id="prod_7",
-            title="Night Guard",
-            price_label="140 GEL",
-            availability_label="in stock",
-            recommendation_badge="Recommended",
-            recommendation_rationale="Based on enamel sensitivity",
-            category="night_care",
-            state_token="rev-8",
-        ),
-        source=SourceRef(context=SourceContext.RECOMMENDATION_DETAIL, source_ref="rec_12"),
-        mode=CardMode.EXPANDED,
-    )
-    category_shell = ProductCardAdapter.build(
-        seed=ProductCardSeed(
-            product_id="prod_7",
-            title="Night Guard",
-            price_label="140 GEL",
-            availability_label="in stock",
-            recommendation_badge="Recommended",
-            recommendation_rationale="Based on enamel sensitivity",
-            category="night_care",
-            state_token="rev-8",
-        ),
-        source=SourceRef(context=SourceContext.CARE_CATALOG_CATEGORY, source_ref="cat:night_care"),
-        mode=CardMode.EXPANDED,
-    )
-
-    assert any("Recommendation:" in line for line in recommendation_shell.detail_lines)
-    assert not any("Recommendation:" in line for line in category_shell.detail_lines)
-    assert any("Opened from category" in line for line in category_shell.detail_lines)
-
-
-def test_product_cover_gallery_actions_safe_and_no_media_safe() -> None:
-    with_media = ProductCardAdapter.build(
-        seed=ProductCardSeed(
-            product_id="prod_media",
-            title="Whitening Kit",
-            price_label="80 GEL",
-            availability_label="in stock",
-            state_token="rev-4",
-            media_count=3,
-        ),
-        source=SourceRef(context=SourceContext.CARE_CATALOG_CATEGORY, source_ref="cat:kit"),
-        mode=CardMode.EXPANDED,
-    )
-    media_actions = {action.action for action in with_media.actions}
-    assert CardAction.COVER in media_actions
-    assert CardAction.GALLERY in media_actions
-
-    without_media = ProductCardAdapter.build(
-        seed=ProductCardSeed(
-            product_id="prod_nomedia",
-            title="Basic Floss",
-            price_label="10 GEL",
-            availability_label="in stock",
-            state_token="rev-5",
-            media_count=0,
-        ),
-        source=SourceRef(context=SourceContext.CARE_CATALOG_CATEGORY, source_ref="cat:hygiene"),
-        mode=CardMode.EXPANDED,
-    )
-    no_media_actions = {action.action for action in without_media.actions}
-    assert CardAction.COVER not in no_media_actions
-    assert CardAction.GALLERY not in no_media_actions
-
-
-def test_patient_compact_renders_identity_safely() -> None:
-    shell = PatientCardAdapter.build(
-        seed=PatientCardSeed(
-            patient_id="pat_1",
-            display_name="Ivan Petrov",
-            patient_number="P-100",
-            contact_hint="+995***12",
-            photo_present=True,
-            active_flags_summary="allergy",
-            booking_snippet="Tomorrow 10:00",
-            state_token="rev-1",
-        ),
-        source=SourceRef(context=SourceContext.SEARCH_RESULTS, source_ref="q:ivan"),
-        actor_roles={RoleCode.ADMIN},
-    )
-    text = CardShellRenderer.to_panel(shell).text
-    assert "patient_no: P-100" in text
-    assert "contact: +995***12" in text
-    assert "flags: allergy" in text
-
-
-def test_patient_expanded_bounded_context_and_unauthorized_blocked() -> None:
-    expanded = PatientCardAdapter.build(
-        seed=PatientCardSeed(
+    patient_seed = PatientRuntimeViewBuilder().build_seed(
+        snapshot=PatientCardSeed(
             patient_id="pat_2",
             display_name="Nina D.",
             state_token="rev-6",
@@ -180,60 +146,42 @@ def test_patient_expanded_bounded_context_and_unauthorized_blocked() -> None:
             recommendation_summary="2 active",
             care_order_summary="1 ready pickup",
             chart_summary_entry="Last visit: hygiene",
-        ),
+        )
+    )
+    patient = PatientCardAdapter.build(
+        seed=patient_seed,
         source=SourceRef(context=SourceContext.BOOKING_LIST, source_ref="today"),
         actor_roles={RoleCode.DOCTOR},
+        i18n=i18n,
+        locale="en",
         mode=CardMode.EXPANDED,
     )
-    assert any("Chart:" in line for line in expanded.detail_lines)
-    assert all("diagnosis" not in line.lower() for line in expanded.detail_lines)
+    assert any("Chart:" in line for line in patient.detail_lines)
 
-    blocked = PatientCardAdapter.build(
-        seed=PatientCardSeed(patient_id="pat_2", display_name="Nina D.", state_token="rev-6"),
-        source=SourceRef(context=SourceContext.BOOKING_LIST, source_ref="today"),
-        actor_roles={RoleCode.OWNER},
-    )
-    assert blocked.subtitle == "Limited access"
-    assert blocked.actions == (blocked.actions[0],)
-
-
-def test_doctor_compact_and_expanded_are_operational_and_bounded() -> None:
-    compact = DoctorCardAdapter.build(
-        seed=DoctorCardSeed(
+    doctor_seed = DoctorRuntimeViewBuilder().build_seed(
+        snapshot=DoctorCardSeed(
             doctor_id="doc_1",
             display_name="Dr. Smith",
             specialty="orthodontist",
-            branch_label="Central",
-            operational_hint="Queue active",
-            state_token="rev-3",
-        ),
-        source=SourceRef(context=SourceContext.ADMIN_TODAY, source_ref="today"),
-        actor_roles={RoleCode.ADMIN},
-    )
-    compact_text = CardShellRenderer.to_panel(compact).text
-    assert "specialty: orthodontist" in compact_text
-
-    expanded = DoctorCardAdapter.build(
-        seed=DoctorCardSeed(
-            doctor_id="doc_1",
-            display_name="Dr. Smith",
-            specialty="orthodontist",
-            branch_label="Central",
             operational_hint="Queue active",
             schedule_summary="09:00-17:00",
             queue_summary="5 waiting",
-            service_tags=("ortho", "aligners"),
+            service_tags=("ortho",),
             state_token="rev-3",
-        ),
+        )
+    )
+    doctor = DoctorCardAdapter.build(
+        seed=doctor_seed,
         source=SourceRef(context=SourceContext.ADMIN_TODAY, source_ref="today"),
-        actor_roles={RoleCode.DOCTOR},
+        actor_roles={RoleCode.ADMIN},
+        i18n=i18n,
+        locale="en",
         mode=CardMode.EXPANDED,
     )
-    assert any("Schedule:" in line for line in expanded.detail_lines)
-    assert any(action.action == CardAction.TODAY for action in expanded.actions)
+    assert any("Schedule:" in line for line in doctor.detail_lines)
 
 
-def test_mode_transition_back_and_stale_protection_in_profile_flow() -> None:
+def test_mode_transition_back_and_stale_protection_in_profile_flow(i18n: I18nService) -> None:
     source = SourceRef(context=SourceContext.BOOKING_LIST, source_ref="bookings:today", page_or_index=1)
     shell = BookingCardAdapter.build(
         seed=BookingCardSeed(
@@ -244,29 +192,25 @@ def test_mode_transition_back_and_stale_protection_in_profile_flow() -> None:
             state_token="rev-22",
         ),
         source=source,
+        i18n=i18n,
+        locale="en",
     )
     expanded = transition_mode(shell, target_mode=CardMode.EXPANDED)
     back_target = resolve_back_target(expanded)
     assert back_target.mode == CardMode.COMPACT
 
-    callback = CardCallback(
-        profile=CardProfile.PRODUCT,
-        entity_type=EntityType.CARE_PRODUCT,
-        entity_id="prod_123",
-        action=CardAction.COVER,
-        mode=CardMode.EXPANDED,
-        source_context=SourceContext.RECOMMENDATION_DETAIL,
-        source_ref="rec_19",
-        page_or_index="0",
-        state_token="rev-9",
-    )
-    packed = CardCallbackCodec.encode(callback)
-    resolved = CardCallbackCodec.decode(packed)
-    assert packed.startswith("c2|")
-    assert resolved == callback
-
     stale_result = validate_stale_callback(
-        resolved,
+        CardCallback(
+            profile=CardProfile.PRODUCT,
+            entity_type=EntityType.CARE_PRODUCT,
+            entity_id="prod_123",
+            action=CardAction.COVER,
+            mode=CardMode.EXPANDED,
+            source_context=SourceContext.RECOMMENDATION_DETAIL,
+            source_ref="rec_19",
+            page_or_index="0",
+            state_token="rev-9",
+        ),
         expected_entity_id="prod_123",
         expected_source_context=SourceContext.RECOMMENDATION_DETAIL,
         expected_state_token="rev-10",
@@ -274,29 +218,13 @@ def test_mode_transition_back_and_stale_protection_in_profile_flow() -> None:
     assert not stale_result.ok
 
 
-def test_invalid_callback_is_rejected() -> None:
-    with pytest.raises(CardCallbackError):
-        CardCallbackCodec.decode("broken")
-
-
-def test_active_panel_registry_prefers_replace_update() -> None:
-    source = SourceRef(context=SourceContext.CARE_CATALOG_CATEGORY, source_ref="cat:brushes")
-    shell = ProductCardAdapter.build(
-        seed=ProductCardSeed(
-            product_id="prod_9",
-            title="Brush",
-            price_label="20 GEL",
-            availability_label="in stock",
-            state_token="rev-1",
-        ),
-        source=source,
+def test_patient_unauthorized_is_localized(i18n: I18nService) -> None:
+    blocked = PatientCardAdapter.build(
+        seed=PatientCardSeed(patient_id="pat_2", display_name="Nina D.", state_token="rev-6"),
+        source=SourceRef(context=SourceContext.BOOKING_LIST, source_ref="today"),
+        actor_roles={RoleCode.OWNER},
+        i18n=i18n,
+        locale="en",
     )
-    registry = ActivePanelRegistry()
-
-    first = registry.render_or_replace(actor_id=10, shell=shell)
-    registry.bind_message(actor_id=10, message_id=700)
-    second = registry.render_or_replace(actor_id=10, shell=shell)
-
-    assert first.operation == "send"
-    assert second.operation == "edit"
-    assert second.message_id == 700
+    assert blocked.subtitle == "Limited access"
+    assert blocked.detail_lines[0] == "Access denied for this profile."

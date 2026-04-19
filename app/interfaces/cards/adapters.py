@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from app.domain.access_identity.models import RoleCode
 from app.interfaces.cards.models import (
@@ -16,6 +17,10 @@ from app.interfaces.cards.models import (
     SourceContext,
     SourceRef,
 )
+
+
+class CardLocalizer(Protocol):
+    def t(self, key: str, locale: str | None = None) -> str: ...
 
 
 @dataclass(slots=True, frozen=True)
@@ -73,9 +78,34 @@ class BookingCardSeed:
     state_token: str
 
 
+@dataclass(slots=True, frozen=True)
+class ProductRuntimeViewBuilder:
+    def build_seed(self, *, snapshot: ProductCardSeed) -> ProductCardSeed:
+        return snapshot
+
+
+@dataclass(slots=True, frozen=True)
+class PatientRuntimeViewBuilder:
+    def build_seed(self, *, snapshot: PatientCardSeed) -> PatientCardSeed:
+        return snapshot
+
+
+@dataclass(slots=True, frozen=True)
+class DoctorRuntimeViewBuilder:
+    def build_seed(self, *, snapshot: DoctorCardSeed) -> DoctorCardSeed:
+        return snapshot
+
+
 class ProductCardAdapter:
     @staticmethod
-    def build(*, seed: ProductCardSeed, source: SourceRef, mode: CardMode = CardMode.COMPACT) -> CardShell:
+    def build(
+        *,
+        seed: ProductCardSeed,
+        source: SourceRef,
+        i18n: CardLocalizer,
+        locale: str,
+        mode: CardMode = CardMode.COMPACT,
+    ) -> CardShell:
         badges: list[CardBadge] = []
         if seed.recommendation_badge and source.context == SourceContext.RECOMMENDATION_DETAIL:
             badges.append(CardBadge(seed.recommendation_badge))
@@ -94,32 +124,32 @@ class ProductCardAdapter:
             if seed.localized_description:
                 detail_lines.append(seed.localized_description)
             if seed.usage_hint:
-                detail_lines.append(f"Usage: {seed.usage_hint}")
+                detail_lines.append(i18n.t("card.product.detail.usage", locale).format(value=seed.usage_hint))
             if seed.category:
-                detail_lines.append(f"Category: {seed.category}")
+                detail_lines.append(i18n.t("card.product.detail.category", locale).format(value=seed.category))
             if source.context == SourceContext.RECOMMENDATION_DETAIL and seed.recommendation_rationale:
-                detail_lines.append(f"Recommendation: {seed.recommendation_rationale}")
+                detail_lines.append(i18n.t("card.product.detail.recommendation", locale).format(value=seed.recommendation_rationale))
             if source.context == SourceContext.CARE_CATALOG_CATEGORY and seed.category:
-                detail_lines.append(f"Opened from category: {seed.category}")
+                detail_lines.append(i18n.t("card.product.detail.opened_from_category", locale).format(value=seed.category))
 
         actions: list[CardActionButton] = []
         actions.append(
-            CardActionButton(action=CardAction.EXPAND, label="Подробнее")
+            CardActionButton(action=CardAction.EXPAND, label=i18n.t("card.action.expand", locale))
             if mode == CardMode.COMPACT
-            else CardActionButton(action=CardAction.COLLAPSE, label="Свернуть")
+            else CardActionButton(action=CardAction.COLLAPSE, label=i18n.t("card.action.collapse", locale))
         )
         if mode == CardMode.EXPANDED:
             actions.extend(
                 [
-                    CardActionButton(action=CardAction.RESERVE, label="Забрать в клинике"),
-                    CardActionButton(action=CardAction.CHANGE_BRANCH, label="Сменить филиал"),
+                    CardActionButton(action=CardAction.RESERVE, label=i18n.t("card.product.action.reserve", locale)),
+                    CardActionButton(action=CardAction.CHANGE_BRANCH, label=i18n.t("card.product.action.change_branch", locale)),
                 ]
             )
             if seed.media_count > 0:
-                actions.append(CardActionButton(action=CardAction.COVER, label="Обложка"))
+                actions.append(CardActionButton(action=CardAction.COVER, label=i18n.t("card.action.cover", locale)))
             if seed.media_count > 1:
-                actions.append(CardActionButton(action=CardAction.GALLERY, label="Галерея"))
-        actions.append(CardActionButton(action=CardAction.BACK, label="Назад"))
+                actions.append(CardActionButton(action=CardAction.GALLERY, label=i18n.t("card.action.gallery", locale)))
+        actions.append(CardActionButton(action=CardAction.BACK, label=i18n.t("common.back", locale)))
 
         return CardShell(
             profile=CardProfile.PRODUCT,
@@ -147,6 +177,8 @@ class PatientCardAdapter:
         seed: PatientCardSeed,
         source: SourceRef,
         actor_roles: set[RoleCode],
+        i18n: CardLocalizer,
+        locale: str,
         mode: CardMode = CardMode.COMPACT,
     ) -> CardShell:
         role_safe = bool(actor_roles.intersection(PatientCardAdapter._ALLOWED_ROLES))
@@ -157,11 +189,11 @@ class PatientCardAdapter:
                 entity_id=seed.patient_id,
                 mode=mode,
                 title=seed.display_name,
-                subtitle="Limited access",
+                subtitle=i18n.t("card.common.limited_access", locale),
                 source=source,
                 state_token=seed.state_token,
-                detail_lines=("Access denied for this profile.",),
-                actions=(CardActionButton(action=CardAction.BACK, label="Назад"),),
+                detail_lines=(i18n.t("card.common.access_denied", locale),),
+                actions=(CardActionButton(action=CardAction.BACK, label=i18n.t("common.back", locale)),),
             )
 
         meta_lines = []
@@ -178,27 +210,30 @@ class PatientCardAdapter:
         detail_lines: list[str] = []
         if mode == CardMode.EXPANDED:
             if seed.contact_block:
-                detail_lines.append(f"Contact: {seed.contact_block}")
+                detail_lines.append(i18n.t("card.patient.detail.contact", locale).format(value=seed.contact_block))
             if seed.active_flags_summary:
-                detail_lines.append(f"Flags: {seed.active_flags_summary}")
+                detail_lines.append(i18n.t("card.patient.detail.flags", locale).format(value=seed.active_flags_summary))
             if seed.booking_snippet:
-                detail_lines.append(f"Upcoming: {seed.booking_snippet}")
+                detail_lines.append(i18n.t("card.patient.detail.upcoming", locale).format(value=seed.booking_snippet))
             if source.context in {SourceContext.SEARCH_RESULTS, SourceContext.BOOKING_LIST} and seed.recommendation_summary:
-                detail_lines.append(f"Recommendations: {seed.recommendation_summary}")
+                detail_lines.append(i18n.t("card.patient.detail.recommendations", locale).format(value=seed.recommendation_summary))
             if seed.care_order_summary:
-                detail_lines.append(f"Orders: {seed.care_order_summary}")
+                detail_lines.append(i18n.t("card.patient.detail.orders", locale).format(value=seed.care_order_summary))
             if seed.chart_summary_entry:
-                detail_lines.append(f"Chart: {seed.chart_summary_entry}")
+                detail_lines.append(i18n.t("card.patient.detail.chart", locale).format(value=seed.chart_summary_entry))
 
         actions = [
-            CardActionButton(action=(CardAction.EXPAND if mode == CardMode.COMPACT else CardAction.COLLAPSE), label=("Подробнее" if mode == CardMode.COMPACT else "Свернуть")),
-            CardActionButton(action=CardAction.BOOKINGS, label="Записи"),
+            CardActionButton(
+                action=(CardAction.EXPAND if mode == CardMode.COMPACT else CardAction.COLLAPSE),
+                label=(i18n.t("card.action.expand", locale) if mode == CardMode.COMPACT else i18n.t("card.action.collapse", locale)),
+            ),
+            CardActionButton(action=CardAction.BOOKINGS, label=i18n.t("card.patient.action.bookings", locale)),
         ]
         if RoleCode.DOCTOR in actor_roles or RoleCode.ADMIN in actor_roles:
-            actions.append(CardActionButton(action=CardAction.RECOMMENDATIONS, label="Рекомендации"))
-            actions.append(CardActionButton(action=CardAction.CHART, label="Карта"))
-            actions.append(CardActionButton(action=CardAction.ORDERS, label="Заказы"))
-        actions.append(CardActionButton(action=CardAction.BACK, label="Назад"))
+            actions.append(CardActionButton(action=CardAction.RECOMMENDATIONS, label=i18n.t("card.patient.action.recommendations", locale)))
+            actions.append(CardActionButton(action=CardAction.CHART, label=i18n.t("card.patient.action.chart", locale)))
+            actions.append(CardActionButton(action=CardAction.ORDERS, label=i18n.t("card.patient.action.orders", locale)))
+        actions.append(CardActionButton(action=CardAction.BACK, label=i18n.t("common.back", locale)))
 
         return CardShell(
             profile=CardProfile.PATIENT,
@@ -224,6 +259,8 @@ class DoctorCardAdapter:
         seed: DoctorCardSeed,
         source: SourceRef,
         actor_roles: set[RoleCode],
+        i18n: CardLocalizer,
+        locale: str,
         mode: CardMode = CardMode.COMPACT,
     ) -> CardShell:
         if not actor_roles.intersection(DoctorCardAdapter._ALLOWED_ROLES):
@@ -233,11 +270,11 @@ class DoctorCardAdapter:
                 entity_id=seed.doctor_id,
                 mode=mode,
                 title=seed.display_name,
-                subtitle="Limited access",
+                subtitle=i18n.t("card.common.limited_access", locale),
                 source=source,
                 state_token=seed.state_token,
-                detail_lines=("Access denied for this profile.",),
-                actions=(CardActionButton(action=CardAction.BACK, label="Назад"),),
+                detail_lines=(i18n.t("card.common.access_denied", locale),),
+                actions=(CardActionButton(action=CardAction.BACK, label=i18n.t("common.back", locale)),),
             )
 
         meta_lines = [CardMetaLine(key="specialty", value=seed.specialty)]
@@ -249,18 +286,21 @@ class DoctorCardAdapter:
         detail_lines: list[str] = []
         if mode == CardMode.EXPANDED:
             if seed.schedule_summary:
-                detail_lines.append(f"Schedule: {seed.schedule_summary}")
+                detail_lines.append(i18n.t("card.doctor.detail.schedule", locale).format(value=seed.schedule_summary))
             if seed.queue_summary:
-                detail_lines.append(f"Queue: {seed.queue_summary}")
+                detail_lines.append(i18n.t("card.doctor.detail.queue", locale).format(value=seed.queue_summary))
             if seed.service_tags:
-                detail_lines.append("Tags: " + ", ".join(seed.service_tags))
+                detail_lines.append(i18n.t("card.doctor.detail.tags", locale).format(value=", ".join(seed.service_tags)))
 
         actions = [
-            CardActionButton(action=(CardAction.EXPAND if mode == CardMode.COMPACT else CardAction.COLLAPSE), label=("Подробнее" if mode == CardMode.COMPACT else "Свернуть")),
-            CardActionButton(action=CardAction.TODAY, label="Сегодня"),
-            CardActionButton(action=CardAction.SCHEDULE, label="График"),
-            CardActionButton(action=CardAction.OPEN, label="Открыть"),
-            CardActionButton(action=CardAction.BACK, label="Назад"),
+            CardActionButton(
+                action=(CardAction.EXPAND if mode == CardMode.COMPACT else CardAction.COLLAPSE),
+                label=(i18n.t("card.action.expand", locale) if mode == CardMode.COMPACT else i18n.t("card.action.collapse", locale)),
+            ),
+            CardActionButton(action=CardAction.TODAY, label=i18n.t("card.doctor.action.today", locale)),
+            CardActionButton(action=CardAction.SCHEDULE, label=i18n.t("card.doctor.action.schedule", locale)),
+            CardActionButton(action=CardAction.OPEN, label=i18n.t("card.doctor.action.open", locale)),
+            CardActionButton(action=CardAction.BACK, label=i18n.t("common.back", locale)),
         ]
 
         return CardShell(
@@ -280,12 +320,12 @@ class DoctorCardAdapter:
 
 class BookingCardAdapter:
     @staticmethod
-    def build(*, seed: BookingCardSeed, source: SourceRef, mode: CardMode = CardMode.COMPACT) -> CardShell:
+    def build(*, seed: BookingCardSeed, source: SourceRef, i18n: CardLocalizer, locale: str, mode: CardMode = CardMode.COMPACT) -> CardShell:
         actions = (
-            CardActionButton(action=CardAction.EXPAND, label="Подробнее")
+            CardActionButton(action=CardAction.EXPAND, label=i18n.t("card.action.expand", locale))
             if mode == CardMode.COMPACT
-            else CardActionButton(action=CardAction.COLLAPSE, label="Свернуть"),
-            CardActionButton(action=CardAction.BACK, label="Назад"),
+            else CardActionButton(action=CardAction.COLLAPSE, label=i18n.t("card.action.collapse", locale)),
+            CardActionButton(action=CardAction.BACK, label=i18n.t("common.back", locale)),
         )
         return CardShell(
             profile=CardProfile.BOOKING,
@@ -297,6 +337,6 @@ class BookingCardAdapter:
             source=source,
             state_token=seed.state_token,
             meta_lines=(CardMetaLine(key="status", value=seed.status_label),),
-            detail_lines=((f"Time: {seed.datetime_label}",) if mode == CardMode.EXPANDED else ()),
+            detail_lines=((i18n.t("card.booking.detail.time", locale).format(value=seed.datetime_label),) if mode == CardMode.EXPANDED else ()),
             actions=actions,
         )
