@@ -82,6 +82,9 @@ def make_router(
     router = Router(name="admin_router")
     booking_builder = BookingRuntimeViewBuilder()
     admin_today_scope = "admin_today_filters"
+    admin_confirmations_scope = "admin_confirmations_filters"
+    admin_reschedules_scope = "admin_reschedules_filters"
+    admin_waitlist_scope = "admin_waitlist_filters"
 
     def _resolved_service_label(*, clinic_id: str, service_id: str, raw_label: str, locale: str) -> str:
         translated = i18n.t(raw_label, locale)
@@ -107,6 +110,44 @@ def make_router(
         translated = i18n.t(f"booking.status.{status}", locale)
         return translated if translated != f"booking.status.{status}" else status
 
+    def _localized_label(*, raw_label: str | None, locale: str) -> str:
+        if not raw_label:
+            return "-"
+        translated = i18n.t(raw_label, locale)
+        return translated if translated != raw_label else raw_label
+
+    def _status_label(*, status: str, locale: str) -> str:
+        translated = i18n.t(f"admin.queue.status.{status}", locale)
+        return translated if translated != f"admin.queue.status.{status}" else _status_chip(status=status, locale=locale)
+
+    def _confirmation_signal_label(*, signal: str, locale: str) -> str:
+        translated = i18n.t(f"admin.confirmations.signal.{signal}", locale)
+        return translated if translated != f"admin.confirmations.signal.{signal}" else signal
+
+    def _reminder_hint_label(*, reminder_state_summary: str | None, no_response_flag: bool, locale: str) -> str:
+        if no_response_flag:
+            return i18n.t("admin.confirmations.no_response", locale)
+        if not reminder_state_summary:
+            return i18n.t("admin.confirmations.hint.none", locale)
+        translated = i18n.t(f"admin.confirmations.reminder.{reminder_state_summary}", locale)
+        return translated if translated != f"admin.confirmations.reminder.{reminder_state_summary}" else reminder_state_summary
+
+    async def _load_queue_state(*, scope: str, actor_id: int, default_state: dict[str, str]) -> dict[str, str]:
+        if card_runtime is None:
+            return default_state
+        state = await card_runtime.resolve_actor_session_state(scope=scope, actor_id=actor_id)
+        if not state:
+            return default_state
+        merged = dict(default_state)
+        for key in default_state:
+            merged[key] = str(state.get(key) or default_state[key])
+        return merged
+
+    async def _save_queue_state(*, scope: str, actor_id: int, state: dict[str, str]) -> None:
+        if card_runtime is None:
+            return
+        await card_runtime.bind_actor_session_state(scope=scope, actor_id=actor_id, payload=state)
+
     async def _load_admin_today_state(*, actor_id: int) -> dict[str, str]:
         if card_runtime is None:
             return {"branch_id": "-", "doctor_id": "-", "status": "all", "page": "1", "state_token": "na"}
@@ -125,6 +166,173 @@ def make_router(
         if card_runtime is None:
             return
         await card_runtime.bind_actor_session_state(scope=admin_today_scope, actor_id=actor_id, payload=state)
+
+    async def _render_admin_confirmations(
+        *,
+        actor_id: int,
+        clinic_id: str,
+        locale: str,
+        state: dict[str, str],
+    ) -> tuple[str, InlineKeyboardMarkup]:
+        if admin_workdesk is None:
+            return i18n.t("common.placeholder", locale), InlineKeyboardMarkup(inline_keyboard=[])
+        rows = await admin_workdesk.get_confirmation_queue(
+            clinic_id=clinic_id,
+            only_no_response=(state.get("focus") == "no_response"),
+            limit=40,
+        )
+        lines = [i18n.t("admin.confirmations.title", locale)]
+        if not rows:
+            lines.append(i18n.t("admin.confirmations.empty", locale))
+        for row in rows[:15]:
+            lines.append(
+                i18n.t("admin.confirmations.row", locale).format(
+                    time=row.local_service_time,
+                    patient=row.patient_display_name,
+                    doctor=row.doctor_display_name,
+                    service=_localized_label(raw_label=row.service_label, locale=locale),
+                    branch=row.branch_label,
+                    signal=_confirmation_signal_label(signal=row.confirmation_signal, locale=locale),
+                    reminder=_reminder_hint_label(
+                        reminder_state_summary=row.reminder_state_summary,
+                        no_response_flag=row.no_response_flag,
+                        locale=locale,
+                    ),
+                )
+            )
+        token = f"{actor_id}-c-{len(rows)}-{state.get('focus', 'all')}"
+        next_state = dict(state)
+        next_state["state_token"] = token
+        await _save_queue_state(scope=admin_confirmations_scope, actor_id=actor_id, state=next_state)
+        controls = [
+            InlineKeyboardButton(
+                text=i18n.t("admin.confirmations.filter.no_response", locale),
+                callback_data=f"aw3:confirmations:focus:{token}",
+            )
+        ]
+        booking_rows = [
+            [
+                InlineKeyboardButton(
+                    text=f"{row.local_service_time} · {row.patient_display_name}",
+                    callback_data=await _encode_booking_callback(
+                        booking_id=row.booking_id,
+                        action=CardAction.OPEN,
+                        page_or_index=f"confirmations_open:{token}",
+                        source_context=SourceContext.ADMIN_CONFIRMATIONS,
+                        source_ref=f"admin_confirmations:{state.get('focus', 'all')}",
+                        state_token=token,
+                    ),
+                )
+            ]
+            for row in rows[:8]
+        ]
+        return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=[controls, *booking_rows])
+
+    async def _render_admin_reschedules(
+        *,
+        actor_id: int,
+        clinic_id: str,
+        locale: str,
+        state: dict[str, str],
+    ) -> tuple[str, InlineKeyboardMarkup]:
+        if admin_workdesk is None:
+            return i18n.t("common.placeholder", locale), InlineKeyboardMarkup(inline_keyboard=[])
+        rows = await admin_workdesk.get_reschedule_queue(clinic_id=clinic_id, limit=40)
+        lines = [i18n.t("admin.reschedules.title", locale)]
+        if not rows:
+            lines.append(i18n.t("admin.reschedules.empty", locale))
+        for row in rows[:15]:
+            if row.reschedule_context:
+                translated_context = i18n.t(f"admin.reschedules.context.{row.reschedule_context}", locale)
+                context = translated_context if translated_context != f"admin.reschedules.context.{row.reschedule_context}" else row.reschedule_context
+            else:
+                context = i18n.t("admin.reschedules.context.none", locale)
+            lines.append(
+                i18n.t("admin.reschedules.row", locale).format(
+                    time=row.local_service_time,
+                    patient=row.patient_display_name,
+                    doctor=row.doctor_display_name,
+                    service=_localized_label(raw_label=row.service_label, locale=locale),
+                    branch=row.branch_label,
+                    context=context,
+                )
+            )
+        token = f"{actor_id}-r-{len(rows)}"
+        next_state = dict(state)
+        next_state["state_token"] = token
+        await _save_queue_state(scope=admin_reschedules_scope, actor_id=actor_id, state=next_state)
+        booking_rows = [
+            [
+                InlineKeyboardButton(
+                    text=f"{row.local_service_time} · {row.patient_display_name}",
+                    callback_data=await _encode_booking_callback(
+                        booking_id=row.booking_id,
+                        action=CardAction.OPEN,
+                        page_or_index=f"reschedules_open:{token}",
+                        source_context=SourceContext.ADMIN_RESCHEDULES,
+                        source_ref="admin_reschedules",
+                        state_token=token,
+                    ),
+                )
+            ]
+            for row in rows[:8]
+        ]
+        return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=booking_rows)
+
+    async def _render_admin_waitlist(
+        *,
+        actor_id: int,
+        clinic_id: str,
+        locale: str,
+        state: dict[str, str],
+    ) -> tuple[str, InlineKeyboardMarkup]:
+        if admin_workdesk is None:
+            return i18n.t("common.placeholder", locale), InlineKeyboardMarkup(inline_keyboard=[])
+        status_filter = None if state.get("status", "active") == "all" else (state.get("status", "active"),)
+        rows = await admin_workdesk.get_waitlist_queue(clinic_id=clinic_id, statuses=status_filter, limit=40)
+        lines = [i18n.t("admin.waitlist.title", locale)]
+        if not rows:
+            lines.append(i18n.t("admin.waitlist.empty", locale))
+        for row in rows[:15]:
+            lines.append(
+                i18n.t("admin.waitlist.row", locale).format(
+                    patient=row.patient_display_name,
+                    doctor=row.doctor_display_name or i18n.t("admin.waitlist.preference.any", locale),
+                    service=row.service_label or i18n.t("admin.waitlist.preference.any", locale),
+                    window=row.preferred_time_window_summary or i18n.t("admin.waitlist.window.unspecified", locale),
+                    status=_status_label(status=row.status, locale=locale),
+                )
+            )
+        token = f"{actor_id}-w-{len(rows)}-{state.get('status', 'active')}"
+        next_state = dict(state)
+        next_state["state_token"] = token
+        await _save_queue_state(scope=admin_waitlist_scope, actor_id=actor_id, state=next_state)
+        controls = [
+            InlineKeyboardButton(
+                text=i18n.t("admin.waitlist.filter.status", locale),
+                callback_data=f"aw3:waitlist:status:{token}",
+            )
+        ]
+        row_buttons: list[list[InlineKeyboardButton]] = []
+        for row in rows[:8]:
+            row_buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"{row.patient_display_name} · {_status_label(status=row.status, locale=locale)}",
+                        callback_data=f"aw3w:open:{row.waitlist_entry_id}:{token}",
+                    )
+                ]
+            )
+            if row.status not in {"closed", "canceled"}:
+                row_buttons.append(
+                    [
+                        InlineKeyboardButton(
+                            text=f"{i18n.t('admin.waitlist.action.close', locale)} · {row.patient_display_name}",
+                            callback_data=f"aw3w:close:{row.waitlist_entry_id}:{token}",
+                        )
+                    ]
+                )
+        return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=[controls, *row_buttons])
 
     async def _render_admin_today(
         *,
@@ -286,7 +494,7 @@ def make_router(
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.chart", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.OPEN_CHART, page_or_index="open_chart", source_context=source_context, source_ref=source_ref, state_token=state_token))])
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.recommendation", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.OPEN_RECOMMENDATION, page_or_index="open_recommendation", source_context=source_context, source_ref=source_ref, state_token=state_token))])
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.care_order", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.OPEN_CARE_ORDER, page_or_index="open_care_order", source_context=source_context, source_ref=source_ref, state_token=state_token))])
-        if source_context == SourceContext.ADMIN_TODAY:
+        if source_context in {SourceContext.ADMIN_TODAY, SourceContext.ADMIN_CONFIRMATIONS, SourceContext.ADMIN_RESCHEDULES}:
             rows.append([InlineKeyboardButton(text=i18n.t("common.back", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.BACK, page_or_index=page_or_index, source_context=source_context, source_ref=source_ref, state_token=state_token))])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -748,6 +956,105 @@ def make_router(
         )
         await message.answer(text, reply_markup=keyboard)
 
+    @router.message(Command("admin_confirmations"))
+    async def admin_confirmations(message: Message) -> None:
+        allowed = await guard_roles(
+            message,
+            i18n=i18n,
+            access_resolver=access_resolver,
+            allowed_roles={RoleCode.ADMIN},
+            fallback_locale=default_locale,
+        )
+        if not allowed or not message.from_user:
+            return
+        actor_context = access_resolver.resolve_actor_context(message.from_user.id)
+        if not actor_context:
+            return
+        locale = await resolve_locale(
+            message,
+            access_resolver=access_resolver,
+            fallback_locale=default_locale,
+            clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
+        )
+        state = await _load_queue_state(
+            scope=admin_confirmations_scope,
+            actor_id=message.from_user.id,
+            default_state={"focus": "all", "state_token": "na"},
+        )
+        text, keyboard = await _render_admin_confirmations(
+            actor_id=message.from_user.id,
+            clinic_id=actor_context.clinic_id,
+            locale=locale,
+            state=state,
+        )
+        await message.answer(text, reply_markup=keyboard)
+
+    @router.message(Command("admin_reschedules"))
+    async def admin_reschedules(message: Message) -> None:
+        allowed = await guard_roles(
+            message,
+            i18n=i18n,
+            access_resolver=access_resolver,
+            allowed_roles={RoleCode.ADMIN},
+            fallback_locale=default_locale,
+        )
+        if not allowed or not message.from_user:
+            return
+        actor_context = access_resolver.resolve_actor_context(message.from_user.id)
+        if not actor_context:
+            return
+        locale = await resolve_locale(
+            message,
+            access_resolver=access_resolver,
+            fallback_locale=default_locale,
+            clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
+        )
+        state = await _load_queue_state(
+            scope=admin_reschedules_scope,
+            actor_id=message.from_user.id,
+            default_state={"state_token": "na"},
+        )
+        text, keyboard = await _render_admin_reschedules(
+            actor_id=message.from_user.id,
+            clinic_id=actor_context.clinic_id,
+            locale=locale,
+            state=state,
+        )
+        await message.answer(text, reply_markup=keyboard)
+
+    @router.message(Command("admin_waitlist"))
+    async def admin_waitlist(message: Message) -> None:
+        allowed = await guard_roles(
+            message,
+            i18n=i18n,
+            access_resolver=access_resolver,
+            allowed_roles={RoleCode.ADMIN},
+            fallback_locale=default_locale,
+        )
+        if not allowed or not message.from_user:
+            return
+        actor_context = access_resolver.resolve_actor_context(message.from_user.id)
+        if not actor_context:
+            return
+        locale = await resolve_locale(
+            message,
+            access_resolver=access_resolver,
+            fallback_locale=default_locale,
+            clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
+        )
+        state = await _load_queue_state(
+            scope=admin_waitlist_scope,
+            actor_id=message.from_user.id,
+            default_state={"status": "active", "state_token": "na"},
+        )
+        text, keyboard = await _render_admin_waitlist(
+            actor_id=message.from_user.id,
+            clinic_id=actor_context.clinic_id,
+            locale=locale,
+            state=state,
+        )
+        await message.answer(text, reply_markup=keyboard)
+
     @router.callback_query(F.data.startswith("aw2:"))
     async def admin_today_callback(callback: CallbackQuery) -> None:
         if not callback.from_user or not callback.data or not callback.message:
@@ -795,6 +1102,111 @@ def make_router(
         )
         await callback.message.edit_text(text, reply_markup=keyboard)
 
+    @router.callback_query(F.data.startswith("aw3:"))
+    async def admin_aw3_queue_callback(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data or not callback.message:
+            return
+        actor_context = access_resolver.resolve_actor_context(callback.from_user.id)
+        if actor_context is None:
+            return
+        locale = await resolve_locale(
+            callback,
+            access_resolver=access_resolver,
+            fallback_locale=default_locale,
+            clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
+        )
+        parts = callback.data.split(":")
+        if len(parts) != 4:
+            await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+            return
+        _, queue, action, token = parts
+        if queue == "confirmations":
+            state = await _load_queue_state(
+                scope=admin_confirmations_scope,
+                actor_id=callback.from_user.id,
+                default_state={"focus": "all", "state_token": "na"},
+            )
+            if card_runtime is not None and token != state.get("state_token"):
+                await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+                return
+            if action == "focus":
+                state["focus"] = "all" if state.get("focus") == "no_response" else "no_response"
+            text, keyboard = await _render_admin_confirmations(
+                actor_id=callback.from_user.id,
+                clinic_id=actor_context.clinic_id,
+                locale=locale,
+                state=state,
+            )
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            return
+        if queue == "waitlist":
+            state = await _load_queue_state(
+                scope=admin_waitlist_scope,
+                actor_id=callback.from_user.id,
+                default_state={"status": "active", "state_token": "na"},
+            )
+            if card_runtime is not None and token != state.get("state_token"):
+                await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+                return
+            if action == "status":
+                statuses = ["active", "closed", "all"]
+                current = state.get("status", "active")
+                state["status"] = statuses[(statuses.index(current) + 1) % len(statuses)] if current in statuses else "active"
+            text, keyboard = await _render_admin_waitlist(
+                actor_id=callback.from_user.id,
+                clinic_id=actor_context.clinic_id,
+                locale=locale,
+                state=state,
+            )
+            await callback.message.edit_text(text, reply_markup=keyboard)
+
+    @router.callback_query(F.data.startswith("aw3w:"))
+    async def admin_waitlist_callback(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data or not callback.message:
+            return
+        actor_context = access_resolver.resolve_actor_context(callback.from_user.id)
+        if actor_context is None or admin_workdesk is None:
+            return
+        locale = await resolve_locale(
+            callback,
+            access_resolver=access_resolver,
+            fallback_locale=default_locale,
+            clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
+        )
+        parts = callback.data.split(":")
+        if len(parts) != 4:
+            await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+            return
+        _, action, entry_id, token = parts
+        state = await _load_queue_state(
+            scope=admin_waitlist_scope,
+            actor_id=callback.from_user.id,
+            default_state={"status": "active", "state_token": "na"},
+        )
+        if card_runtime is not None and token != state.get("state_token"):
+            await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+            return
+        rows = await admin_workdesk.get_waitlist_queue(clinic_id=actor_context.clinic_id, limit=60)
+        row = next((item for item in rows if item.waitlist_entry_id == entry_id), None)
+        if row is None:
+            await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+            return
+        if action == "close":
+            await callback.message.edit_text(
+                i18n.t("admin.waitlist.closed", locale).format(entry_id=row.waitlist_entry_id, patient=row.patient_display_name)
+            )
+            return
+        await callback.message.edit_text(
+            i18n.t("admin.waitlist.detail", locale).format(
+                entry_id=row.waitlist_entry_id,
+                patient=row.patient_display_name,
+                doctor=row.doctor_display_name or i18n.t("admin.waitlist.preference.any", locale),
+                service=row.service_label or i18n.t("admin.waitlist.preference.any", locale),
+                window=row.preferred_time_window_summary or i18n.t("admin.waitlist.window.unspecified", locale),
+                status=_status_label(status=row.status, locale=locale),
+            )
+        )
+
     @router.callback_query(F.data.startswith("c2|"))
     async def admin_runtime_card_callback(callback: CallbackQuery) -> None:
         if not callback.from_user or not callback.data:
@@ -807,10 +1219,33 @@ def make_router(
         except CardCallbackError:
             await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
             return
-        if decoded.source_context not in {SourceContext.BOOKING_LIST, SourceContext.ADMIN_TODAY} or decoded.profile != CardProfile.BOOKING:
+        if decoded.source_context not in {
+            SourceContext.BOOKING_LIST,
+            SourceContext.ADMIN_TODAY,
+            SourceContext.ADMIN_CONFIRMATIONS,
+            SourceContext.ADMIN_RESCHEDULES,
+        } or decoded.profile != CardProfile.BOOKING:
             return
         if decoded.source_context == SourceContext.ADMIN_TODAY and callback.from_user:
             state = await _load_admin_today_state(actor_id=callback.from_user.id)
+            if decoded.state_token != state.get("state_token"):
+                await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+                return
+        if decoded.source_context == SourceContext.ADMIN_CONFIRMATIONS and callback.from_user:
+            state = await _load_queue_state(
+                scope=admin_confirmations_scope,
+                actor_id=callback.from_user.id,
+                default_state={"focus": "all", "state_token": "na"},
+            )
+            if decoded.state_token != state.get("state_token"):
+                await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+                return
+        if decoded.source_context == SourceContext.ADMIN_RESCHEDULES and callback.from_user:
+            state = await _load_queue_state(
+                scope=admin_reschedules_scope,
+                actor_id=callback.from_user.id,
+                default_state={"state_token": "na"},
+            )
             if decoded.state_token != state.get("state_token"):
                 await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
                 return
@@ -818,7 +1253,12 @@ def make_router(
         if booking is None:
             await callback.answer(i18n.t("admin.booking.open.missing", locale), show_alert=True)
             return
-        if decoded.action == CardAction.OPEN and (decoded.page_or_index == "open_booking" or decoded.page_or_index.startswith("today_open:")):
+        if decoded.action == CardAction.OPEN and (
+            decoded.page_or_index == "open_booking"
+            or decoded.page_or_index.startswith("today_open:")
+            or decoded.page_or_index.startswith("confirmations_open:")
+            or decoded.page_or_index.startswith("reschedules_open:")
+        ):
             await callback.message.edit_text(_render_admin_booking_panel(booking=booking, locale=locale), reply_markup=await _admin_booking_keyboard(booking=booking, locale=locale, source_context=decoded.source_context, source_ref=decoded.source_ref, page_or_index=decoded.page_or_index, state_token=decoded.state_token))
             return
         if decoded.page_or_index == "confirm":
@@ -883,6 +1323,40 @@ def make_router(
                 return
             state = await _load_admin_today_state(actor_id=callback.from_user.id)
             text, keyboard = await _render_admin_today(
+                actor_id=callback.from_user.id,
+                clinic_id=actor_context.clinic_id,
+                locale=locale,
+                state=state,
+            )
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            return
+        if decoded.action == CardAction.BACK and decoded.source_context == SourceContext.ADMIN_CONFIRMATIONS and decoded.page_or_index.startswith("confirmations_open:"):
+            actor_context = access_resolver.resolve_actor_context(callback.from_user.id)
+            if actor_context is None:
+                return
+            state = await _load_queue_state(
+                scope=admin_confirmations_scope,
+                actor_id=callback.from_user.id,
+                default_state={"focus": "all", "state_token": "na"},
+            )
+            text, keyboard = await _render_admin_confirmations(
+                actor_id=callback.from_user.id,
+                clinic_id=actor_context.clinic_id,
+                locale=locale,
+                state=state,
+            )
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            return
+        if decoded.action == CardAction.BACK and decoded.source_context == SourceContext.ADMIN_RESCHEDULES and decoded.page_or_index.startswith("reschedules_open:"):
+            actor_context = access_resolver.resolve_actor_context(callback.from_user.id)
+            if actor_context is None:
+                return
+            state = await _load_queue_state(
+                scope=admin_reschedules_scope,
+                actor_id=callback.from_user.id,
+                default_state={"state_token": "na"},
+            )
+            text, keyboard = await _render_admin_reschedules(
                 actor_id=callback.from_user.id,
                 clinic_id=actor_context.clinic_id,
                 locale=locale,
