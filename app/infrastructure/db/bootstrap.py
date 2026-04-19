@@ -1015,6 +1015,39 @@ STACK1_TABLES: tuple[str, ...] = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS integration.google_calendar_doctor_calendars (
+      google_calendar_doctor_calendar_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      doctor_id TEXT NOT NULL REFERENCES core_reference.doctors(doctor_id),
+      calendar_external_id TEXT NOT NULL,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(clinic_id, doctor_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS integration.google_calendar_booking_event_map (
+      booking_id TEXT PRIMARY KEY REFERENCES booking.bookings(booking_id) ON DELETE CASCADE,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      calendar_provider TEXT NOT NULL DEFAULT 'google_calendar',
+      target_calendar_id TEXT NOT NULL,
+      external_event_id TEXT NULL,
+      sync_status TEXT NOT NULL,
+      sync_attempts INTEGER NOT NULL DEFAULT 0,
+      payload_hash TEXT NULL,
+      last_error_text TEXT NULL,
+      last_synced_at TIMESTAMPTZ NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CHECK (sync_status IN ('synced', 'failed', 'canceled', 'cancel_failed'))
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_google_calendar_event_map_status
+    ON integration.google_calendar_booking_event_map (sync_status, updated_at)
+    """,
+    """
     CREATE TABLE IF NOT EXISTS communication.reminder_jobs (
       reminder_id TEXT PRIMARY KEY,
       clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),

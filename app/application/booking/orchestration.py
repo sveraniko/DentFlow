@@ -707,6 +707,21 @@ class BookingOrchestrationService:
                     occurred_at=now,
                 )
             )
+            await tx.append_outbox_event(
+                build_event(
+                    event_name="booking.rescheduled",
+                    producer_context="booking.orchestration",
+                    clinic_id=updated_booking.clinic_id,
+                    entity_type="booking",
+                    entity_id=updated_booking.booking_id,
+                    occurred_at=now,
+                    payload={
+                        "status": updated_booking.status,
+                        "scheduled_start_at": updated_booking.scheduled_start_at.isoformat(),
+                        "scheduled_end_at": updated_booking.scheduled_end_at.isoformat(),
+                    },
+                )
+            )
             await self._replace_reminder_plan_for_booking_in_transaction(
                 tx=tx,
                 booking=updated_booking,

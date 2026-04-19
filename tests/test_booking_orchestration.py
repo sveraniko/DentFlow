@@ -91,6 +91,9 @@ class _Tx(AbstractAsyncContextManager):
             raise RuntimeError("history append failed")
         self.repo.history.append(item)
 
+    async def append_outbox_event(self, event) -> None:  # noqa: ANN001
+        self.repo.outbox_events.append(event)
+
     async def upsert_waitlist_entry(self, item: WaitlistEntry) -> None:
         self.repo.waitlist[item.waitlist_entry_id] = item
 
@@ -199,6 +202,7 @@ class _Repo:
         self.holds: dict[str, SlotHold] = {}
         self.bookings: dict[str, Booking] = {}
         self.history: list[BookingStatusHistory] = []
+        self.outbox_events: list[object] = []
         self.session_events: list[SessionEvent] = []
         self.waitlist: dict[str, WaitlistEntry] = {}
         self.escalations: dict[str, AdminEscalation] = {}

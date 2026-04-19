@@ -79,6 +79,8 @@ class IntegrationsConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="INTEGRATIONS_", extra="ignore")
 
     google_sheets_enabled: bool = False
+    google_calendar_enabled: bool = False
+    dentflow_base_url: str = "https://dentflow.local"
 
 
 class LoggingConfig(BaseSettings):
