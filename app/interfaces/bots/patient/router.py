@@ -58,29 +58,70 @@ class _PatientFlowState:
 
 
 @dataclass(slots=True)
-class _CompactProductPickerItem:
+class _CompactProductRowCard:
     product_id: str
-    title: str
-    price_amount: int
-    currency_code: str
-    availability: str
-    short_label: str | None = None
-    badge: str | None = None
-    explanation: str | None = None
-    branch_hint: str | None = None
-
-    def _parts(self) -> list[str]:
-        parts = [self.title, f"{self.price_amount} {self.currency_code}", self.availability]
-        if self.badge:
-            parts.append(self.badge)
-        if self.short_label:
-            parts.append(self.short_label)
-        if self.branch_hint:
-            parts.append(self.branch_hint)
-        return parts
+    shell: Any
 
     def button_label(self) -> str:
-        return " · ".join(self._parts())[:62]
+        meta = {row.key: row.value for row in self.shell.meta_lines}
+        parts = [
+            self.shell.title,
+            meta.get("price", ""),
+            meta.get("availability", ""),
+        ]
+        if self.shell.badges:
+            parts.append(self.shell.badges[0].text)
+        if meta.get("label"):
+            parts.append(meta["label"])
+        if meta.get("branch"):
+            parts.append(meta["branch"])
+        parts = [part for part in parts if part]
+        return " · ".join(parts)[:62]
+
+    def supports_open_action(self) -> bool:
+        return any(action.action == CardAction.OPEN for action in self.shell.actions)
+
+    def open_source_ref(self, fallback: str) -> str:
+        return self.shell.source.source_ref or fallback
+
+    def recommendation_context_badge(self) -> str | None:
+        if self.shell.source.context != SourceContext.RECOMMENDATION_DETAIL or not self.shell.badges:
+            return None
+        return self.shell.badges[0].text
+
+    def branch_hint(self) -> str | None:
+        return next((meta.value for meta in self.shell.meta_lines if meta.key == "branch"), None)
+
+    def availability_label(self) -> str:
+        return next((meta.value for meta in self.shell.meta_lines if meta.key == "availability"), "")
+
+    def short_label(self) -> str | None:
+        return next((meta.value for meta in self.shell.meta_lines if meta.key == "label"), None)
+
+    def price_label(self) -> str:
+        return next((meta.value for meta in self.shell.meta_lines if meta.key == "price"), "")
+
+    def grammar_signature(self) -> tuple[str, str, str | None, str | None]:
+        return (
+            self.price_label(),
+            self.availability_label(),
+            self.recommendation_context_badge(),
+            self.branch_hint(),
+        )
+
+    def _parts(self) -> list[str]:
+        # Kept for compatibility with focused unit tests around compact grammar.
+        parts = [self.shell.title, self.price_label(), self.availability_label()]
+        badge = self.recommendation_context_badge()
+        if badge:
+            parts.append(badge)
+        short_label = self.short_label()
+        if short_label:
+            parts.append(short_label)
+        branch = self.branch_hint()
+        if branch:
+            parts.append(branch)
+        return parts
 
 
 @dataclass(slots=True)
@@ -239,7 +280,7 @@ def make_router(
             return i18n.t("patient.care.availability.low", locale)
         return i18n.t("patient.care.availability.in", locale)
 
-    async def _compact_product_picker_item(
+    async def _compact_product_row_card(
         *,
         clinic_id: str,
         actor_id: int,
@@ -247,7 +288,7 @@ def make_router(
         locale: str,
         source_context: SourceContext,
         badge: str | None = None,
-    ) -> _CompactProductPickerItem:
+    ) -> _CompactProductRowCard:
         content = await care_commerce_service.resolve_product_content(
             clinic_id=clinic_id,
             product=product,
@@ -288,18 +329,9 @@ def make_router(
             locale=locale,
             mode=CardMode.LIST_ROW,
         )
-        short_label = next((meta.value for meta in row_shell.meta_lines if meta.key == "label"), None)
-        row_availability = next((meta.value for meta in row_shell.meta_lines if meta.key == "availability"), _availability_label(availability, locale=locale))
-        branch_hint = next((meta.value for meta in row_shell.meta_lines if meta.key == "branch"), None)
-        return _CompactProductPickerItem(
+        return _CompactProductRowCard(
             product_id=product.care_product_id,
-            title=row_shell.title,
-            price_amount=product.price_amount,
-            currency_code=product.currency_code,
-            availability=row_availability,
-            short_label=short_label,
-            badge=(badge if source_context == SourceContext.RECOMMENDATION_DETAIL else None),
-            branch_hint=branch_hint,
+            shell=row_shell,
         )
 
     async def _category_label(*, category_code: str, locale: str) -> str:
@@ -454,10 +486,10 @@ def make_router(
         ]
         lines.append(i18n.t("patient.care.catalog.page_indicator", locale).format(page=active_page + 1))
         rows: list[list[InlineKeyboardButton]] = []
-        picker_items: list[_CompactProductPickerItem] = []
+        row_cards: list[_CompactProductRowCard] = []
         for product in products[start:end]:
-            picker_items.append(
-                await _compact_product_picker_item(
+            row_cards.append(
+                await _compact_product_row_card(
                     clinic_id=clinic_id,
                     actor_id=actor_id,
                     product=product,
@@ -465,7 +497,9 @@ def make_router(
                     source_context=SourceContext.CARE_CATALOG_CATEGORY,
                 )
             )
-        for item in picker_items:
+        for item in row_cards:
+            if not item.supports_open_action():
+                continue
             rows.append(
                 [
                     InlineKeyboardButton(
@@ -476,7 +510,7 @@ def make_router(
                             entity_id=item.product_id,
                             action=CardAction.OPEN,
                             source_context=SourceContext.CARE_CATALOG_CATEGORY,
-                            source_ref="care.product.open",
+                            source_ref=item.open_source_ref("care.product.open"),
                             page_or_index="product",
                             state_token=f"care:{actor_id}",
                         ),
@@ -955,13 +989,13 @@ def make_router(
             await _send_or_edit_panel(actor_id=actor_id, message=message, session_id="care", text=i18n.t("patient.care.products.empty", _locale()))
             return
         locale = _locale()
-        rows_products: list[_CompactProductPickerItem] = []
+        rows_products: list[_CompactProductRowCard] = []
         for product_id in state.recommendation_products:
             product = await care_commerce_service.repository.get_product(product_id)
             if product is None or product.status != "active":
                 continue
             rows_products.append(
-                await _compact_product_picker_item(
+                await _compact_product_row_card(
                     clinic_id=clinic_id,
                     actor_id=actor_id,
                     product=product,
@@ -980,6 +1014,8 @@ def make_router(
             lines.append(state.recommendation_reason.strip()[:180])
         buttons: list[list[InlineKeyboardButton]] = []
         for item in rows_products[start:end]:
+            if not item.supports_open_action():
+                continue
             buttons.append(
                 [
                     InlineKeyboardButton(
@@ -990,7 +1026,7 @@ def make_router(
                             entity_id=item.product_id,
                             action=CardAction.OPEN,
                             source_context=source_context,
-                            source_ref=state.recommendation_source_ref or f"care.recommendation.{recommendation_id}",
+                            source_ref=item.open_source_ref(state.recommendation_source_ref or f"care.recommendation.{recommendation_id}"),
                             page_or_index="product",
                             state_token=f"care:{actor_id}",
                         ),
