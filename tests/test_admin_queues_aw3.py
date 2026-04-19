@@ -282,11 +282,13 @@ def test_admin_waitlist_queue_open_close_and_stale_safe() -> None:
     callback_open = _Callback(open_cb)
     asyncio.run(_handler(router, "admin_waitlist_callback", kind="callback")(callback_open))
     assert any("Waitlist w1" in t for t, _ in callback_open.message.edits)
+    assert callback_open.message.edits[-1][1] is not None
 
     close_cb = keyboard.inline_keyboard[2][0].callback_data
     callback_close = _Callback(close_cb)
     asyncio.run(_handler(router, "admin_waitlist_callback", kind="callback")(callback_close))
     assert any("manual closure" in t for t, _ in callback_close.message.edits)
+    assert callback_close.message.edits[-1][1] is not None
 
     stale = _Callback("aw3w:open:w1:stale")
     asyncio.run(_handler(router, "admin_waitlist_callback", kind="callback")(stale))

@@ -744,6 +744,18 @@ def make_router(
             ]
         )
 
+    def _simple_back_keyboard(*, locale: str, callback_data: str) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("common.back", locale),
+                        callback_data=callback_data,
+                    )
+                ]
+            ]
+        )
+
     async def _admin_booking_keyboard(
         *,
         booking,
@@ -1559,6 +1571,15 @@ def make_router(
         if card_runtime is not None and token != state.get("state_token"):
             await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
             return
+        if action == "back":
+            text, keyboard = await _render_admin_waitlist(
+                actor_id=callback.from_user.id,
+                clinic_id=actor_context.clinic_id,
+                locale=locale,
+                state=state,
+            )
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            return
         rows = await admin_workdesk.get_waitlist_queue(clinic_id=actor_context.clinic_id, limit=60)
         row = next((item for item in rows if item.waitlist_entry_id == entry_id), None)
         if row is None:
@@ -1566,7 +1587,8 @@ def make_router(
             return
         if action == "close":
             await callback.message.edit_text(
-                i18n.t("admin.waitlist.closed", locale).format(entry_id=row.waitlist_entry_id, patient=row.patient_display_name)
+                i18n.t("admin.waitlist.closed", locale).format(entry_id=row.waitlist_entry_id, patient=row.patient_display_name),
+                reply_markup=_simple_back_keyboard(locale=locale, callback_data=f"aw3w:back:na:{token}"),
             )
             return
         await callback.message.edit_text(
@@ -1586,7 +1608,8 @@ def make_router(
                 ),
                 window=row.preferred_time_window_summary or i18n.t("admin.waitlist.window.unspecified", locale),
                 status=_status_label(status=row.status, locale=locale),
-            )
+            ),
+            reply_markup=_simple_back_keyboard(locale=locale, callback_data=f"aw3w:back:na:{token}"),
         )
 
     @router.callback_query(F.data.startswith("aw4:"))
@@ -1653,6 +1676,10 @@ def make_router(
         if card_runtime is not None and token != state.get("state_token"):
             await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
             return
+        if parts[1] == "back":
+            text, keyboard = await _render_admin_care_pickups(actor_id=callback.from_user.id, clinic_id=actor_context.clinic_id, locale=locale, state=state)
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            return
         if parts[1] == "open":
             care_order_id = parts[2]
             if care_commerce_service is None:
@@ -1666,7 +1693,8 @@ def make_router(
                     care_order_id=order.care_order_id,
                     patient_id=order.patient_id,
                     status=_pickup_status_label(status=order.status, locale=locale),
-                )
+                ),
+                reply_markup=_simple_back_keyboard(locale=locale, callback_data=f"aw4cp:back:na:{token}"),
             )
             return
         if parts[1] == "action" and care_commerce_service is not None:
@@ -1702,6 +1730,15 @@ def make_router(
         if card_runtime is not None and token != state.get("state_token"):
             await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
             return
+        if kind == "back":
+            text, keyboard = await _render_admin_issues(
+                actor_id=callback.from_user.id,
+                clinic_id=actor_context.clinic_id,
+                locale=locale,
+                state=state,
+            )
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            return
         if kind == "patient":
             panel = await _render_patient_panel(
                 clinic_id=actor_context.clinic_id,
@@ -1711,10 +1748,16 @@ def make_router(
                 source_ref=f"admin_issues:{state.get('status', 'open')}",
                 state_token=token,
             )
-            await callback.message.edit_text(panel)
+            await callback.message.edit_text(
+                panel,
+                reply_markup=_simple_back_keyboard(locale=locale, callback_data=f"aw4i:back:na:{token}"),
+            )
             return
         if kind == "care":
-            await callback.message.edit_text(i18n.t("admin.issues.care_order.linked", locale).format(care_order_id=entity_id))
+            await callback.message.edit_text(
+                i18n.t("admin.issues.care_order.linked", locale).format(care_order_id=entity_id),
+                reply_markup=_simple_back_keyboard(locale=locale, callback_data=f"aw4i:back:na:{token}"),
+            )
 
     @router.callback_query(F.data.startswith("c2|"))
     async def admin_runtime_card_callback(callback: CallbackQuery) -> None:
