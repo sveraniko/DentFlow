@@ -2,7 +2,17 @@ from pathlib import Path
 
 from app.common.i18n import I18nService
 from app.interfaces.bots.patient.router import _CompactProductRowCard, _parse_gallery_index, _resolve_media_ref
-from app.interfaces.cards import CardAction, CardMode, ProductCardAdapter, ProductCardSeed, SourceContext, SourceRef
+from app.interfaces.cards import (
+    CareOrderCardAdapter,
+    CareOrderRuntimeSnapshot,
+    CareOrderRuntimeViewBuilder,
+    CardAction,
+    CardMode,
+    ProductCardAdapter,
+    ProductCardSeed,
+    SourceContext,
+    SourceRef,
+)
 
 
 def test_compact_product_row_grammar_supports_recommendation_and_category_contexts() -> None:
@@ -128,3 +138,46 @@ def test_repeat_order_object_detail_and_branch_reselect_strings_exist() -> None:
     assert "Order {care_order_id}" in i18n.t("patient.care.orders.object.detail", "en")
     assert "Pick another branch" in i18n.t("patient.care.orders.repeat.branch_select_required", "en")
     assert "режим совместимости" not in i18n.t("patient.care.orders.repeat.compat_hint", "en").lower()
+
+
+def test_care_order_compact_object_uses_unified_card_grammar() -> None:
+    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+    seed = CareOrderRuntimeViewBuilder().build_seed(
+        snapshot=CareOrderRuntimeSnapshot(
+            care_order_id="co-1001",
+            status="ready_for_pickup",
+            total_amount=48,
+            currency_code="GEL",
+            item_summary="Nano Brush x1",
+            branch_label="Main branch",
+            pickup_ready=True,
+            reservation_hint="Availability confirmed in branch Main branch.",
+            state_token="care:77",
+        ),
+        i18n=i18n,
+        locale="en",
+    )
+
+    row_shell = CareOrderCardAdapter.build(
+        seed=seed,
+        source=SourceRef(context=SourceContext.CARE_ORDER_LIST, source_ref="care.orders.list"),
+        i18n=i18n,
+        locale="en",
+        mode=CardMode.LIST_ROW,
+    )
+    expanded_shell = CareOrderCardAdapter.build(
+        seed=seed,
+        source=SourceRef(context=SourceContext.CARE_ORDER_LIST, source_ref="care.orders.object"),
+        i18n=i18n,
+        locale="en",
+        mode=CardMode.EXPANDED,
+    )
+
+    assert row_shell.mode == CardMode.LIST_ROW
+    assert any(meta.key == "item" for meta in row_shell.meta_lines)
+    assert any(meta.key == "pickup" for meta in row_shell.meta_lines)
+    assert any(action.action == CardAction.OPEN for action in row_shell.actions)
+    assert any(action.action == CardAction.RESERVE for action in row_shell.actions)
+    assert expanded_shell.mode == CardMode.EXPANDED
+    assert any("Timeline:" in line for line in expanded_shell.detail_lines)
+    assert any(action.action == CardAction.BACK for action in expanded_shell.actions)
