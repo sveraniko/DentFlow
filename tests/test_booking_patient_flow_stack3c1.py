@@ -505,6 +505,42 @@ def test_reschedule_cancel_waitlist_and_admin_open_details() -> None:
     assert isinstance(rescheduled, OrchestrationSuccess)
     assert rescheduled.entity.status == "reschedule_requested"
 
+    repo.bookings["b2"] = Booking(
+        booking_id="b2",
+        clinic_id="clinic_main",
+        branch_id="branch_1",
+        patient_id="pat_1",
+        doctor_id="doctor_1",
+        service_id="service_consult",
+        slot_id="slot_1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=now + timedelta(days=3),
+        scheduled_end_at=now + timedelta(days=3, minutes=30),
+        status="pending_confirmation",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=None,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    confirmed = asyncio.run(
+        flow.confirm_existing_booking(
+            clinic_id="clinic_main",
+            telegram_user_id=5010,
+            callback_session_id=session.booking_session_id,
+            booking_id="b2",
+        )
+    )
+    assert isinstance(confirmed, OrchestrationSuccess)
+    assert confirmed.entity.status == "confirmed"
+
     waitlist = asyncio.run(
         flow.join_earlier_slot_waitlist(
             clinic_id="clinic_main",

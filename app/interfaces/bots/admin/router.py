@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from aiogram import Router
+from datetime import timezone
+
+from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.application.access import AccessResolver
 from app.application.care_commerce import CareCommerceService
@@ -16,6 +18,20 @@ from app.interfaces.bots.common import guard_roles, resolve_locale
 from app.interfaces.bots.search_handlers import run_doctor_search, run_patient_search, run_service_search
 from app.interfaces.bots.voice_search import attach_voice_search_handlers
 from app.interfaces.cards import CardCallbackCodec, CardRuntimeCoordinator
+from app.interfaces.cards import (
+    BookingCardAdapter,
+    BookingRuntimeSnapshot,
+    BookingRuntimeViewBuilder,
+    CardAction,
+    CardCallback,
+    CardCallbackError,
+    CardMode,
+    CardProfile,
+    CardShellRenderer,
+    EntityType,
+    SourceRef,
+    SourceContext,
+)
 
 
 def _clinic_locale(reference_service: ClinicReferenceService, clinic_id: str) -> str | None:
@@ -64,6 +80,65 @@ def make_router(
     card_callback_codec: CardCallbackCodec | None = None,
 ) -> Router:
     router = Router(name="admin_router")
+    booking_builder = BookingRuntimeViewBuilder()
+
+    async def _encode_booking_callback(*, booking_id: str, action: CardAction, page_or_index: str) -> str:
+        if card_callback_codec is None:
+            return f"adminbk:{page_or_index}:{booking_id}"
+        return await card_callback_codec.encode(
+            CardCallback(
+                profile=CardProfile.BOOKING,
+                entity_type=EntityType.BOOKING,
+                entity_id=booking_id,
+                action=action,
+                mode=CardMode.EXPANDED,
+                source_context=SourceContext.BOOKING_LIST,
+                source_ref="admin.booking.card",
+                page_or_index=page_or_index,
+                state_token=booking_id,
+            )
+        )
+
+    def _render_admin_booking_panel(*, booking, locale: str) -> str:
+        snapshot = BookingRuntimeSnapshot(
+            booking_id=booking.booking_id,
+            state_token=booking.booking_id,
+            role_variant="admin",
+            scheduled_start_at=booking.scheduled_start_at,
+            timezone_name="UTC",
+            patient_label=booking.patient_id,
+            doctor_label=booking_flow.build_booking_card(booking=booking).doctor_label,
+            service_label=booking_flow.build_booking_card(booking=booking).service_label,
+            branch_label=booking.branch_id or "-",
+            status=booking.status,
+            source_channel=booking.source_channel,
+            patient_contact=None,
+            next_step_note_key=booking_flow.build_booking_card(booking=booking).next_step_key,
+        )
+        seed = booking_builder.build_seed(snapshot=snapshot, i18n=i18n, locale=locale)
+        shell = BookingCardAdapter.build(
+            seed=seed,
+            source=SourceRef(context=SourceContext.BOOKING_LIST, source_ref="admin_booking"),
+            i18n=i18n,
+            locale=locale,
+            mode=CardMode.EXPANDED,
+        )
+        return CardShellRenderer.to_panel(shell).text
+
+    async def _admin_booking_keyboard(*, booking, locale: str) -> InlineKeyboardMarkup:
+        rows: list[list[InlineKeyboardButton]] = []
+        if booking.status == "pending_confirmation":
+            rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.confirm", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.CONFIRM, page_or_index="confirm"))])
+        if booking.status in {"confirmed", "reschedule_requested"}:
+            rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.arrived", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.CHECKED_IN, page_or_index="checked_in"))])
+        if booking.status not in {"completed", "canceled", "no_show"}:
+            rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.reschedule", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.RESCHEDULE, page_or_index="reschedule"))])
+            rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.cancel", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.CANCEL, page_or_index="cancel"))])
+        rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.patient", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.OPEN_PATIENT, page_or_index="open_patient"))])
+        rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.chart", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.OPEN_CHART, page_or_index="open_chart"))])
+        rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.recommendation", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.OPEN_RECOMMENDATION, page_or_index="open_recommendation"))])
+        rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.care_order", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.OPEN_CARE_ORDER, page_or_index="open_care_order"))])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
 
     attach_voice_search_handlers(
         router,
@@ -277,18 +352,12 @@ def make_router(
             await message.answer(i18n.t("admin.booking.new.empty", locale))
             return
         lines = [i18n.t("admin.booking.new.title", locale)]
+        rows: list[list[InlineKeyboardButton]] = []
         for booking in bookings:
             card = booking_flow.build_booking_card(booking=booking)
-            lines.append(
-                i18n.t("admin.booking.new.item", locale).format(
-                    booking_id=booking.booking_id,
-                    status=i18n.t(card.status_label, locale),
-                    doctor=card.doctor_label,
-                    service=card.service_label,
-                    dt=card.datetime_label,
-                )
-            )
-        await message.answer("\n".join(lines))
+            lines.append(i18n.t("admin.booking.new.item", locale).format(booking_id=booking.booking_id, status=i18n.t(card.status_label, locale), doctor=card.doctor_label, service=card.service_label, dt=card.datetime_label))
+            rows.append([InlineKeyboardButton(text=f"{booking.booking_id} · {i18n.t(card.status_label, locale)}", callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.OPEN, page_or_index="open_booking"))])
+        await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
     @router.message(Command("care_orders"))
     async def care_orders(message: Message) -> None:
@@ -494,21 +563,64 @@ def make_router(
         if len(parts) != 2:
             await message.answer(i18n.t("admin.booking.open.usage", locale))
             return
-        card = await booking_flow.get_admin_booking_detail(booking_id=parts[1])
-        if card is None:
+        booking = await booking_flow.reads.get_booking(parts[1])
+        if booking is None:
             await message.answer(i18n.t("admin.booking.open.missing", locale))
             return
-        await message.answer(
-            i18n.t("admin.booking.open.panel", locale).format(
-                booking_id=card.booking_id,
-                doctor=card.doctor_label,
-                service=card.service_label,
-                datetime=card.datetime_label,
-                branch=card.branch_label,
-                status=i18n.t(card.status_label, locale),
-                next_step=i18n.t(card.next_step_key, locale),
-            )
-        )
+        await message.answer(_render_admin_booking_panel(booking=booking, locale=locale), reply_markup=await _admin_booking_keyboard(booking=booking, locale=locale))
+
+    @router.callback_query(F.data.startswith("c2|"))
+    async def admin_runtime_card_callback(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        if card_callback_codec is None:
+            return
+        locale = await resolve_locale(callback, access_resolver=access_resolver, fallback_locale=default_locale, clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id))
+        try:
+            decoded = await card_callback_codec.decode(callback.data)
+        except CardCallbackError:
+            await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+            return
+        if decoded.source_context != SourceContext.BOOKING_LIST or decoded.profile != CardProfile.BOOKING:
+            return
+        booking = await booking_flow.reads.get_booking(decoded.entity_id)
+        if booking is None:
+            await callback.answer(i18n.t("admin.booking.open.missing", locale), show_alert=True)
+            return
+        if decoded.page_or_index == "open_booking":
+            await callback.message.edit_text(_render_admin_booking_panel(booking=booking, locale=locale), reply_markup=await _admin_booking_keyboard(booking=booking, locale=locale))
+            return
+        if decoded.page_or_index == "confirm":
+            result = await booking_flow.orchestration.confirm_booking(booking_id=booking.booking_id, reason_code="admin_confirmed")
+            if result.kind == "success":
+                booking = result.entity
+        elif decoded.page_or_index == "checked_in":
+            result = await booking_flow.orchestration.booking_state_service.transition_booking(booking_id=booking.booking_id, to_status="checked_in", reason_code="admin_checked_in")
+            booking = result.entity
+        elif decoded.page_or_index == "reschedule":
+            result = await booking_flow.orchestration.request_booking_reschedule(booking_id=booking.booking_id, reason_code="admin_requested_reschedule")
+            if result.kind == "success":
+                booking = result.entity
+        elif decoded.page_or_index == "cancel":
+            result = await booking_flow.orchestration.cancel_booking(booking_id=booking.booking_id, reason_code="admin_canceled")
+            if result.kind == "success":
+                booking = result.entity
+        elif decoded.page_or_index == "open_patient":
+            await callback.answer()
+            await callback.message.answer(i18n.t("doctor.patient.quick.card", locale).format(patient_id=booking.patient_id, display_name=booking.patient_id, patient_number="-", phone_hint="-", has_photo=i18n.t("common.no", locale), flags="-", next_booking=booking.booking_id))
+            return
+        elif decoded.page_or_index == "open_chart":
+            await callback.answer(i18n.t("admin.booking.open.panel", locale).format(booking_id=booking.booking_id, doctor=booking.doctor_id, service=booking.service_id, datetime=booking.scheduled_start_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"), branch=booking.branch_id or "-", status=i18n.t(f"booking.status.{booking.status}", locale), next_step=i18n.t("patient.booking.card.next.default", locale)), show_alert=True)
+            return
+        elif decoded.page_or_index == "open_recommendation":
+            await callback.answer()
+            await callback.message.answer(f"/recommendations patient:{booking.patient_id}")
+            return
+        elif decoded.page_or_index == "open_care_order":
+            await callback.answer()
+            await callback.message.answer(f"/care_orders patient:{booking.patient_id}")
+            return
+        await callback.message.edit_text(_render_admin_booking_panel(booking=booking, locale=locale), reply_markup=await _admin_booking_keyboard(booking=booking, locale=locale))
 
     return router
 
