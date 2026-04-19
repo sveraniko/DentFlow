@@ -57,6 +57,57 @@ class _PatientFlowState:
     care: _CareViewState | None = None
 
 
+@dataclass(slots=True)
+class _CompactProductPickerItem:
+    product_id: str
+    title: str
+    price_amount: int
+    currency_code: str
+    availability: str
+    short_label: str | None = None
+    badge: str | None = None
+    explanation: str | None = None
+    branch_hint: str | None = None
+
+    def _parts(self) -> list[str]:
+        parts = [self.title, f"{self.price_amount} {self.currency_code}", self.availability]
+        if self.badge:
+            parts.append(self.badge)
+        if self.short_label:
+            parts.append(self.short_label)
+        if self.branch_hint:
+            parts.append(self.branch_hint)
+        return parts
+
+    def line(self) -> str:
+        return f"• {' · '.join(self._parts())}"
+
+    def button_label(self) -> str:
+        return " · ".join(self._parts())[:62]
+
+
+@dataclass(slots=True)
+class _ResolvedMediaRef:
+    media_kind: str
+    media_value: str
+
+
+def _resolve_media_ref(media_ref: str) -> _ResolvedMediaRef | None:
+    ref = (media_ref or "").strip()
+    if not ref:
+        return None
+    lower = ref.lower()
+    if lower.startswith("photo:"):
+        value = ref.split(":", 1)[1].strip()
+        return _ResolvedMediaRef(media_kind="photo", media_value=value) if value else None
+    if lower.startswith("video:"):
+        value = ref.split(":", 1)[1].strip()
+        return _ResolvedMediaRef(media_kind="video", media_value=value) if value else None
+    if lower.endswith((".mp4", ".mov", ".webm")):
+        return _ResolvedMediaRef(media_kind="video", media_value=ref)
+    return _ResolvedMediaRef(media_kind="photo", media_value=ref)
+
+
 def make_router(
     i18n: I18nService,
     booking_flow: BookingPatientFlowService,
@@ -174,28 +225,6 @@ def make_router(
         return row is not None and row.status == "active" and row.free_qty > 0
 
     _LIST_PAGE_SIZE = 6
-
-    @dataclass(slots=True)
-    class _CompactProductPickerItem:
-        product_id: str
-        title: str
-        price_amount: int
-        currency_code: str
-        availability: str
-        short_label: str | None = None
-        badge: str | None = None
-        explanation: str | None = None
-
-        def line(self) -> str:
-            head = f"• {self.title} · {self.price_amount} {self.currency_code} · {self.availability}"
-            suffix: list[str] = []
-            if self.badge:
-                suffix.append(self.badge)
-            if self.short_label:
-                suffix.append(self.short_label)
-            if suffix:
-                head = f"{head} · {' · '.join(suffix)}"
-            return head
 
     def _page_slice(total: int, page: int, page_size: int = _LIST_PAGE_SIZE) -> tuple[int, int, int]:
         if total <= 0:
@@ -392,14 +421,14 @@ def make_router(
                     currency_code=product.currency_code,
                     availability=_availability_label(availability, locale=locale),
                     short_label=short,
+                    branch_hint=(next((b.display_name for b in reference.list_branches(clinic_id) if b.branch_id == branch_id), None) if branch_id else None),
                 )
             )
         for item in picker_items:
-            lines.append(item.line())
             rows.append(
                 [
                     InlineKeyboardButton(
-                        text=f"{item.title[:28]} · {item.price_amount} {item.currency_code} · {item.availability}"[:62],
+                        text=item.button_label(),
                         callback_data=await _encode_runtime_callback(
                             profile=CardProfile.PRODUCT,
                             entity_type=EntityType.CARE_PRODUCT,
@@ -777,6 +806,46 @@ def make_router(
             state_token=state_token,
         )
 
+    async def _send_media_panel(
+        *,
+        actor_id: int,
+        message: Message | CallbackQuery,
+        caption: str,
+        media_ref: str,
+        keyboard: InlineKeyboardMarkup,
+    ) -> bool:
+        resolved = _resolve_media_ref(media_ref)
+        if resolved is None:
+            return False
+        try:
+            if isinstance(message, CallbackQuery):
+                if message.message is None:
+                    return False
+                bot = message.bot
+                chat_id = message.message.chat.id
+            else:
+                bot = message.bot
+                chat_id = message.chat.id
+            if resolved.media_kind == "video":
+                sent = await bot.send_video(chat_id=chat_id, video=resolved.media_value, caption=caption, reply_markup=keyboard)
+            else:
+                sent = await bot.send_photo(chat_id=chat_id, photo=resolved.media_value, caption=caption, reply_markup=keyboard)
+            await card_runtime.bind_panel(
+                actor_id=actor_id,
+                chat_id=sent.chat.id,
+                message_id=sent.message_id,
+                panel_family=PanelFamily.PATIENT_CATALOG,
+                profile=None,
+                entity_id="care",
+                source_context=SourceContext.CARE_CATALOG_CATEGORY,
+                source_ref="care.product.media",
+                page_or_index="media",
+                state_token="care",
+            )
+            return True
+        except Exception:
+            return False
+
     async def _render_service_panel(message: Message | CallbackQuery, *, actor_id: int, session_id: str, clinic_id: str) -> None:
         locale = _locale()
         services = booking_flow.list_services(clinic_id=clinic_id)
@@ -823,6 +892,7 @@ def make_router(
                     availability=_availability_label(availability, locale=locale),
                     short_label=content.short_label,
                     badge=i18n.t("patient.care.products.badge", locale),
+                    branch_hint=(next((b.display_name for b in reference.list_branches(clinic_id) if b.branch_id == branch_id), None) if branch_id else None),
                 )
             )
         if not rows_products:
@@ -835,11 +905,10 @@ def make_router(
             lines.append(state.recommendation_reason.strip()[:180])
         buttons: list[list[InlineKeyboardButton]] = []
         for item in rows_products[start:end]:
-            lines.append(item.line())
             buttons.append(
                 [
                     InlineKeyboardButton(
-                        text=f"{item.title[:28]} · {item.price_amount} {item.currency_code} · {item.availability}"[:62],
+                        text=item.button_label(),
                         callback_data=await _encode_runtime_callback(
                             profile=CardProfile.PRODUCT,
                             entity_type=EntityType.CARE_PRODUCT,
@@ -1457,31 +1526,39 @@ def make_router(
                     return
                 if decoded.page_or_index == "cover":
                     cover_ref = refs[0]
-                    await _send_or_edit_panel(
+                    cover_keyboard = InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                InlineKeyboardButton(
+                                    text=i18n.t("common.back", _locale()),
+                                    callback_data=await _encode_runtime_callback(
+                                        profile=CardProfile.PRODUCT,
+                                        entity_type=EntityType.CARE_PRODUCT,
+                                        entity_id=decoded.entity_id,
+                                        action=CardAction.BACK,
+                                        source_context=decoded.source_context,
+                                        source_ref="care.product.media.back",
+                                        page_or_index="back_product",
+                                        state_token=f"care:{callback.from_user.id}",
+                                    ),
+                                )
+                            ]
+                        ]
+                    )
+                    if not await _send_media_panel(
                         actor_id=callback.from_user.id,
                         message=callback,
-                        session_id="care",
-                        text=i18n.t("patient.care.product.media.cover", _locale()).format(media_ref=cover_ref),
-                        keyboard=InlineKeyboardMarkup(
-                            inline_keyboard=[
-                                [
-                                    InlineKeyboardButton(
-                                        text=i18n.t("common.back", _locale()),
-                                        callback_data=await _encode_runtime_callback(
-                                            profile=CardProfile.PRODUCT,
-                                            entity_type=EntityType.CARE_PRODUCT,
-                                            entity_id=decoded.entity_id,
-                                            action=CardAction.BACK,
-                                            source_context=decoded.source_context,
-                                            source_ref="care.product.media.back",
-                                            page_or_index="back_product",
-                                            state_token=f"care:{callback.from_user.id}",
-                                        ),
-                                    )
-                                ]
-                            ]
-                        ),
-                    )
+                        caption=i18n.t("patient.care.product.media.cover", _locale()).format(media_ref=cover_ref),
+                        media_ref=cover_ref,
+                        keyboard=cover_keyboard,
+                    ):
+                        await _send_or_edit_panel(
+                            actor_id=callback.from_user.id,
+                            message=callback,
+                            session_id="care",
+                            text=i18n.t("patient.care.product.media.cover", _locale()).format(media_ref=cover_ref),
+                            keyboard=cover_keyboard,
+                        )
                     return
                 index = 0
                 if ":" in decoded.page_or_index:
@@ -1541,13 +1618,21 @@ def make_router(
                         )
                     ]
                 )
-                await _send_or_edit_panel(
+                gallery_markup = InlineKeyboardMarkup(inline_keyboard=gallery_keyboard)
+                if not await _send_media_panel(
                     actor_id=callback.from_user.id,
                     message=callback,
-                    session_id="care",
-                    text=i18n.t("patient.care.product.media.gallery", _locale()).format(index=index + 1, total=len(refs), media_ref=refs[index]),
-                    keyboard=InlineKeyboardMarkup(inline_keyboard=gallery_keyboard),
-                )
+                    caption=i18n.t("patient.care.product.media.gallery", _locale()).format(index=index + 1, total=len(refs), media_ref=refs[index]),
+                    media_ref=refs[index],
+                    keyboard=gallery_markup,
+                ):
+                    await _send_or_edit_panel(
+                        actor_id=callback.from_user.id,
+                        message=callback,
+                        session_id="care",
+                        text=i18n.t("patient.care.product.media.gallery", _locale()).format(index=index + 1, total=len(refs), media_ref=refs[index]),
+                        keyboard=gallery_markup,
+                    )
                 return
             if decoded.page_or_index == "reserve":
                 patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
