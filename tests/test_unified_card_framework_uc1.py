@@ -181,6 +181,18 @@ def test_product_patient_doctor_localization_and_runtime_builders(i18n: I18nServ
     assert any("Usage:" in line for line in product.detail_lines)
     assert any("Recommendation:" in line for line in product.detail_lines)
     assert any(meta.key == "branch" for meta in product.meta_lines)
+    assert any(action.action == CardAction.RESERVE for action in product.actions)
+    assert any(action.action == CardAction.CHANGE_BRANCH for action in product.actions)
+
+    compact = ProductCardAdapter.build(
+        seed=product_seed,
+        source=SourceRef(context=SourceContext.CARE_CATALOG_CATEGORY, source_ref="cat_aftercare"),
+        i18n=i18n,
+        locale="en",
+        mode=CardMode.COMPACT,
+    )
+    assert any(action.action == CardAction.EXPAND for action in compact.actions)
+    assert not any(action.action == CardAction.RESERVE for action in compact.actions)
 
     patient_seed = PatientRuntimeViewBuilder().build_seed(
         snapshot=PatientRuntimeSnapshot(

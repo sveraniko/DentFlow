@@ -28,6 +28,9 @@ from app.interfaces.cards import (
     CardShellRenderer,
     EntityType,
     PanelFamily,
+    ProductCardAdapter,
+    ProductRuntimeSnapshot,
+    ProductRuntimeViewBuilder,
     SourceContext,
     SourceRef,
 )
@@ -69,6 +72,7 @@ def make_router(
         raise RuntimeError("patient router requires shared card callback codec")
     _SESSION_SCOPE = "patient_flow"
     booking_builder = BookingRuntimeViewBuilder()
+    product_builder = ProductRuntimeViewBuilder()
 
     def _locale() -> str:
         return default_locale
@@ -336,6 +340,8 @@ def make_router(
         actor_id: int,
         clinic_id: str,
         product_id: str,
+        mode: CardMode = CardMode.COMPACT,
+        source_context: SourceContext | None = None,
     ) -> None:
         locale = _locale()
         if care_commerce_service is None:
@@ -354,68 +360,76 @@ def make_router(
             await _save_flow_state(actor_id, flow)
         availability = await care_commerce_service.get_branch_product_availability(branch_id=branch_id, care_product_id=product_id) if branch_id else None
         branch = next((b for b in reference.list_branches(clinic_id) if b.branch_id == branch_id), None)
-        lines = [
-            i18n.t("patient.care.product.title", locale).format(title=(content.title or i18n.t(product.title_key, locale))),
-            i18n.t("patient.care.product.description", locale).format(description=(content.description or i18n.t("patient.care.product.description.empty", locale))),
-            i18n.t("patient.care.product.price", locale).format(price=product.price_amount, currency=product.currency_code),
-            i18n.t("patient.care.product.category", locale).format(category=await _category_label(category_code=product.category, locale=locale)),
-            i18n.t("patient.care.product.availability", locale).format(status=_availability_label(availability, locale=locale)),
-            i18n.t("patient.care.product.branch", locale).format(branch=(branch.display_name if branch else i18n.t("patient.care.product.branch.none", locale))),
-        ]
-        if content.usage_hint:
-            lines.append(i18n.t("patient.care.product.usage_hint", locale).format(usage_hint=content.usage_hint))
-        if state.recommendation_reason:
-            lines.append(i18n.t("patient.care.product.recommendation_context", locale).format(reason=state.recommendation_reason[:180]))
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text=i18n.t("patient.care.product.reserve", locale),
-                        callback_data=await _encode_runtime_callback(
-                            profile=CardProfile.PRODUCT,
-                            entity_type=EntityType.CARE_PRODUCT,
-                            entity_id=product_id,
-                            action=CardAction.RESERVE,
-                            source_context=SourceContext.CARE_CATALOG_CATEGORY,
-                            source_ref="care.product.reserve",
-                            page_or_index="reserve",
-                            state_token=f"care:{actor_id}",
-                        ),
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text=i18n.t("patient.care.product.change_branch", locale),
-                        callback_data=await _encode_runtime_callback(
-                            profile=CardProfile.PRODUCT,
-                            entity_type=EntityType.CARE_PRODUCT,
-                            entity_id=product_id,
-                            action=CardAction.CHANGE_BRANCH,
-                            source_context=SourceContext.CARE_CATALOG_CATEGORY,
-                            source_ref="care.product.branch",
-                            page_or_index="branch",
-                            state_token=f"care:{actor_id}",
-                        ),
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text=i18n.t("common.back", locale),
-                        callback_data=await _encode_runtime_callback(
-                            profile=CardProfile.PRODUCT,
-                            entity_type=EntityType.CARE_PRODUCT,
-                            entity_id=state.selected_category or "-",
-                            action=CardAction.BACK,
-                            source_context=SourceContext.CARE_CATALOG_CATEGORY,
-                            source_ref="care.product.back",
-                            page_or_index="back_products",
-                            state_token=f"care:{actor_id}",
-                        ),
-                    )
-                ],
-            ]
+        state_source = source_context or (
+            SourceContext.RECOMMENDATION_DETAIL if state.recommendation_id else SourceContext.CARE_CATALOG_CATEGORY
         )
-        await _send_or_edit_panel(actor_id=actor_id, message=message, session_id="care", text="\n".join(lines), keyboard=keyboard)
+        seed = product_builder.build_seed(
+            snapshot=ProductRuntimeSnapshot(
+                product_id=product.care_product_id,
+                sku=content.short_label or product.sku,
+                price_amount=product.price_amount,
+                currency_code=product.currency_code,
+                status=product.status,
+                available_qty=(availability.free_qty if availability else 0),
+                title_by_locale={locale: (content.title or i18n.t(product.title_key, locale))},
+                description_by_locale={locale: (content.description or i18n.t("patient.care.product.description.empty", locale))},
+                usage_hint=content.usage_hint,
+                category=await _category_label(category_code=product.category, locale=locale),
+                selected_branch_label=(branch.display_name if branch else i18n.t("patient.care.product.branch.none", locale)),
+                recommendation_badge=(i18n.t("patient.care.products.title", locale) if state.recommendation_id else None),
+                recommendation_rationale=(state.recommendation_reason[:180] if state.recommendation_reason else None),
+                media_count=0,
+                state_token=f"care:{actor_id}",
+            ),
+            i18n=i18n,
+            locale=locale,
+        )
+        shell = ProductCardAdapter.build(
+            seed=seed,
+            source=SourceRef(context=state_source, source_ref="care.product"),
+            i18n=i18n,
+            locale=locale,
+            mode=mode,
+        )
+        action_mapping: dict[CardAction, tuple[str, str]] = {
+            CardAction.EXPAND: ("expand", "care.product.expand"),
+            CardAction.COLLAPSE: ("collapse", "care.product.collapse"),
+            CardAction.RESERVE: ("reserve", "care.product.reserve"),
+            CardAction.CHANGE_BRANCH: ("branch", "care.product.branch"),
+            CardAction.COVER: ("cover", "care.product.cover"),
+            CardAction.GALLERY: ("gallery", "care.product.gallery"),
+            CardAction.BACK: ("back_products", "care.product.back"),
+        }
+        rows: list[list[InlineKeyboardButton]] = []
+        for action in shell.actions:
+            mapped = action_mapping.get(action.action)
+            if mapped is None:
+                continue
+            page_or_index, source_ref = mapped
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=action.label,
+                        callback_data=await _encode_runtime_callback(
+                            profile=CardProfile.PRODUCT,
+                            entity_type=EntityType.CARE_PRODUCT,
+                            entity_id=state.selected_category if action.action == CardAction.BACK and state.selected_category else product_id,
+                            action=action.action,
+                            source_context=state_source,
+                            source_ref=source_ref,
+                            page_or_index=page_or_index,
+                            state_token=f"care:{actor_id}",
+                        ),
+                    )
+                ]
+            )
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id="care",
+            text=CardShellRenderer.to_panel(shell).text,
+            keyboard=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
 
     async def _render_branch_picker(message: Message | CallbackQuery, *, actor_id: int, clinic_id: str, product_id: str) -> None:
         locale = _locale()
@@ -802,6 +816,13 @@ def make_router(
             locale=_locale(),
         )
         if resolution.status == "manual_target_invalid":
+            state = await _care_state(message.from_user.id)
+            state.recommendation_id = recommendation.recommendation_id
+            state.recommendation_type = recommendation.recommendation_type
+            state.recommendation_reason = recommendation.rationale_text or recommendation.body_text
+            flow = await _load_flow_state(message.from_user.id)
+            flow.care = state
+            await _save_flow_state(message.from_user.id, flow)
             await message.answer(
                 i18n.t("patient.care.products.manual_target_invalid", _locale()).format(
                     recommendation_id=recommendation.recommendation_id
@@ -823,6 +844,7 @@ def make_router(
         rec_explanation = recommendation.rationale_text or recommendation.body_text
         if rec_explanation:
             lines.append(rec_explanation.strip()[:180])
+        rows: list[list[InlineKeyboardButton]] = []
         for item in resolved:
             product = item.product
             content = await care_commerce_service.resolve_product_content(
@@ -845,8 +867,47 @@ def make_router(
             explanation = item.explanation_text or content.justification_text
             if explanation:
                 lines.append(f"  · {explanation[:140]}")
-            lines.append(f"  /care_product_open {product.care_product_id}")
-        await message.answer("\n".join(lines))
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=title[:48],
+                        callback_data=await _encode_runtime_callback(
+                            profile=CardProfile.PRODUCT,
+                            entity_type=EntityType.CARE_PRODUCT,
+                            entity_id=product.care_product_id,
+                            action=CardAction.OPEN,
+                            source_context=SourceContext.RECOMMENDATION_DETAIL,
+                            source_ref=f"care.recommendation.{recommendation.recommendation_id}",
+                            page_or_index="product",
+                            state_token=f"care:{message.from_user.id}",
+                        ),
+                    )
+                ]
+            )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=i18n.t("patient.care.catalog.title", _locale()).split("/")[0].strip(),
+                    callback_data=await _encode_runtime_callback(
+                        profile=CardProfile.PRODUCT,
+                        entity_type=EntityType.CARE_PRODUCT,
+                        entity_id="categories",
+                        action=CardAction.BACK,
+                        source_context=SourceContext.CARE_CATALOG_CATEGORY,
+                        source_ref="care.catalog.entry",
+                        page_or_index="back_categories",
+                        state_token=f"care:{message.from_user.id}",
+                    ),
+                )
+            ]
+        )
+        await _send_or_edit_panel(
+            actor_id=message.from_user.id,
+            message=message,
+            session_id="care",
+            text="\n".join(lines),
+            keyboard=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
 
     @router.message(Command("care_product_open"))
     async def care_product_open(message: Message) -> None:
@@ -1069,7 +1130,7 @@ def make_router(
             await callback.answer(i18n.t("common.card.callback.stale", _locale()), show_alert=True)
             return
 
-        if decoded.source_context == SourceContext.CARE_CATALOG_CATEGORY and decoded.profile == CardProfile.PRODUCT:
+        if decoded.source_context in {SourceContext.CARE_CATALOG_CATEGORY, SourceContext.RECOMMENDATION_DETAIL} and decoded.profile == CardProfile.PRODUCT:
             clinic_id = _primary_clinic_id()
             if clinic_id is None:
                 await callback.answer(i18n.t("patient.booking.unavailable", _locale()), show_alert=True)
@@ -1083,7 +1144,34 @@ def make_router(
                 await _render_care_product_list(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, category=decoded.entity_id)
                 return
             if decoded.page_or_index == "product":
-                await _render_product_card(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, product_id=decoded.entity_id)
+                await _render_product_card(
+                    callback,
+                    actor_id=callback.from_user.id,
+                    clinic_id=clinic_id,
+                    product_id=decoded.entity_id,
+                    mode=CardMode.COMPACT,
+                    source_context=decoded.source_context,
+                )
+                return
+            if decoded.page_or_index == "expand":
+                await _render_product_card(
+                    callback,
+                    actor_id=callback.from_user.id,
+                    clinic_id=clinic_id,
+                    product_id=decoded.entity_id,
+                    mode=CardMode.EXPANDED,
+                    source_context=decoded.source_context,
+                )
+                return
+            if decoded.page_or_index == "collapse":
+                await _render_product_card(
+                    callback,
+                    actor_id=callback.from_user.id,
+                    clinic_id=clinic_id,
+                    product_id=decoded.entity_id,
+                    mode=CardMode.COMPACT,
+                    source_context=decoded.source_context,
+                )
                 return
             if decoded.page_or_index == "branch":
                 await _render_branch_picker(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, product_id=decoded.entity_id)
@@ -1099,6 +1187,33 @@ def make_router(
                 flow.care = state
                 await _save_flow_state(callback.from_user.id, flow)
                 await _render_product_card(callback, actor_id=callback.from_user.id, clinic_id=clinic_id, product_id=decoded.entity_id)
+                return
+            if decoded.page_or_index in {"cover", "gallery"}:
+                await _send_or_edit_panel(
+                    actor_id=callback.from_user.id,
+                    message=callback,
+                    session_id="care",
+                    text=i18n.t("patient.care.product.media.unavailable", _locale()),
+                    keyboard=InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                InlineKeyboardButton(
+                                    text=i18n.t("common.back", _locale()),
+                                    callback_data=await _encode_runtime_callback(
+                                        profile=CardProfile.PRODUCT,
+                                        entity_type=EntityType.CARE_PRODUCT,
+                                        entity_id=decoded.entity_id,
+                                        action=CardAction.BACK,
+                                        source_context=decoded.source_context,
+                                        source_ref="care.product.media.back",
+                                        page_or_index="back_product",
+                                        state_token=f"care:{callback.from_user.id}",
+                                    ),
+                                )
+                            ]
+                        ]
+                    ),
+                )
                 return
             if decoded.page_or_index == "reserve":
                 patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
