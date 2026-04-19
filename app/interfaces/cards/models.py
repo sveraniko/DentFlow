@@ -52,6 +52,14 @@ class CardAction(str, Enum):
     PREV = "prev"
     PAGE = "page"
     HOME = "home"
+    RESERVE = "reserve"
+    CHANGE_BRANCH = "change_branch"
+    BOOKINGS = "bookings"
+    RECOMMENDATIONS = "recommendations"
+    CHART = "chart"
+    ORDERS = "orders"
+    TODAY = "today"
+    SCHEDULE = "schedule"
 
 
 @dataclass(slots=True, frozen=True)
