@@ -14,7 +14,7 @@ from app.application.booking.telegram_flow import BookingPatientFlowService
 from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
 from app.application.policy import InMemoryPolicyRepository, PolicyResolver
 from app.domain.booking import AdminEscalation, AvailabilitySlot, Booking, BookingSession, BookingStatusHistory, SessionEvent, SlotHold, WaitlistEntry
-from app.domain.clinic_reference.models import Clinic, Doctor, Service
+from app.domain.clinic_reference.models import Branch, Clinic, Doctor, Service
 
 
 class _Tx(AbstractAsyncContextManager):
@@ -46,6 +46,9 @@ class _Tx(AbstractAsyncContextManager):
 
     async def append_booking_status_history(self, item: BookingStatusHistory) -> None:
         self.repo.history.append(item)
+
+    async def append_outbox_event(self, item: object) -> None:
+        self.repo.outbox.append(item)
 
     async def upsert_waitlist_entry(self, item: WaitlistEntry) -> None:
         self.repo.waitlist[item.waitlist_entry_id] = item
@@ -86,7 +89,7 @@ class _Tx(AbstractAsyncContextManager):
 
 class _Repo:
     def __init__(self) -> None:
-        now = datetime(2026, 4, 16, 10, 0, tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
         self.sessions: dict[str, BookingSession] = {}
         self.holds: dict[str, SlotHold] = {}
         self.bookings: dict[str, Booking] = {}
@@ -94,14 +97,15 @@ class _Repo:
         self.session_events: list[SessionEvent] = []
         self.waitlist: dict[str, WaitlistEntry] = {}
         self.escalations: dict[str, AdminEscalation] = {}
+        self.outbox: list[object] = []
         self.slots = {
             "slot_1": AvailabilitySlot(
                 slot_id="slot_1",
                 clinic_id="clinic_main",
                 branch_id="branch_1",
                 doctor_id="doctor_1",
-                start_at=now + timedelta(days=1),
-                end_at=now + timedelta(days=1, minutes=30),
+                start_at=now + timedelta(days=2),
+                end_at=now + timedelta(days=2, minutes=30),
                 status="open",
                 visibility_policy="public",
                 service_scope=None,
@@ -122,6 +126,7 @@ class _Repo:
             "session_events": list(self.session_events),
             "waitlist": dict(self.waitlist),
             "escalations": dict(self.escalations),
+            "outbox": list(self.outbox),
         }
 
     def restore(self, snapshot: dict[str, Any]) -> None:
@@ -132,6 +137,7 @@ class _Repo:
         self.session_events = snapshot["session_events"]
         self.waitlist = snapshot["waitlist"]
         self.escalations = snapshot["escalations"]
+        self.outbox = snapshot["outbox"]
 
     async def get_booking_session(self, booking_session_id: str) -> BookingSession | None:
         return self.sessions.get(booking_session_id)
@@ -205,7 +211,8 @@ class _PatientCreator:
 
 def _reference_service() -> ClinicReferenceService:
     repo = InMemoryClinicReferenceRepository()
-    repo.upsert_clinic(Clinic(clinic_id="clinic_main", code="MAIN", display_name="Main", timezone="UTC", default_locale="en"))
+    repo.upsert_clinic(Clinic(clinic_id="clinic_main", code="MAIN", display_name="Main", timezone="America/New_York", default_locale="en"))
+    repo.upsert_branch(Branch(branch_id="branch_1", clinic_id="clinic_main", display_name="Main Branch", address_text="-", timezone="Asia/Almaty"))
     repo.upsert_service(Service(service_id="service_consult", clinic_id="clinic_main", code="CONSULT", title_key="s", duration_minutes=30))
     repo.upsert_doctor(Doctor(doctor_id="doctor_1", clinic_id="clinic_main", display_name="Dr One", specialty_code="dent", branch_id="branch_1"))
     return ClinicReferenceService(repo)
@@ -258,6 +265,37 @@ def test_happy_path_with_no_match_creates_canonical_patient_and_finalizes() -> N
     assert isinstance(finalized, OrchestrationSuccess)
     assert finalized.entity.status == "pending_confirmation"
     assert len(repo.bookings) == 1
+
+
+def test_build_booking_card_prefers_branch_timezone_and_resolved_labels() -> None:
+    flow, repo, _ = _build_flow(finder_rows=[])
+    booking = Booking(
+        booking_id="bk_1",
+        clinic_id="clinic_main",
+        patient_id="pat_1",
+        doctor_id="doctor_1",
+        service_id="service_consult",
+        booking_mode="service_first",
+        source_channel="telegram",
+        scheduled_start_at=datetime(2026, 4, 16, 9, 0, tzinfo=timezone.utc),
+        scheduled_end_at=datetime(2026, 4, 16, 9, 30, tzinfo=timezone.utc),
+        status="confirmed",
+        confirmation_required=True,
+        created_at=datetime(2026, 4, 16, 8, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 4, 16, 8, 0, tzinfo=timezone.utc),
+        branch_id="branch_1",
+        slot_id="slot_1",
+    )
+    repo.bookings[booking.booking_id] = booking
+
+    card = flow.build_booking_card(booking=booking)
+    snapshot = flow.build_booking_snapshot(booking=booking, role_variant="admin")
+
+    assert card.doctor_label == "Dr One"
+    assert "CONSULT" in card.service_label
+    assert card.branch_label == "Main Branch"
+    assert card.datetime_label.endswith("+05")
+    assert snapshot.timezone_name == "Asia/Almaty"
 
 
 def test_exact_match_path_does_not_create_duplicate_patient() -> None:
