@@ -233,5 +233,7 @@
   "care.category.hygiene": "Гигиена",
   "common.card.callback.stale": "Эта карточка устарела. Откройте её заново из исходного списка.",
   "common.card.callback.invalid_context": "Это действие больше не соответствует текущему контексту.",
-  "common.card.callback.invalid_entity": "Это действие больше не соответствует выбранному объекту."
+  "common.card.callback.invalid_entity": "Это действие больше не соответствует выбранному объекту.",
+  "common.card.callback.invalid_source_ref": "Это действие больше не соответствует исходному списку.",
+  "common.card.callback.invalid_page": "Это действие больше не соответствует текущей странице."
 }
