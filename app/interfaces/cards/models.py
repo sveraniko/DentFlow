@@ -60,6 +60,16 @@ class CardAction(str, Enum):
     ORDERS = "orders"
     TODAY = "today"
     SCHEDULE = "schedule"
+    CONFIRM = "confirm"
+    RESCHEDULE = "reschedule"
+    CANCEL = "cancel"
+    CHECKED_IN = "checked_in"
+    IN_SERVICE = "in_service"
+    COMPLETE = "complete"
+    OPEN_PATIENT = "open_patient"
+    OPEN_CHART = "open_chart"
+    OPEN_RECOMMENDATION = "open_recommendation"
+    OPEN_CARE_ORDER = "open_care_order"
 
 
 @dataclass(slots=True, frozen=True)
