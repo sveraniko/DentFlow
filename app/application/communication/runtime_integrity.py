@@ -43,7 +43,7 @@ def evaluate_booking_relevance(*, reminder: ReminderJob, booking: Booking | None
     if booking.status == "reschedule_requested":
         return ReminderRelevanceDecision(False, "canceled", "booking_reschedule_requested")
 
-    if reminder.reminder_type == "booking_confirmation" and booking.status == "confirmed":
+    if reminder.reminder_type in {"booking_confirmation", "booking_no_response_followup"} and booking.status == "confirmed":
         return ReminderRelevanceDecision(False, "canceled", "booking_already_confirmed")
 
     if booking.scheduled_start_at <= now:

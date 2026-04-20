@@ -4,11 +4,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.domain.booking import Booking
 from app.domain.communication import MessageDelivery, ReminderJob
 from app.application.policy import PolicyResolver
 from app.application.communication.runtime_integrity import evaluate_booking_relevance
+from app.common.i18n import I18nService
 
 
 @dataclass(slots=True, frozen=True)
@@ -73,6 +75,10 @@ class TelegramReminderSender(Protocol):
     async def send_reminder(self, *, target: TelegramDeliveryTarget, text: str, actions: tuple[ReminderActionButton, ...]) -> ReminderSendResult: ...
 
 
+class BookingTimezoneResolver(Protocol):
+    def resolve_timezone(self, *, clinic_id: str, branch_id: str | None) -> str: ...
+
+
 @dataclass(slots=True)
 class ReminderDeliveryService:
     repository: ReminderDeliveryRepository
@@ -80,6 +86,9 @@ class ReminderDeliveryService:
     recipient_resolver: TelegramRecipientResolver
     sender: TelegramReminderSender
     policy_resolver: PolicyResolver | None = None
+    i18n: I18nService | None = None
+    timezone_resolver: BookingTimezoneResolver | None = None
+    app_default_timezone: str = "UTC"
 
     async def deliver_due_reminders(self, *, now: datetime, batch_limit: int) -> int:
         claimed = await self.repository.claim_due_reminders(now=now, limit=batch_limit)
@@ -122,7 +131,13 @@ class ReminderDeliveryService:
             )
             return
 
-        rendered = render_booking_reminder_message(reminder=reminder, booking=booking if reminder.booking_id is not None else None)
+        rendered = render_booking_reminder_message(
+            reminder=reminder,
+            booking=booking if reminder.booking_id is not None else None,
+            i18n=self.i18n,
+            timezone_resolver=self.timezone_resolver,
+            app_default_timezone=self.app_default_timezone,
+        )
         try:
             send_result = await self.sender.send_reminder(target=resolution.target, text=rendered.text, actions=rendered.actions)
         except Exception as exc:  # noqa: BLE001
@@ -225,63 +240,94 @@ class ReminderDeliveryService:
         return int(self.policy_resolver.resolve_policy("communication.reminder_retry_delay_minutes", clinic_id=reminder.clinic_id) or 5)
 
 
-def render_booking_reminder_message(*, reminder: ReminderJob, booking: Booking | None) -> RenderedReminderMessage:
+def render_booking_reminder_message(
+    *,
+    reminder: ReminderJob,
+    booking: Booking | None,
+    i18n: I18nService | None = None,
+    timezone_resolver: BookingTimezoneResolver | None = None,
+    app_default_timezone: str = "UTC",
+) -> RenderedReminderMessage:
     locale = (reminder.locale_at_send_time or "ru").lower()
     dt_label = "-"
     doctor_label = "-"
     service_label = "-"
     branch_label = "-"
     if booking is not None:
-        dt_label = booking.scheduled_start_at.strftime("%Y-%m-%d %H:%M UTC")
+        tz_name = app_default_timezone
+        if timezone_resolver is not None:
+            tz_name = timezone_resolver.resolve_timezone(clinic_id=booking.clinic_id, branch_id=booking.branch_id)
+        dt_label = booking.scheduled_start_at.astimezone(_zone_or_utc(tz_name)).strftime("%Y-%m-%d %H:%M %Z")
         doctor_label = booking.doctor_id or "-"
         service_label = booking.service_id or "-"
         branch_label = booking.branch_id or "-"
 
-    reminder_summary = ""
-    actions: tuple[ReminderActionButton, ...]
-    if locale.startswith("en"):
-        if reminder.reminder_type == "booking_confirmation":
-            reminder_summary = "Please confirm your booking."
-            actions = (
-                ReminderActionButton(action="confirm", label="✅ Confirm", callback_data=f"rem:confirm:{reminder.reminder_id}"),
-                ReminderActionButton(action="reschedule", label="🔁 Reschedule", callback_data=f"rem:reschedule:{reminder.reminder_id}"),
-                ReminderActionButton(action="cancel", label="❌ Cancel", callback_data=f"rem:cancel:{reminder.reminder_id}"),
-            )
-        elif reminder.reminder_type in {"booking_previsit", "booking_day_of"}:
-            reminder_summary = "Please acknowledge this reminder."
-            actions = (ReminderActionButton(action="ack", label="👍 Got it", callback_data=f"rem:ack:{reminder.reminder_id}"),)
-        else:
-            reminder_summary = "Your dental visit is coming soon."
-            actions = tuple()
-        text = (
-            "DentFlow reminder\n"
-            f"📅 {dt_label}\n"
-            f"👩‍⚕️ {doctor_label}\n"
-            f"🦷 {service_label}\n"
-            f"🏥 {branch_label}\n\n"
-            f"{reminder_summary}"
-        )
-        return RenderedReminderMessage(text=text, actions=actions)
-
-    if reminder.reminder_type == "booking_confirmation":
-        reminder_summary = "Подтвердите запись."
-        actions = (
-            ReminderActionButton(action="confirm", label="✅ Подтвердить", callback_data=f"rem:confirm:{reminder.reminder_id}"),
-            ReminderActionButton(action="reschedule", label="🔁 Перенести", callback_data=f"rem:reschedule:{reminder.reminder_id}"),
-            ReminderActionButton(action="cancel", label="❌ Отменить", callback_data=f"rem:cancel:{reminder.reminder_id}"),
-        )
-    elif reminder.reminder_type in {"booking_previsit", "booking_day_of"}:
-        reminder_summary = "Подтвердите, что увидели напоминание."
-        actions = (ReminderActionButton(action="ack", label="👍 Понял(а)", callback_data=f"rem:ack:{reminder.reminder_id}"),)
-    else:
-        reminder_summary = "Ваш визит скоро."
-        actions = tuple()
-    text = (
-        "Напоминание DentFlow\n"
-        f"📅 {dt_label}\n"
-        f"👩‍⚕️ {doctor_label}\n"
-        f"🦷 {service_label}\n"
-        f"🏥 {branch_label}\n\n"
-        f"{reminder_summary}"
+    text = _t(i18n, locale, "reminder.message.layout").format(
+        datetime=dt_label,
+        doctor=doctor_label,
+        service=service_label,
+        branch=branch_label,
+        summary=_t(i18n, locale, f"reminder.type.{reminder.reminder_type}.summary"),
     )
+    actions = _build_actions(reminder=reminder, i18n=i18n, locale=locale)
     return RenderedReminderMessage(text=text, actions=actions)
+
+
+def _build_actions(*, reminder: ReminderJob, i18n: I18nService | None, locale: str) -> tuple[ReminderActionButton, ...]:
+    action_map: dict[str, tuple[str, ...]] = {
+        "booking_confirmation": ("confirm", "reschedule", "cancel"),
+        "booking_no_response_followup": ("confirm", "reschedule", "cancel"),
+        "booking_previsit": ("ack",),
+        "booking_day_of": ("ack",),
+        "booking_next_visit_recall": ("ack",),
+    }
+    actions = action_map.get(reminder.reminder_type, tuple())
+    return tuple(
+        ReminderActionButton(
+            action=action,
+            label=_t(i18n, locale, f"reminder.action.{action}"),
+            callback_data=f"rem:{action}:{reminder.reminder_id}",
+        )
+        for action in actions
+    )
+
+
+def _t(i18n: I18nService | None, locale: str, key: str) -> str:
+    if i18n is None:
+        defaults = _DEFAULT_RU if not locale.startswith("en") else _DEFAULT_EN
+        return defaults.get(key, key)
+    return i18n.t(key, locale)
+
+
+def _zone_or_utc(tz_name: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("UTC")
+
+
+_DEFAULT_EN = {
+    "reminder.message.layout": "DentFlow reminder\n📅 {datetime}\n👩‍⚕️ {doctor}\n🦷 {service}\n🏥 {branch}\n\n{summary}",
+    "reminder.type.booking_confirmation.summary": "Please confirm your appointment or request a change.",
+    "reminder.type.booking_previsit.summary": "Upcoming visit reminder. Please check the time.",
+    "reminder.type.booking_day_of.summary": "Today is your dental visit. Please tap “Got it”.",
+    "reminder.type.booking_no_response_followup.summary": "We still need your confirmation. Please confirm or request a reschedule.",
+    "reminder.type.booking_next_visit_recall.summary": "It is time to plan your next prophylaxis visit.",
+    "reminder.action.confirm": "✅ Confirm",
+    "reminder.action.reschedule": "🔁 Reschedule",
+    "reminder.action.cancel": "❌ Cancel",
+    "reminder.action.ack": "👍 Got it",
+}
+
+_DEFAULT_RU = {
+    "reminder.message.layout": "Напоминание DentFlow\n📅 {datetime}\n👩‍⚕️ {doctor}\n🦷 {service}\n🏥 {branch}\n\n{summary}",
+    "reminder.type.booking_confirmation.summary": "Подтвердите запись или выберите удобное изменение.",
+    "reminder.type.booking_previsit.summary": "Напоминание о предстоящем визите. Проверьте время, пожалуйста.",
+    "reminder.type.booking_day_of.summary": "Сегодня ваш визит в клинику. Нажмите «Получил(а)».",
+    "reminder.type.booking_no_response_followup.summary": "Мы всё ещё ждём подтверждение визита. Подтвердите или запросите перенос.",
+    "reminder.type.booking_next_visit_recall.summary": "Пора запланировать следующий профилактический визит.",
+    "reminder.action.confirm": "✅ Подтвердить",
+    "reminder.action.reschedule": "🔁 Перенести",
+    "reminder.action.cancel": "❌ Отменить",
+    "reminder.action.ack": "👍 Получил(а)",
+}

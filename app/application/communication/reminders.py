@@ -50,16 +50,58 @@ class BookingReminderPlanner:
             if when > now:
                 plan.append(ReminderPlanItem(reminder_type="booking_confirmation", scheduled_for=when, payload_key="booking.confirmation"))
 
-        raw_offsets = self.policy_resolver.resolve_policy("booking.reminder_offsets_hours", clinic_id=booking.clinic_id, branch_id=booking.branch_id)
-        offsets = [int(v) for v in raw_offsets] if isinstance(raw_offsets, list) else [24, 2]
-        for offset in sorted(set(offsets), reverse=True):
-            when = booking.scheduled_start_at - timedelta(hours=offset)
-            if when <= now:
-                continue
-            reminder_type = "booking_day_of" if offset <= 12 else "booking_previsit"
-            payload_key = f"booking.reminder.{offset}h"
-            plan.append(ReminderPlanItem(reminder_type=reminder_type, scheduled_for=when, payload_key=payload_key))
+        day_before_hours = int(
+            self.policy_resolver.resolve_policy(
+                "booking.upcoming_day_before_offset_hours",
+                clinic_id=booking.clinic_id,
+                branch_id=booking.branch_id,
+            )
+            or 24
+        )
+        same_day_hours = int(
+            self.policy_resolver.resolve_policy(
+                "booking.same_day_reminder_offset_hours",
+                clinic_id=booking.clinic_id,
+                branch_id=booking.branch_id,
+            )
+            or 2
+        )
+        candidates = [
+            ReminderPlanItem(
+                reminder_type="booking_previsit",
+                scheduled_for=booking.scheduled_start_at - timedelta(hours=day_before_hours),
+                payload_key=f"booking.reminder.{day_before_hours}h",
+            ),
+            ReminderPlanItem(
+                reminder_type="booking_day_of",
+                scheduled_for=booking.scheduled_start_at - timedelta(hours=same_day_hours),
+                payload_key=f"booking.reminder.{same_day_hours}h",
+            ),
+        ]
+        for item in candidates:
+            if item.scheduled_for > now:
+                plan.append(item)
         return plan
+
+    def build_post_visit_plan(self, *, booking: Booking, now: datetime) -> list[ReminderPlanItem]:
+        if booking.status != "completed":
+            return []
+        enabled = bool(self.policy_resolver.resolve_policy("booking.next_visit_recall_enabled", clinic_id=booking.clinic_id, branch_id=booking.branch_id))
+        if not enabled:
+            return []
+        recall_days = int(
+            self.policy_resolver.resolve_policy("booking.next_visit_recall_after_days", clinic_id=booking.clinic_id, branch_id=booking.branch_id) or 180
+        )
+        when = booking.scheduled_start_at + timedelta(days=max(recall_days, 1))
+        if when <= now:
+            return []
+        return [
+            ReminderPlanItem(
+                reminder_type="booking_next_visit_recall",
+                scheduled_for=when,
+                payload_key=f"booking.next_visit.{recall_days}d",
+            )
+        ]
 
 
 @dataclass(slots=True)
@@ -172,6 +214,43 @@ class BookingReminderService:
 
     async def list_booking_reminders(self, *, booking_id: str) -> list[ReminderJob]:
         return await self.repository.list_reminder_jobs_for_booking(booking_id=booking_id)
+
+    async def plan_post_visit_recall_in_transaction(
+        self,
+        *,
+        tx: ReminderPlanningTransaction,
+        booking: Booking,
+        now: datetime | None = None,
+    ) -> list[ReminderJob]:
+        planned_at = now or datetime.now(timezone.utc)
+        plan_items = self.planner.build_post_visit_plan(booking=booking, now=planned_at)
+        if not plan_items:
+            return []
+        planning_group = f"booking:{booking.booking_id}:post_visit:{planned_at.strftime('%Y%m%dT%H%M%SZ')}"
+        channel, locale = await self._resolve_channel_locale(booking)
+        created: list[ReminderJob] = []
+        for item in plan_items:
+            job = ReminderJob(
+                reminder_id=f"rem_{uuid4().hex}",
+                clinic_id=booking.clinic_id,
+                patient_id=booking.patient_id,
+                booking_id=booking.booking_id,
+                care_order_id=None,
+                recommendation_id=None,
+                reminder_type=item.reminder_type,
+                channel=channel,
+                status="scheduled",
+                scheduled_for=item.scheduled_for,
+                payload_key=item.payload_key,
+                locale_at_send_time=locale,
+                planning_group=planning_group,
+                supersedes_reminder_id=None,
+                created_at=planned_at,
+                updated_at=planned_at,
+            )
+            await tx.create_reminder_job_in_transaction(job)
+            created.append(job)
+        return created
 
     async def _resolve_channel_locale(self, booking: Booking) -> tuple[str, str | None]:
         default_channel = self.policy_resolver.resolve_policy("booking.default_reminder_channel", clinic_id=booking.clinic_id, branch_id=booking.branch_id) or "telegram"

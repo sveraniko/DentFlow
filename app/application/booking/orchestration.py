@@ -749,6 +749,12 @@ class BookingOrchestrationService:
                 return InvalidStateOutcome(kind="invalid_state", reason=f"booking cannot transition to {to_status}")
             transitioned_booking = transitioned.entity
             await self._cancel_reminders_for_booking_in_transaction(tx=tx, booking_id=booking_id, reason_code=reason_code)
+            if to_status == "completed":
+                await self._plan_post_visit_recall_in_transaction(
+                    tx=tx,
+                    booking=transitioned_booking,
+                    now=datetime.now(timezone.utc),
+                )
             return OrchestrationSuccess(kind="success", entity=transitioned_booking)
 
     async def _replace_reminder_plan_for_booking_in_transaction(
@@ -781,4 +787,19 @@ class BookingOrchestrationService:
             tx=tx,
             booking_id=booking_id,
             reason_code=reason_code,
+        )
+
+    async def _plan_post_visit_recall_in_transaction(
+        self,
+        *,
+        tx: BookingOrchestrationTransaction,
+        booking: Booking,
+        now: datetime,
+    ) -> None:
+        if self.reminder_service is None:
+            return
+        await self.reminder_service.plan_post_visit_recall_in_transaction(
+            tx=tx,
+            booking=booking,
+            now=now,
         )
