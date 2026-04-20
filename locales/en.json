@@ -457,10 +457,10 @@
   "doctor.doc.registry.row": "• {generated_document_id} · {status} · {created_at} · failure: {failure}",
   "doctor.doc.open.usage": "Usage: /doc_open <generated_document_id>",
   "doctor.doc.open.card": "Document {generated_document_id}\nType: {document_type}\nStatus: {status}\nFailure: {failure}\nArtifact: {artifact}",
-  "doctor.doc.open.download_hint": "Use /doc_download {generated_document_id} to open/download artifact.",
+  "doctor.doc.open.download_hint": "Available for download via /doc_download {generated_document_id}.",
   "doctor.doc.open.artifact_unavailable": "Artifact is not available yet.",
   "doctor.doc.download.usage": "Usage: /doc_download <generated_document_id>",
-  "doctor.doc.download.ok": "Artifact ready for {generated_document_id}: {artifact_ref}",
+  "doctor.doc.download.ok": "Document sent for {generated_document_id}.",
   "doctor.doc.regenerate.usage": "Usage: /doc_regenerate <generated_document_id>",
   "doctor.doc.regenerate.not_supported": "Regenerate is not available for this document context.",
   "doctor.doc.regenerate.ok": "Regeneration created: {generated_document_id}.",
@@ -473,11 +473,12 @@
   "admin.doc.registry.denied_or_missing": "Document not found or unavailable in your clinic scope.",
   "admin.doc.open.usage": "Usage: /admin_doc_open <generated_document_id>",
   "admin.doc.open.card": "Document {generated_document_id}\nType: {document_type}\nStatus: {status}\nFailure: {failure}\nArtifact: {artifact}",
-  "admin.doc.open.download_hint": "Use /admin_doc_download {generated_document_id} to open/download artifact.",
+  "admin.doc.open.download_hint": "Available for download via /admin_doc_download {generated_document_id}.",
   "admin.doc.open.artifact_unavailable": "Artifact is not available yet.",
   "admin.doc.download.usage": "Usage: /admin_doc_download <generated_document_id>",
-  "admin.doc.download.ok": "Artifact ready for {generated_document_id}: {artifact_ref}",
+  "admin.doc.download.ok": "Document sent for {generated_document_id}.",
   "admin.doc.regenerate.usage": "Usage: /admin_doc_regenerate <generated_document_id>",
   "admin.doc.regenerate.not_supported": "Regenerate is not available for this document context.",
-  "admin.doc.regenerate.ok": "Regeneration created: {generated_document_id}."
+  "admin.doc.regenerate.ok": "Regeneration created: {generated_document_id}.",
+  "document.delivery.unsupported_provider": "Artifact delivery is not available for this provider yet."
 }

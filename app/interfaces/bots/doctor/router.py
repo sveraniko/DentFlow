@@ -2,7 +2,7 @@ import json
 
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.application.access import AccessResolver
 from app.application.booking import BookingOrchestrationService, BookingService, BookingStateService
@@ -10,7 +10,13 @@ from app.application.clinic_reference import ClinicReferenceService
 from app.application.clinical import ClinicalChartService
 from app.application.care_commerce import CareCommerceService
 from app.application.doctor import DOCTOR_ALLOWED_ACTIONS, DoctorOperationsService, DoctorPatientReader
-from app.application.export import DocumentExportApplicationService, ExportAssemblyRequest, GeneratedDocumentRegistryService, MediaAssetRegistryService
+from app.application.export import (
+    DocumentExportApplicationService,
+    ExportAssemblyRequest,
+    GeneratedArtifactDeliveryService,
+    GeneratedDocumentRegistryService,
+    MediaAssetRegistryService,
+)
 from app.application.export.services import TemplateResolutionError
 from app.application.recommendation import RecommendationService
 from app.application.search.service import HybridSearchService
@@ -58,6 +64,7 @@ def make_router(
     document_export_service: DocumentExportApplicationService | None = None,
     generated_document_registry: GeneratedDocumentRegistryService | None = None,
     media_asset_registry: MediaAssetRegistryService | None = None,
+    artifact_delivery: GeneratedArtifactDeliveryService | None = None,
     *,
     default_locale: str,
     max_voice_duration_sec: int,
@@ -107,6 +114,7 @@ def make_router(
     booking_builder = BookingRuntimeViewBuilder()
     care_order_builder = CareOrderRuntimeViewBuilder()
     export_document_type = "043_card_export"
+    delivery_service = artifact_delivery or GeneratedArtifactDeliveryService()
 
     def _doc_status_label(*, status: str, locale: str) -> str:
         translated = i18n.t(f"document.status.{status}", locale)
@@ -480,7 +488,11 @@ def make_router(
         if row.generated_file_asset_id:
             asset = await media_asset_registry.get_media_asset(row.generated_file_asset_id)
             if asset:
-                artifact_hint = i18n.t("doctor.doc.open.download_hint", locale).format(generated_document_id=row.generated_document_id)
+                delivery = delivery_service.resolve(asset)
+                if delivery.mode == "local_file":
+                    artifact_hint = i18n.t("doctor.doc.open.download_hint", locale).format(generated_document_id=row.generated_document_id)
+                elif delivery.mode == "unsupported_provider":
+                    artifact_hint = i18n.t("document.delivery.unsupported_provider", locale)
         elif row.generation_status == "generated":
             artifact_hint = i18n.t("document.error.generated_missing_artifact", locale)
         await message.answer(
@@ -520,12 +532,17 @@ def make_router(
         if asset is None:
             await message.answer(i18n.t("doctor.doc.open.artifact_unavailable", locale))
             return
-        await message.answer(
-            i18n.t("doctor.doc.download.ok", locale).format(
-                generated_document_id=row.generated_document_id,
-                artifact_ref=asset.storage_ref,
+        delivery = delivery_service.resolve(asset)
+        if delivery.mode == "local_file" and delivery.path is not None:
+            await message.answer_document(
+                FSInputFile(path=str(delivery.path), filename=delivery.path.name),
+                caption=i18n.t("doctor.doc.download.ok", locale).format(generated_document_id=row.generated_document_id),
             )
-        )
+            return
+        if delivery.mode == "unsupported_provider":
+            await message.answer(i18n.t("document.delivery.unsupported_provider", locale))
+            return
+        await message.answer(i18n.t("doctor.doc.open.artifact_unavailable", locale))
 
     @router.message(Command("doc_regenerate"))
     async def doc_regenerate(message: Message) -> None:

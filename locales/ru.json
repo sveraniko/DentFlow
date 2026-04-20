@@ -457,10 +457,10 @@
   "doctor.doc.registry.row": "• {generated_document_id} · {status} · {created_at} · ошибка: {failure}",
   "doctor.doc.open.usage": "Формат: /doc_open <generated_document_id>",
   "doctor.doc.open.card": "Документ {generated_document_id}\nТип: {document_type}\nСтатус: {status}\nОшибка: {failure}\nАртефакт: {artifact}",
-  "doctor.doc.open.download_hint": "Используйте /doc_download {generated_document_id} для открытия/загрузки артефакта.",
+  "doctor.doc.open.download_hint": "Доступно для загрузки: /doc_download {generated_document_id}.",
   "doctor.doc.open.artifact_unavailable": "Артефакт пока недоступен.",
   "doctor.doc.download.usage": "Формат: /doc_download <generated_document_id>",
-  "doctor.doc.download.ok": "Артефакт для {generated_document_id}: {artifact_ref}",
+  "doctor.doc.download.ok": "Документ отправлен для {generated_document_id}.",
   "doctor.doc.regenerate.usage": "Формат: /doc_regenerate <generated_document_id>",
   "doctor.doc.regenerate.not_supported": "Повторная генерация недоступна для этого контекста документа.",
   "doctor.doc.regenerate.ok": "Повторная генерация создана: {generated_document_id}.",
@@ -473,11 +473,12 @@
   "admin.doc.registry.denied_or_missing": "Документ не найден или недоступен в области вашей клиники.",
   "admin.doc.open.usage": "Формат: /admin_doc_open <generated_document_id>",
   "admin.doc.open.card": "Документ {generated_document_id}\nТип: {document_type}\nСтатус: {status}\nОшибка: {failure}\nАртефакт: {artifact}",
-  "admin.doc.open.download_hint": "Используйте /admin_doc_download {generated_document_id} для открытия/загрузки артефакта.",
+  "admin.doc.open.download_hint": "Доступно для загрузки: /admin_doc_download {generated_document_id}.",
   "admin.doc.open.artifact_unavailable": "Артефакт пока недоступен.",
   "admin.doc.download.usage": "Формат: /admin_doc_download <generated_document_id>",
-  "admin.doc.download.ok": "Артефакт для {generated_document_id}: {artifact_ref}",
+  "admin.doc.download.ok": "Документ отправлен для {generated_document_id}.",
   "admin.doc.regenerate.usage": "Формат: /admin_doc_regenerate <generated_document_id>",
   "admin.doc.regenerate.not_supported": "Повторная генерация недоступна для этого контекста документа.",
-  "admin.doc.regenerate.ok": "Повторная генерация создана: {generated_document_id}."
+  "admin.doc.regenerate.ok": "Повторная генерация создана: {generated_document_id}.",
+  "document.delivery.unsupported_provider": "Доставка артефакта для этого хранилища пока недоступна."
 }

@@ -19,9 +19,13 @@ class _Message:
         self.text = text
         self.from_user = SimpleNamespace(id=user_id)
         self.answers: list[tuple[str, object | None]] = []
+        self.documents: list[tuple[object, str | None]] = []
 
     async def answer(self, text: str, reply_markup=None) -> None:
         self.answers.append((text, reply_markup))
+
+    async def answer_document(self, document, caption: str | None = None, **kwargs) -> None:
+        self.documents.append((document, caption))
 
 
 class _ExportService:
@@ -236,7 +240,7 @@ def test_admin_registry_open_and_regenerate_template_failure() -> None:
     assert "template is unavailable" in regen_msg.answers[-1][0]
 
 
-def test_admin_download_shows_artifact_ref_when_exists() -> None:
+def test_admin_download_sends_document_without_storage_ref_leak(tmp_path: Path) -> None:
     i18n = I18nService(Path("locales"), default_locale="en")
     now = datetime(2026, 4, 20, tzinfo=timezone.utc)
     row = GeneratedDocument(
@@ -256,12 +260,14 @@ def test_admin_download_shows_artifact_ref_when_exists() -> None:
         updated_at=now,
         generation_error_text=None,
     )
+    artifact_path = tmp_path / "g2.txt"
+    artifact_path.write_text("hello", encoding="utf-8")
     asset = MediaAsset(
         media_asset_id="m1",
         clinic_id="c1",
         asset_kind="generated_document",
         storage_provider="local_fs",
-        storage_ref="artifacts/generated_documents/g2.txt",
+        storage_ref=str(artifact_path),
         content_type="text/plain",
         byte_size=12,
         checksum_sha256="abc",
@@ -284,7 +290,246 @@ def test_admin_download_shows_artifact_ref_when_exists() -> None:
         document_export_service=_ExportService(),
         generated_document_registry=_GeneratedRegistry({"g2": row}),
         media_asset_registry=_MediaRegistry({"m1": asset}),
+        artifact_delivery=SimpleNamespace(resolve=lambda _: SimpleNamespace(mode="local_file", path=artifact_path)),
     )
     msg = _Message("/admin_doc_download g2", user_id=602)
     asyncio.run(_handler(router, "admin_doc_download")(msg))
-    assert "artifacts/generated_documents/g2.txt" in msg.answers[-1][0]
+    assert not msg.answers
+    assert msg.documents
+    assert msg.documents[-1][1] == "Document sent for g2."
+
+
+def test_doctor_download_sends_document_without_storage_ref_leak(tmp_path: Path) -> None:
+    i18n = I18nService(Path("locales"), default_locale="en")
+    now = datetime(2026, 4, 20, tzinfo=timezone.utc)
+    artifact_path = tmp_path / "g3.txt"
+    artifact_path.write_text("doctor", encoding="utf-8")
+    row = GeneratedDocument(
+        generated_document_id="g3",
+        clinic_id="c1",
+        patient_id="p1",
+        chart_id="ch1",
+        encounter_id=None,
+        booking_id="b1",
+        document_template_id="dt1",
+        document_type="043_card_export",
+        generation_status="generated",
+        generated_file_asset_id="m3",
+        editable_source_asset_id=None,
+        created_by_actor_id="a_doctor",
+        created_at=now,
+        updated_at=now,
+        generation_error_text=None,
+    )
+    asset = MediaAsset(
+        media_asset_id="m3",
+        clinic_id="c1",
+        asset_kind="generated_document",
+        storage_provider="local_fs",
+        storage_ref=str(artifact_path),
+        content_type="text/plain",
+        byte_size=6,
+        checksum_sha256="abc",
+        created_by_actor_id="a_doctor",
+        created_at=now,
+        updated_at=now,
+    )
+    router = make_doctor_router(
+        i18n,
+        _access(role=RoleCode.DOCTOR, telegram_user_id=503, actor_id="a_doctor"),
+        search_service=SimpleNamespace(),
+        stt_service=SimpleNamespace(),
+        voice_mode_store=SimpleNamespace(),
+        booking_service=_DoctorBookingService(),
+        booking_state_service=SimpleNamespace(),
+        booking_orchestration=SimpleNamespace(),
+        reference_service=_Reference(),
+        patient_reader=_PatientReader(),
+        clinical_service=_Clinical(),
+        recommendation_service=SimpleNamespace(),
+        default_locale="en",
+        max_voice_duration_sec=60,
+        max_voice_file_size_bytes=1024,
+        voice_mode_ttl_sec=30,
+        document_export_service=_ExportService(),
+        generated_document_registry=_GeneratedRegistry({"g3": row}),
+        media_asset_registry=_MediaRegistry({"m3": asset}),
+        artifact_delivery=SimpleNamespace(resolve=lambda _: SimpleNamespace(mode="local_file", path=artifact_path)),
+    )
+    msg = _Message("/doc_download g3", user_id=503)
+    asyncio.run(_handler(router, "doc_download")(msg))
+    assert not msg.answers
+    assert msg.documents
+    assert msg.documents[-1][1] == "Document sent for g3."
+
+
+def test_admin_open_has_bounded_metadata_hint() -> None:
+    i18n = I18nService(Path("locales"), default_locale="en")
+    now = datetime(2026, 4, 20, tzinfo=timezone.utc)
+    row = GeneratedDocument(
+        generated_document_id="g4",
+        clinic_id="c1",
+        patient_id="p1",
+        chart_id="ch1",
+        encounter_id=None,
+        booking_id="b1",
+        document_template_id="dt1",
+        document_type="043_card_export",
+        generation_status="generated",
+        generated_file_asset_id="m4",
+        editable_source_asset_id=None,
+        created_by_actor_id="a_admin",
+        created_at=now,
+        updated_at=now,
+        generation_error_text=None,
+    )
+    router = make_admin_router(
+        i18n,
+        _access(role=RoleCode.ADMIN, telegram_user_id=604, actor_id="a_admin"),
+        reference_service=SimpleNamespace(get_clinic=lambda cid: SimpleNamespace(default_locale="en"), get_service=lambda c, s: None),
+        booking_flow=SimpleNamespace(),
+        search_service=SimpleNamespace(),
+        stt_service=SimpleNamespace(),
+        voice_mode_store=SimpleNamespace(),
+        default_locale="en",
+        max_voice_duration_sec=60,
+        max_voice_file_size_bytes=1024,
+        voice_mode_ttl_sec=30,
+        document_export_service=_ExportService(),
+        generated_document_registry=_GeneratedRegistry({"g4": row}),
+        media_asset_registry=_MediaRegistry({"m4": MediaAsset("m4", "c1", "generated_document", "local_fs", "x", None, None, None, None, now, now)}),
+        artifact_delivery=SimpleNamespace(resolve=lambda _: SimpleNamespace(mode="local_file", path=Path("x"))),
+    )
+    msg = _Message("/admin_doc_open g4", user_id=604)
+    asyncio.run(_handler(router, "admin_doc_open")(msg))
+    assert "Available for download via /admin_doc_download g4." in msg.answers[-1][0]
+    assert "storage_ref" not in msg.answers[-1][0]
+
+
+def test_doctor_open_has_bounded_metadata_hint() -> None:
+    i18n = I18nService(Path("locales"), default_locale="en")
+    now = datetime(2026, 4, 20, tzinfo=timezone.utc)
+    row = GeneratedDocument(
+        generated_document_id="g5",
+        clinic_id="c1",
+        patient_id="p1",
+        chart_id="ch1",
+        encounter_id=None,
+        booking_id="b1",
+        document_template_id="dt1",
+        document_type="043_card_export",
+        generation_status="generated",
+        generated_file_asset_id="m5",
+        editable_source_asset_id=None,
+        created_by_actor_id="a_doctor",
+        created_at=now,
+        updated_at=now,
+        generation_error_text=None,
+    )
+    router = make_doctor_router(
+        i18n,
+        _access(role=RoleCode.DOCTOR, telegram_user_id=505, actor_id="a_doctor"),
+        search_service=SimpleNamespace(),
+        stt_service=SimpleNamespace(),
+        voice_mode_store=SimpleNamespace(),
+        booking_service=_DoctorBookingService(),
+        booking_state_service=SimpleNamespace(),
+        booking_orchestration=SimpleNamespace(),
+        reference_service=_Reference(),
+        patient_reader=_PatientReader(),
+        clinical_service=_Clinical(),
+        recommendation_service=SimpleNamespace(),
+        default_locale="en",
+        max_voice_duration_sec=60,
+        max_voice_file_size_bytes=1024,
+        voice_mode_ttl_sec=30,
+        document_export_service=_ExportService(),
+        generated_document_registry=_GeneratedRegistry({"g5": row}),
+        media_asset_registry=_MediaRegistry({"m5": MediaAsset("m5", "c1", "generated_document", "local_fs", "x", None, None, None, None, now, now)}),
+        artifact_delivery=SimpleNamespace(resolve=lambda _: SimpleNamespace(mode="local_file", path=Path("x"))),
+    )
+    msg = _Message("/doc_open g5", user_id=505)
+    asyncio.run(_handler(router, "doc_open")(msg))
+    assert "Available for download via /doc_download g5." in msg.answers[-1][0]
+    assert "storage_ref" not in msg.answers[-1][0]
+
+
+def test_download_unavailable_and_unsupported_provider_are_safe() -> None:
+    i18n = I18nService(Path("locales"), default_locale="en")
+    now = datetime(2026, 4, 20, tzinfo=timezone.utc)
+    row = GeneratedDocument(
+        generated_document_id="g6",
+        clinic_id="c1",
+        patient_id="p1",
+        chart_id="ch1",
+        encounter_id=None,
+        booking_id="b1",
+        document_template_id="dt1",
+        document_type="043_card_export",
+        generation_status="generated",
+        generated_file_asset_id="m6",
+        editable_source_asset_id=None,
+        created_by_actor_id="a_admin",
+        created_at=now,
+        updated_at=now,
+        generation_error_text=None,
+    )
+    asset = MediaAsset("m6", "c1", "generated_document", "s3", "s3://secret/key", "text/plain", 12, "abc", "a_admin", now, now)
+    router = make_admin_router(
+        i18n,
+        _access(role=RoleCode.ADMIN, telegram_user_id=606, actor_id="a_admin"),
+        reference_service=SimpleNamespace(get_clinic=lambda cid: SimpleNamespace(default_locale="en"), get_service=lambda c, s: None),
+        booking_flow=SimpleNamespace(),
+        search_service=SimpleNamespace(),
+        stt_service=SimpleNamespace(),
+        voice_mode_store=SimpleNamespace(),
+        default_locale="en",
+        max_voice_duration_sec=60,
+        max_voice_file_size_bytes=1024,
+        voice_mode_ttl_sec=30,
+        document_export_service=_ExportService(),
+        generated_document_registry=_GeneratedRegistry({"g6": row}),
+        media_asset_registry=_MediaRegistry({"m6": asset}),
+        artifact_delivery=SimpleNamespace(resolve=lambda _: SimpleNamespace(mode="unsupported_provider", path=None)),
+    )
+    unsupported_msg = _Message("/admin_doc_download g6", user_id=606)
+    asyncio.run(_handler(router, "admin_doc_download")(unsupported_msg))
+    assert "not available for this provider yet" in unsupported_msg.answers[-1][0]
+    assert "s3://secret/key" not in unsupported_msg.answers[-1][0]
+
+    missing_row = GeneratedDocument(
+        generated_document_id="g7",
+        clinic_id="c1",
+        patient_id="p1",
+        chart_id="ch1",
+        encounter_id=None,
+        booking_id="b1",
+        document_template_id="dt1",
+        document_type="043_card_export",
+        generation_status="generated",
+        generated_file_asset_id="m7",
+        editable_source_asset_id=None,
+        created_by_actor_id="a_admin",
+        created_at=now,
+        updated_at=now,
+        generation_error_text=None,
+    )
+    router_missing = make_admin_router(
+        i18n,
+        _access(role=RoleCode.ADMIN, telegram_user_id=607, actor_id="a_admin"),
+        reference_service=SimpleNamespace(get_clinic=lambda cid: SimpleNamespace(default_locale="en"), get_service=lambda c, s: None),
+        booking_flow=SimpleNamespace(),
+        search_service=SimpleNamespace(),
+        stt_service=SimpleNamespace(),
+        voice_mode_store=SimpleNamespace(),
+        default_locale="en",
+        max_voice_duration_sec=60,
+        max_voice_file_size_bytes=1024,
+        voice_mode_ttl_sec=30,
+        document_export_service=_ExportService(),
+        generated_document_registry=_GeneratedRegistry({"g7": missing_row}),
+        media_asset_registry=_MediaRegistry({}),
+    )
+    missing_msg = _Message("/admin_doc_download g7", user_id=607)
+    asyncio.run(_handler(router_missing, "admin_doc_download")(missing_msg))
+    assert "Artifact is not available yet" in missing_msg.answers[-1][0]

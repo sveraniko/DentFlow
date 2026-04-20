@@ -3,6 +3,8 @@ from app.application.export.models import ExportAssemblyRequest, ExportAssemblyR
 from app.application.export.rendering import LocalArtifactStorage, PlainText043Renderer
 from app.application.export.services import (
     DocumentTemplateRegistryService,
+    GeneratedArtifactDeliveryResult,
+    GeneratedArtifactDeliveryService,
     GeneratedDocumentRegistryService,
     MediaAssetRegistryService,
     TemplateResolutionError,
@@ -10,6 +12,8 @@ from app.application.export.services import (
 
 __all__ = [
     "DocumentTemplateRegistryService",
+    "GeneratedArtifactDeliveryResult",
+    "GeneratedArtifactDeliveryService",
     "GeneratedDocumentRegistryService",
     "MediaAssetRegistryService",
     "TemplateResolutionError",
