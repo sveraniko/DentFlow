@@ -13,6 +13,7 @@ from app.infrastructure.db.repositories import DbPolicyRepository
 from app.infrastructure.workers.reminder_delivery import run_reminder_delivery_once
 from app.infrastructure.workers.reminder_recovery import run_reminder_recovery_once
 from app.infrastructure.workers.tasks import TaskRegistry, placeholder_heartbeat_task
+from app.projections.runtime import ProjectorWorkerConfig, ProjectorWorkerRuntime, build_default_projector_registry
 
 
 async def run_worker_once() -> None:
@@ -51,8 +52,35 @@ async def run_worker_once() -> None:
     logger.info("worker bootstrap finished")
 
 
+def _projector_worker_config_from_env() -> ProjectorWorkerConfig:
+    return ProjectorWorkerConfig(
+        batch_limit=max(1, int(os.getenv("PROJECTOR_WORKER_BATCH_LIMIT", "200"))),
+        poll_interval_sec=max(0.1, float(os.getenv("PROJECTOR_WORKER_POLL_INTERVAL_SEC", "1.0"))),
+        startup_catchup_max_batches=max(1, int(os.getenv("PROJECTOR_WORKER_STARTUP_CATCHUP_MAX_BATCHES", "20"))),
+    )
+
+
+async def run_worker_forever() -> None:
+    settings = get_settings()
+    configure_logging(settings.logging)
+    logger = logging.getLogger("dentflow.worker")
+    logger.info("worker runtime started")
+    registry = build_default_projector_registry()
+    projector_enabled = os.getenv("PROJECTOR_WORKER_ENABLED", "1").strip().lower() not in {"0", "false", "off"}
+    if projector_enabled:
+        projector_worker = ProjectorWorkerRuntime(
+            settings=settings,
+            registry=registry,
+            config=_projector_worker_config_from_env(),
+        )
+        projector_worker.install_signal_handlers()
+        await projector_worker.run_forever()
+    else:
+        logger.info("projector worker disabled via PROJECTOR_WORKER_ENABLED")
+
+
 def main() -> None:
-    asyncio.run(run_worker_once())
+    asyncio.run(run_worker_forever())
 
 
 if __name__ == "__main__":
