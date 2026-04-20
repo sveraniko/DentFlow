@@ -1,5 +1,7 @@
 # DentFlow Redis Audit Report
 
+> **Outdated claim notice (added 2026-04-20):** Some claims in this legacy audit are now outdated. For current convergence state, use `docs/report/CONVERGENCE_PACK_DELTA_AUDIT_2026-04-20.md` as the source of truth. Superseded categories include projector runtime integration status and card runtime/callback codec integration in real routes.
+
 **Дата аудита:** 2026-04-19  
 **Контекст:** аудит соответствия фактической реализации Redis-подхода в проекте DentFlow каноническим правилам `docs/16-5_card_runtime_state_and_redis_rules.md`.
 
