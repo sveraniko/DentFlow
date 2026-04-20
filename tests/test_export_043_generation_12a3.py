@@ -345,6 +345,8 @@ def test_generate_043_export_creates_artifact_and_marks_generated(tmp_path: Path
     assert "Contact: Phone: +380501112233" in text
     assert "Doctor: Dr. Ada" in text
     assert "Branch: Central Branch" in text
+    assert "Booking context: Linked scheduled booking" in text
+    assert "Warnings\n- None" in text
     editable_asset = media_repo.rows[gdoc.editable_source_asset_id]
     assert editable_asset.asset_kind == "generated_document_editable_source"
     editable_text = Path(editable_asset.storage_ref).read_text(encoding="utf-8")
@@ -421,10 +423,63 @@ def test_plain_text_renderer_humanizes_machine_labels_when_needed(tmp_path: Path
     output = Path(asset.storage_ref).read_text(encoding="utf-8")
     assert "service.root_canal_initial" not in output
     assert "Contact: Telegram: iryna_bond" in output
-    assert "Doctor: Doctor 1" in output
-    assert "Branch: Branch 1" in output
+    assert "Doctor: Doctor" in output
+    assert "Branch: Branch" in output
     assert "Service: Root canal initial" in output
     assert generated_repo.rows[result.generated_document_id].generation_status == "generated"
+
+
+def test_plain_text_renderer_sparse_output_is_human_and_non_machine_shaped(tmp_path: Path) -> None:
+    app_service, _generated_repo, media_repo, patient_id = _build_export_context(tmp_path)
+    original_assembler = app_service.payload_assembler
+
+    class _AssemblerProxy:
+        async def assemble_payload(self, request: ExportAssemblyRequest):
+            payload = await original_assembler.assemble_payload(request)
+            return replace(
+                payload,
+                patient=replace(payload.patient, primary_contact_hint=None),
+                booking=replace(
+                    payload.booking,
+                    booking_id="bkg_999",
+                    booking_status="pending_confirmation",
+                    doctor_label=None,
+                    service_label=None,
+                    branch_label=None,
+                ),
+                diagnosis=replace(payload.diagnosis, diagnosis_text=None),
+                treatment_plan=replace(payload.treatment_plan, title=None, plan_text=None),
+                complaint_and_notes=replace(payload.complaint_and_notes, latest_note_text=None),
+                imaging=replace(payload.imaging, total_count=0),
+                odontogram=replace(payload.odontogram, surface_count_hint=None),
+                warnings=("current_diagnosis_missing", "booking_context_missing", "patient_contact_missing"),
+            )
+
+    app_service = replace(app_service, payload_assembler=_AssemblerProxy())
+    result = asyncio.run(
+        app_service.generate_043_export(
+            ExportAssemblyRequest(
+                clinic_id="clinic_1",
+                patient_id=patient_id,
+                chart_id="chart_1",
+                encounter_id="enc_1",
+                booking_id="booking_1",
+                template_type="043_card_export",
+                template_locale="en",
+            )
+        )
+    )
+    output = Path(media_repo.rows[result.generated_file_asset_id].storage_ref).read_text(encoding="utf-8")
+    assert "Booking context: Linked scheduled booking" in output
+    assert "Status: Pending confirmation" in output
+    assert "Primary diagnosis: No current diagnosis recorded" in output
+    assert "Treatment plan: No current treatment plan recorded" in output
+    assert "Latest note: No chart note summary available" in output
+    assert "Imaging refs: No imaging references linked" in output
+    assert "Odontogram surfaces: No snapshot recorded" in output
+    assert "Contact: —" in output
+    assert "current_diagnosis_missing" not in output
+    assert "patient_contact_missing" not in output
 
 
 def test_template_source_ref_changes_output_layout_deterministically(tmp_path: Path) -> None:

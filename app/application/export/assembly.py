@@ -71,6 +71,8 @@ class Structured043ExportAssembler:
         if contacts_sorted:
             contact = contacts_sorted[0]
             primary_contact_hint = f"{contact.contact_type}:{contact.contact_value}"
+        else:
+            warnings.append("patient_contact_missing")
 
         booking = await self._resolve_booking(request=request, chart=chart)
         if booking is None:
@@ -106,9 +108,15 @@ class Structured043ExportAssembler:
             doctor = self.reference_service.get_doctor(request.clinic_id, booking.doctor_id)
             service = self.reference_service.get_service(request.clinic_id, booking.service_id)
             branch = self.reference_service.get_branch(request.clinic_id, booking.branch_id) if booking.branch_id else None
-            doctor_label = doctor.display_name if doctor else booking.doctor_id
-            service_label = service.title_key if service else booking.service_id
-            branch_label = branch.display_name if branch else booking.branch_id
+            doctor_label = doctor.display_name if doctor else None
+            service_label = service.title_key if service else None
+            branch_label = branch.display_name if branch else None
+            if doctor is None:
+                warnings.append("booking_doctor_unresolved")
+            if service is None:
+                warnings.append("booking_service_unresolved")
+            if booking.branch_id and branch is None:
+                warnings.append("booking_branch_unresolved")
             start_local = self.timezone_formatter.format_booking_time(
                 clinic_id=request.clinic_id,
                 branch_id=booking.branch_id,

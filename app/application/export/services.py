@@ -93,7 +93,13 @@ class DocumentTemplateRegistryService:
                 locale=locale_key,
                 clinic_id=clinic_id,
             )
-            matched = self._select_template(clinic_templates, template_version=template_version)
+            matched = self._select_template(
+                clinic_templates,
+                template_version=template_version,
+                scope_label=f"clinic:{clinic_id}",
+                template_type=template_type,
+                locale=locale_key,
+            )
             if matched is not None:
                 return matched
         default_templates = await self.repository.list_active_templates(
@@ -101,21 +107,45 @@ class DocumentTemplateRegistryService:
             locale=locale_key,
             clinic_id=None,
         )
-        matched_default = self._select_template(default_templates, template_version=template_version)
+        matched_default = self._select_template(
+            default_templates,
+            template_version=template_version,
+            scope_label="default",
+            template_type=template_type,
+            locale=locale_key,
+        )
         if matched_default is not None:
             return matched_default
         raise TemplateResolutionError(
             f"No active template for template_type={template_type}, locale={locale_key}, clinic_id={clinic_id}, template_version={template_version}"
         )
 
-    def _select_template(self, templates: list[DocumentTemplate], *, template_version: int | None) -> DocumentTemplate | None:
+    def _select_template(
+        self,
+        templates: list[DocumentTemplate],
+        *,
+        template_version: int | None,
+        scope_label: str,
+        template_type: str,
+        locale: str,
+    ) -> DocumentTemplate | None:
         if template_version is not None:
-            for template in templates:
-                if template.template_version == template_version:
-                    return template
+            matches = [template for template in templates if template.template_version == template_version]
+            if len(matches) > 1:
+                raise TemplateResolutionError(
+                    f"Ambiguous active templates for scope={scope_label}, template_type={template_type}, locale={locale}, template_version={template_version}"
+                )
+            if len(matches) == 1:
+                return matches[0]
             return None
         if not templates:
             return None
+        highest_version = max(template.template_version for template in templates)
+        highest_matches = [template for template in templates if template.template_version == highest_version]
+        if len(highest_matches) > 1:
+            raise TemplateResolutionError(
+                f"Ambiguous active templates for scope={scope_label}, template_type={template_type}, locale={locale}, template_version={highest_version}"
+            )
         return templates[0]
 
 

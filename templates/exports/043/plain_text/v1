@@ -7,7 +7,7 @@ Patient
 - Language: {patient_language}
 
 Booking
-- Booking ID: {booking_id}
+- Booking context: {booking_id}
 - Status: {booking_status}
 - Service: {booking_service}
 - Doctor: {booking_doctor}
