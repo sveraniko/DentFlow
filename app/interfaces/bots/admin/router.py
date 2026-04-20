@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -9,6 +11,7 @@ from app.application.admin.workdesk import AdminWorkdeskReadService
 from app.application.access import AccessResolver
 from app.application.care_commerce import CareCommerceService
 from app.application.booking.telegram_flow import BookingPatientFlowService
+from app.application.communication import ReminderRecoveryService
 from app.application.clinic_reference import ClinicReferenceService
 from app.application.search.service import HybridSearchService
 from app.application.search.models import PatientSearchResult, SearchQuery
@@ -75,6 +78,7 @@ def make_router(
     voice_mode_store: VoiceSearchModeStore,
     care_commerce_service: CareCommerceService | None = None,
     admin_workdesk: AdminWorkdeskReadService | None = None,
+    reminder_recovery: ReminderRecoveryService | None = None,
     *,
     default_locale: str,
     max_voice_duration_sec: int,
@@ -581,6 +585,15 @@ def make_router(
                         )
                     ]
                 )
+                if reminder_recovery is not None and row.issue_type == "reminder_failed":
+                    row_buttons.append(
+                        [
+                            InlineKeyboardButton(
+                                text=i18n.t("admin.issues.action.retry_reminder", locale),
+                                callback_data=f"aw4i:retry:{row.issue_ref_id}:{token}",
+                            )
+                        ]
+                    )
             elif row.patient_id:
                 row_buttons.append([InlineKeyboardButton(text=f"{_ops_issue_label(issue_type=row.issue_type, locale=locale)} · {row.patient_display_name or row.patient_id}", callback_data=f"aw4i:patient:{row.patient_id}:{token}")])
             elif row.care_order_id:
@@ -1758,6 +1771,17 @@ def make_router(
                 i18n.t("admin.issues.care_order.linked", locale).format(care_order_id=entity_id),
                 reply_markup=_simple_back_keyboard(locale=locale, callback_data=f"aw4i:back:na:{token}"),
             )
+            return
+        if kind == "retry" and reminder_recovery is not None:
+            result = await reminder_recovery.retry_failed_reminder(reminder_id=entity_id, now=datetime.now(timezone.utc))
+            await callback.answer(i18n.t(f"admin.issues.retry.{result.outcome}", locale), show_alert=(result.outcome != "scheduled"))
+            text, keyboard = await _render_admin_issues(
+                actor_id=callback.from_user.id,
+                clinic_id=actor_context.clinic_id,
+                locale=locale,
+                state=state,
+            )
+            await callback.message.edit_text(text, reply_markup=keyboard)
 
     @router.callback_query(F.data.startswith("c2|"))
     async def admin_runtime_card_callback(callback: CallbackQuery) -> None:

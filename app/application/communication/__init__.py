@@ -19,7 +19,7 @@ from app.application.communication.actions import (
     ReminderActionService,
     ReminderActionTransactionRepository,
 )
-from app.application.communication.recovery import ReminderRecoveryService, ReminderRecoveryStats
+from app.application.communication.recovery import ManualReminderRetryResult, ReminderRecoveryService, ReminderRecoveryStats
 from app.application.communication.runtime_integrity import ReminderRelevanceDecision, can_transition, evaluate_booking_relevance
 
 __all__ = [
@@ -45,6 +45,7 @@ __all__ = [
     "ReminderActionService",
     "ReminderRecoveryService",
     "ReminderRecoveryStats",
+    "ManualReminderRetryResult",
     "ReminderRelevanceDecision",
     "can_transition",
     "evaluate_booking_relevance",

@@ -192,7 +192,23 @@ class _Workdesk:
                 clinic_id="c1",
                 branch_id="br1",
                 issue_type="reminder_failed",
-                issue_ref_id="p1",
+                issue_ref_id="r_fail_1",
+                issue_status="open",
+                severity="medium",
+                patient_id="p1",
+                booking_id="b1",
+                care_order_id=None,
+                local_related_date=date(2026, 4, 19),
+                local_related_time="10:00",
+                summary_text="raw",
+                patient_display_name="Jane Roe",
+                updated_at=datetime.now(timezone.utc),
+            ),
+            OpsIssueQueueRow(
+                clinic_id="c1",
+                branch_id="br1",
+                issue_type="reminder_failed",
+                issue_ref_id="r_fail_2",
                 issue_status="open",
                 severity="medium",
                 patient_id="p1",
@@ -215,6 +231,19 @@ class _CareService:
         return SimpleNamespace(care_order_id=care_order_id, status="fulfilled")
 
 
+class _ReminderRecovery:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self._seen: set[str] = set()
+
+    async def retry_failed_reminder(self, *, reminder_id: str, now):  # noqa: ANN001
+        self.calls.append(reminder_id)
+        if reminder_id in self._seen:
+            return SimpleNamespace(outcome="already_pending", reminder_id=f"rem_mr_{reminder_id}")
+        self._seen.add(reminder_id)
+        return SimpleNamespace(outcome="scheduled", reminder_id=f"rem_mr_{reminder_id}")
+
+
 def _access() -> AccessResolver:
     repo = InMemoryAccessRepository()
     now = datetime(2026, 4, 17, tzinfo=timezone.utc)
@@ -229,6 +258,7 @@ def _router():
     i18n = I18nService(locales_path=Path("locales"), default_locale="en")
     runtime = CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=InMemoryRedis()))
     codec = CardCallbackCodec(runtime=runtime)
+    recovery = _ReminderRecovery()
     return make_router(
         i18n,
         _access(),
@@ -239,13 +269,14 @@ def _router():
         voice_mode_store=SimpleNamespace(),
         care_commerce_service=_CareService(),
         admin_workdesk=_Workdesk(),
+        reminder_recovery=recovery,
         default_locale="en",
         max_voice_duration_sec=60,
         max_voice_file_size_bytes=1024,
         voice_mode_ttl_sec=30,
         card_runtime=runtime,
         card_callback_codec=codec,
-    ), codec
+    ), codec, recovery
 
 
 def _handler(router, name: str, kind: str = "message"):
@@ -257,7 +288,7 @@ def _handler(router, name: str, kind: str = "message"):
 
 
 def test_admin_patients_search_and_open_card() -> None:
-    router, codec = _router()
+    router, codec, _ = _router()
     msg = _Message("/admin_patients jane")
     asyncio.run(_handler(router, "admin_patients")(msg))
     text, keyboard = msg.answers[-1]
@@ -272,7 +303,7 @@ def test_admin_patients_search_and_open_card() -> None:
 
 
 def test_admin_care_pickups_queue_and_action() -> None:
-    router, _ = _router()
+    router, _, _ = _router()
     msg = _Message("/admin_care_pickups")
     asyncio.run(_handler(router, "admin_care_pickups")(msg))
     text, keyboard = msg.answers[-1]
@@ -285,7 +316,7 @@ def test_admin_care_pickups_queue_and_action() -> None:
 
 
 def test_admin_care_pickups_detail_has_back_to_queue() -> None:
-    router, _ = _router()
+    router, _, _ = _router()
     msg = _Message("/admin_care_pickups")
     asyncio.run(_handler(router, "admin_care_pickups")(msg))
     _, keyboard = msg.answers[-1]
@@ -301,7 +332,7 @@ def test_admin_care_pickups_detail_has_back_to_queue() -> None:
 
 
 def test_admin_issues_localized_and_booking_open() -> None:
-    router, codec = _router()
+    router, codec, _ = _router()
     msg = _Message("/admin_issues")
     asyncio.run(_handler(router, "admin_issues")(msg))
     text, keyboard = msg.answers[-1]
@@ -313,11 +344,11 @@ def test_admin_issues_localized_and_booking_open() -> None:
 
 
 def test_admin_issues_patient_linked_open_has_back_to_queue() -> None:
-    router, _ = _router()
+    router, _, _ = _router()
     msg = _Message("/admin_issues")
     asyncio.run(_handler(router, "admin_issues")(msg))
     _, keyboard = msg.answers[-1]
-    patient_cb = keyboard.inline_keyboard[2][0].callback_data
+    patient_cb = keyboard.inline_keyboard[4][0].callback_data
     callback = _Callback(patient_cb)
     asyncio.run(_handler(router, "admin_issues_object_callback", kind="callback")(callback))
     panel_text, panel_markup = callback.message.edits[-1]
@@ -330,7 +361,7 @@ def test_admin_issues_patient_linked_open_has_back_to_queue() -> None:
 
 
 def test_waitlist_detail_uses_localized_service_label() -> None:
-    router, _ = _router()
+    router, _, _ = _router()
     msg = _Message("/admin_waitlist")
     asyncio.run(_handler(router, "admin_waitlist")(msg))
     _, keyboard = msg.answers[-1]
@@ -338,3 +369,20 @@ def test_waitlist_detail_uses_localized_service_label() -> None:
     callback = _Callback(open_cb)
     asyncio.run(_handler(router, "admin_waitlist_callback", kind="callback")(callback))
     assert any("Today Workdesk" in row[0] for row in callback.message.edits)
+
+
+def test_admin_issues_retry_action_is_visible_and_bounded() -> None:
+    router, _, recovery = _router()
+    msg = _Message("/admin_issues")
+    asyncio.run(_handler(router, "admin_issues")(msg))
+    _, keyboard = msg.answers[-1]
+    retry_cb = keyboard.inline_keyboard[3][0].callback_data
+
+    first = _Callback(retry_cb)
+    asyncio.run(_handler(router, "admin_issues_object_callback", kind="callback")(first))
+    assert "Retry scheduled." in first.answers[-1]
+
+    second = _Callback(retry_cb)
+    asyncio.run(_handler(router, "admin_issues_object_callback", kind="callback")(second))
+    assert "Retry already scheduled." in second.answers[-1]
+    assert recovery.calls.count("r_fail_1") == 2

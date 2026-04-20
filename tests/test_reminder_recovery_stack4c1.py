@@ -355,3 +355,26 @@ def test_admin_recovery_actions_take_and_resolve() -> None:
 
     assert taken is not None and taken.status == "in_progress"
     assert resolved is not None and resolved.status == "resolved"
+
+
+def test_manual_retry_failed_reminder_is_bounded_and_idempotent() -> None:
+    now = datetime(2026, 4, 17, 10, 0, tzinfo=timezone.utc)
+    failed = ReminderJob(
+        **{
+            **asdict(_reminder(status="failed", reminder_type="booking_confirmation", attempts=1)),
+            "status": "failed",
+            "last_error_code": "telegram_send_error",
+            "last_error_text": "timeout",
+        }
+    )
+    reminder_repo = _ReminderRepo([failed])
+    booking_repo = _BookingRepo([_booking(status="pending_confirmation")], [_session()])
+    service = ReminderRecoveryService(reminder_repo, booking_repo, PolicyResolver(InMemoryPolicyRepository()))
+
+    first = asyncio.run(service.retry_failed_reminder(reminder_id="r1", now=now))
+    second = asyncio.run(service.retry_failed_reminder(reminder_id="r1", now=now))
+
+    assert first.outcome == "scheduled"
+    assert first.reminder_id == "rem_mr_r1"
+    assert reminder_repo.jobs["rem_mr_r1"].status == "scheduled"
+    assert second.outcome == "already_pending"
