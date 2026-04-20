@@ -1003,6 +1003,81 @@ STACK1_TABLES: tuple[str, ...] = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS media_docs.media_assets (
+      media_asset_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      asset_kind TEXT NOT NULL,
+      storage_provider TEXT NOT NULL,
+      storage_ref TEXT NOT NULL,
+      content_type TEXT NULL,
+      byte_size BIGINT NULL,
+      checksum_sha256 TEXT NULL,
+      created_by_actor_id TEXT NULL REFERENCES access_identity.actor_identities(actor_id),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_media_assets_clinic_kind
+    ON media_docs.media_assets (clinic_id, asset_kind, created_at DESC)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS media_docs.document_templates (
+      document_template_id TEXT PRIMARY KEY,
+      clinic_id TEXT NULL REFERENCES core_reference.clinics(clinic_id),
+      template_type TEXT NOT NULL,
+      template_version INTEGER NOT NULL CHECK (template_version > 0),
+      locale TEXT NOT NULL,
+      render_engine TEXT NOT NULL,
+      template_source_ref TEXT NOT NULL,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (clinic_id, template_type, locale, template_version)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_document_templates_resolution
+    ON media_docs.document_templates (template_type, locale, clinic_id, is_active, template_version DESC, updated_at DESC)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS media_docs.generated_documents (
+      generated_document_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      patient_id TEXT NOT NULL REFERENCES core_patient.patients(patient_id),
+      chart_id TEXT NULL REFERENCES clinical.patient_charts(chart_id) ON DELETE SET NULL,
+      encounter_id TEXT NULL REFERENCES clinical.clinical_encounters(encounter_id) ON DELETE SET NULL,
+      booking_id TEXT NULL REFERENCES booking.bookings(booking_id) ON DELETE SET NULL,
+      document_template_id TEXT NOT NULL REFERENCES media_docs.document_templates(document_template_id),
+      document_type TEXT NOT NULL,
+      generation_status TEXT NOT NULL,
+      generated_file_asset_id TEXT NULL REFERENCES media_docs.media_assets(media_asset_id) ON DELETE SET NULL,
+      editable_source_asset_id TEXT NULL REFERENCES media_docs.media_assets(media_asset_id) ON DELETE SET NULL,
+      created_by_actor_id TEXT NULL REFERENCES access_identity.actor_identities(actor_id),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      generation_error_text TEXT NULL,
+      CHECK (generation_status IN ('pending', 'generating', 'generated', 'failed')),
+      CHECK ((generation_status = 'generated' AND generated_file_asset_id IS NOT NULL) OR generation_status <> 'generated')
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_generated_documents_patient_created
+    ON media_docs.generated_documents (patient_id, created_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_generated_documents_chart_created
+    ON media_docs.generated_documents (chart_id, created_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_generated_documents_booking_created
+    ON media_docs.generated_documents (booking_id, created_at DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_generated_documents_clinic_status_created
+    ON media_docs.generated_documents (clinic_id, generation_status, created_at DESC)
+    """,
+    """
     CREATE TABLE IF NOT EXISTS policy_config.feature_flags (
       feature_flag_id TEXT PRIMARY KEY,
       scope_type TEXT NOT NULL,
