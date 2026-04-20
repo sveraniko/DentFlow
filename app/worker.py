@@ -4,17 +4,19 @@ import os
 import socket
 from datetime import datetime, timezone
 from dataclasses import dataclass
+from pathlib import Path
 from uuid import uuid4
 
 from app.bootstrap.logging import configure_logging
 from app.application.communication import ReminderDeliveryService, ReminderRecoveryService
 from app.application.policy import PolicyResolver
+from app.common.i18n import I18nService
 from app.config.settings import Settings, get_settings
 from app.infrastructure.communication import AiogramTelegramReminderSender, DbTelegramReminderRecipientResolver
 from app.infrastructure.db.booking_repository import DbBookingRepository
 from app.infrastructure.db.communication_repository import DbReminderJobRepository
 from app.infrastructure.db.reminder_worker_runtime_repository import DbReminderWorkerRuntimeRepository, ReminderWorkerHealthInspector
-from app.infrastructure.db.repositories import DbPolicyRepository
+from app.infrastructure.db.repositories import DbClinicReferenceRepository, DbPolicyRepository
 from app.infrastructure.workers.reminder_delivery import run_reminder_delivery_once
 from app.infrastructure.workers.reminder_recovery import run_reminder_recovery_once
 from app.infrastructure.workers.reminder_runtime import ReminderWorkerConfig, ReminderWorkerRunner, ReminderWorkerRuntime
@@ -31,8 +33,11 @@ class ReminderWorkerServices:
 async def build_reminder_worker_services(settings: Settings) -> ReminderWorkerServices:
     reminder_repository = DbReminderJobRepository(settings.db)
     policy_repository = await DbPolicyRepository.load(settings.db)
+    clinic_reference_repository = await DbClinicReferenceRepository.load(settings.db)
     policy_resolver = PolicyResolver(policy_repository)
     booking_repository = DbBookingRepository(settings.db)
+    i18n = I18nService(Path("locales"), default_locale=settings.app.default_locale)
+    timezone_resolver = _ReminderTimezoneResolver(clinic_reference_repository=clinic_reference_repository, app_default_timezone=settings.app.default_timezone)
     return ReminderWorkerServices(
         delivery=ReminderDeliveryService(
             repository=reminder_repository,
@@ -40,6 +45,9 @@ async def build_reminder_worker_services(settings: Settings) -> ReminderWorkerSe
             recipient_resolver=DbTelegramReminderRecipientResolver(settings.db),
             sender=AiogramTelegramReminderSender(settings.telegram.patient_bot_token),
             policy_resolver=policy_resolver,
+            i18n=i18n,
+            timezone_resolver=timezone_resolver,
+            app_default_timezone=settings.app.default_timezone,
         ),
         recovery=ReminderRecoveryService(
             reminder_repository=reminder_repository,
@@ -47,6 +55,22 @@ async def build_reminder_worker_services(settings: Settings) -> ReminderWorkerSe
             policy_resolver=policy_resolver,
         ),
     )
+
+
+@dataclass(slots=True, frozen=True)
+class _ReminderTimezoneResolver:
+    clinic_reference_repository: DbClinicReferenceRepository
+    app_default_timezone: str
+
+    def resolve_timezone(self, *, clinic_id: str, branch_id: str | None) -> str:
+        if branch_id:
+            branch = self.clinic_reference_repository.get_branch(branch_id)
+            if branch is not None and branch.timezone:
+                return branch.timezone
+        clinic = self.clinic_reference_repository.get_clinic(clinic_id)
+        if clinic is not None and clinic.timezone:
+            return clinic.timezone
+        return self.app_default_timezone
 
 
 async def run_worker_once() -> None:

@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
-
 from app.application.policy import PolicyResolver
 from app.domain.booking import AdminEscalation, Booking, BookingSession
 from app.domain.communication import ReminderJob
@@ -15,6 +14,8 @@ class ReminderRecoveryRepository(Protocol):
     async def mark_reminder_failed(self, *, reminder_id: str, failed_at: datetime, error_text: str) -> bool: ...
     async def list_failed_booking_reminders(self, *, limit: int) -> list[ReminderJob]: ...
     async def list_confirmation_no_response_candidates(self, *, sent_before: datetime, limit: int) -> list[ReminderJob]: ...
+    async def create_reminder_job(self, item: ReminderJob) -> None: ...
+    async def get_reminder(self, *, reminder_id: str) -> ReminderJob | None: ...
 
 
 class ReminderRecoveryBookingRepository(Protocol):
@@ -118,9 +119,61 @@ class ReminderRecoveryService:
                 continue
             if booking.status in {"confirmed", "canceled", "completed", "no_show"}:
                 continue
+            followup = await self._ensure_no_response_followup(reminder=reminder, now=now)
+            if followup == "scheduled":
+                continue
+            if not self._followup_window_elapsed(followup=followup, now=now, clinic_id=reminder.clinic_id):
+                continue
             if await self._upsert_recovery_escalation(reminder=reminder, now=now, reason_code="booking_confirmation_no_response"):
                 escalated += 1
         return ReminderRecoveryStats(no_response_escalated=escalated)
+
+    async def _ensure_no_response_followup(self, *, reminder: ReminderJob, now: datetime) -> ReminderJob | str:
+        enabled = bool(self.policy_resolver.resolve_policy("booking.no_response_followup_enabled", clinic_id=reminder.clinic_id))
+        if not enabled:
+            return "disabled"
+        followup_id = f"rem_nr_{reminder.reminder_id}"
+        existing = await self.reminder_repository.get_reminder(reminder_id=followup_id)
+        if existing is not None:
+            return existing
+        delay_minutes = int(self.policy_resolver.resolve_policy("booking.no_response_followup_delay_minutes", clinic_id=reminder.clinic_id) or 30)
+        followup = ReminderJob(
+            reminder_id=followup_id,
+            clinic_id=reminder.clinic_id,
+            patient_id=reminder.patient_id,
+            booking_id=reminder.booking_id,
+            care_order_id=None,
+            recommendation_id=None,
+            reminder_type="booking_no_response_followup",
+            channel=reminder.channel,
+            status="scheduled",
+            scheduled_for=now + timedelta(minutes=max(delay_minutes, 1)),
+            payload_key="booking.confirmation.no_response_followup",
+            locale_at_send_time=reminder.locale_at_send_time,
+            planning_group=f"booking:{reminder.booking_id}:no_response_followup",
+            supersedes_reminder_id=reminder.reminder_id,
+            created_at=now,
+            updated_at=now,
+        )
+        await self.reminder_repository.create_reminder_job(followup)
+        return "scheduled"
+
+    def _followup_window_elapsed(self, *, followup: ReminderJob | str, now: datetime, clinic_id: str) -> bool:
+        if isinstance(followup, str):
+            return followup == "disabled"
+        if followup.status in {"scheduled", "queued"}:
+            return False
+        if followup.status == "acknowledged":
+            return False
+        if followup.status != "sent":
+            return True
+        window_minutes = int(
+            self.policy_resolver.resolve_policy("booking.non_response_escalation_after_followup_minutes", clinic_id=clinic_id) or 30
+        )
+        sent_at = followup.sent_at
+        if sent_at is None:
+            return True
+        return sent_at <= now - timedelta(minutes=max(window_minutes, 1))
 
     async def _upsert_recovery_escalation(self, *, reminder: ReminderJob, now: datetime, reason_code: str) -> bool:
         if reminder.booking_id is None:

@@ -888,7 +888,8 @@ def test_reminder_cancel_on_completed_and_no_show() -> None:
     completed = asyncio.run(orchestrator.complete_booking(booking_id=booking.booking_id))
     assert isinstance(completed, OrchestrationSuccess)
     completed_jobs = asyncio.run(service.list_booking_reminders(booking_id=booking.booking_id))
-    assert all(job.status == "canceled" for job in completed_jobs)
+    assert all(job.status == "canceled" for job in completed_jobs if job.reminder_type != "booking_next_visit_recall")
+    assert any(job.reminder_type == "booking_next_visit_recall" and job.status == "scheduled" for job in completed_jobs)
 
     booking2 = Booking(**{**asdict(booking), "booking_id": "b_noshow", "status": "confirmed", "in_service_at": None})
     repo.bookings[booking2.booking_id] = booking2

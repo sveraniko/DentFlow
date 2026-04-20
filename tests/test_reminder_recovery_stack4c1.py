@@ -57,6 +57,12 @@ class _ReminderRepo:
         ]
         return rows[:limit]
 
+    async def create_reminder_job(self, item: ReminderJob) -> None:
+        self.jobs[item.reminder_id] = item
+
+    async def get_reminder(self, *, reminder_id: str) -> ReminderJob | None:
+        return self.jobs.get(reminder_id)
+
 
 class _BookingRepo:
     def __init__(self, bookings: list[Booking], sessions: list[BookingSession]) -> None:
@@ -198,6 +204,7 @@ def test_no_response_escalation_single_upsert_and_terminal_skip() -> None:
     policy_set_id = _policy_set(policy_repo, scope_ref="clinic_main")
     policy_repo.add_policy_value(PolicyValue(policy_value_id="pv1", policy_set_id=policy_set_id, policy_key="booking.non_response_escalation_enabled", value_type="bool", value_json=True))
     policy_repo.add_policy_value(PolicyValue(policy_value_id="pv2", policy_set_id=policy_set_id, policy_key="booking.non_response_escalation_after_minutes", value_type="int", value_json=30))
+    policy_repo.add_policy_value(PolicyValue(policy_value_id="pv3", policy_set_id=policy_set_id, policy_key="booking.no_response_followup_enabled", value_type="bool", value_json=False))
 
     reminder_repo = _ReminderRepo([_reminder(status="sent", reminder_type="booking_confirmation", sent_delta_min=90)])
     booking_repo = _BookingRepo([_booking(status="pending_confirmation")], [_session()])
@@ -236,6 +243,15 @@ def test_no_response_escalation_respects_per_clinic_policy_scope() -> None:
             policy_key="booking.non_response_escalation_after_minutes",
             value_type="int",
             value_json=20,
+        )
+    )
+    policy_repo.add_policy_value(
+        PolicyValue(
+            policy_value_id="pv_enabled_3",
+            policy_set_id=enabled_set,
+            policy_key="booking.no_response_followup_enabled",
+            value_type="bool",
+            value_json=False,
         )
     )
     policy_repo.add_policy_value(

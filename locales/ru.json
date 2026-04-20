@@ -394,5 +394,15 @@
   "admin.issues.care_order.linked": "Связанный care-заказ: {care_order_id}",
   "admin.queue.status.active": "Активно",
   "admin.queue.status.closed": "Закрыто",
-  "admin.queue.status.canceled": "Отменено"
+  "admin.queue.status.canceled": "Отменено",
+  "reminder.message.layout": "Напоминание DentFlow\n📅 {datetime}\n👩‍⚕️ {doctor}\n🦷 {service}\n🏥 {branch}\n\n{summary}",
+  "reminder.type.booking_confirmation.summary": "Подтвердите запись или выберите удобное изменение.",
+  "reminder.type.booking_previsit.summary": "Напоминание о предстоящем визите. Проверьте время, пожалуйста.",
+  "reminder.type.booking_day_of.summary": "Сегодня ваш визит в клинику. Нажмите «Получил(а)».",
+  "reminder.type.booking_no_response_followup.summary": "Мы всё ещё ждём подтверждение визита. Подтвердите или запросите перенос.",
+  "reminder.type.booking_next_visit_recall.summary": "Пора запланировать следующий профилактический визит.",
+  "reminder.action.confirm": "✅ Подтвердить",
+  "reminder.action.reschedule": "🔁 Перенести",
+  "reminder.action.cancel": "❌ Отменить",
+  "reminder.action.ack": "👍 Получил(а)"
 }

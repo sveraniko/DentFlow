@@ -394,5 +394,15 @@
   "admin.issues.care_order.linked": "Related care order: {care_order_id}",
   "admin.queue.status.active": "Active",
   "admin.queue.status.closed": "Closed",
-  "admin.queue.status.canceled": "Canceled"
+  "admin.queue.status.canceled": "Canceled",
+  "reminder.message.layout": "DentFlow reminder\n📅 {datetime}\n👩‍⚕️ {doctor}\n🦷 {service}\n🏥 {branch}\n\n{summary}",
+  "reminder.type.booking_confirmation.summary": "Please confirm your appointment or request a change.",
+  "reminder.type.booking_previsit.summary": "Upcoming visit reminder. Please check the time.",
+  "reminder.type.booking_day_of.summary": "Today is your dental visit. Please tap “Got it”.",
+  "reminder.type.booking_no_response_followup.summary": "We still need your confirmation. Please confirm or request a reschedule.",
+  "reminder.type.booking_next_visit_recall.summary": "It is time to plan your next prophylaxis visit.",
+  "reminder.action.confirm": "✅ Confirm",
+  "reminder.action.reschedule": "🔁 Reschedule",
+  "reminder.action.cancel": "❌ Cancel",
+  "reminder.action.ack": "👍 Got it"
 }
