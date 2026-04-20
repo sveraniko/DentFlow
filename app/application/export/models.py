@@ -126,3 +126,11 @@ class ExportAssemblyResult:
     generated_document_id: str
     document_template_id: str
     payload: Structured043ExportPayload
+
+
+@dataclass(slots=True, frozen=True)
+class ExportGenerationResult:
+    generated_document_id: str
+    document_template_id: str
+    generated_file_asset_id: str
+    artifact_storage_ref: str

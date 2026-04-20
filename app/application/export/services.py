@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Protocol
 from uuid import uuid4
 
-from app.domain.media_docs import DOCUMENT_GENERATION_STATUSES, DocumentTemplate, GeneratedDocument
+from app.domain.media_docs import DOCUMENT_GENERATION_STATUSES, DocumentTemplate, GeneratedDocument, MediaAsset
 
 _ALLOWED_DOCUMENT_STATUS_TRANSITIONS: dict[str, set[str]] = {
     "pending": {"generating", "failed"},
@@ -30,6 +30,11 @@ class GeneratedDocumentRepository(Protocol):
     async def list_for_patient(self, *, patient_id: str, clinic_id: str | None = None) -> list[GeneratedDocument]: ...
     async def list_for_chart(self, *, chart_id: str) -> list[GeneratedDocument]: ...
     async def list_for_booking(self, *, booking_id: str) -> list[GeneratedDocument]: ...
+
+
+class MediaAssetRepository(Protocol):
+    async def save_media_asset(self, item: MediaAsset) -> None: ...
+    async def get_media_asset(self, media_asset_id: str) -> MediaAsset | None: ...
 
 
 @dataclass(slots=True)
@@ -232,3 +237,40 @@ class GeneratedDocumentRegistryService:
         if item is None:
             raise ValueError(f"generated document not found: {generated_document_id}")
         return item
+
+
+@dataclass(slots=True)
+class MediaAssetRegistryService:
+    repository: MediaAssetRepository
+
+    async def create_asset(
+        self,
+        *,
+        clinic_id: str,
+        asset_kind: str,
+        storage_provider: str,
+        storage_ref: str,
+        content_type: str | None,
+        byte_size: int | None,
+        checksum_sha256: str | None,
+        created_by_actor_id: str | None = None,
+    ) -> MediaAsset:
+        now = datetime.now(timezone.utc)
+        item = MediaAsset(
+            media_asset_id=f"masset_{uuid4().hex[:16]}",
+            clinic_id=clinic_id,
+            asset_kind=asset_kind.strip(),
+            storage_provider=storage_provider.strip(),
+            storage_ref=storage_ref.strip(),
+            content_type=(content_type or "").strip() or None,
+            byte_size=byte_size,
+            checksum_sha256=(checksum_sha256 or "").strip() or None,
+            created_by_actor_id=(created_by_actor_id or "").strip() or None,
+            created_at=now,
+            updated_at=now,
+        )
+        await self.repository.save_media_asset(item)
+        return item
+
+    async def get_media_asset(self, media_asset_id: str) -> MediaAsset | None:
+        return await self.repository.get_media_asset(media_asset_id)

@@ -25,7 +25,15 @@ from app.application.care_commerce import CareCommerceService
 from app.application.owner import OwnerAnalyticsService
 from app.application.clinical import ClinicalChartService
 from app.application.communication import BookingReminderPlanner, BookingReminderService, ReminderActionService
-from app.application.export import DocumentExportApplicationService, DocumentTemplateRegistryService, GeneratedDocumentRegistryService, Structured043ExportAssembler
+from app.application.export import (
+    DocumentExportApplicationService,
+    DocumentTemplateRegistryService,
+    GeneratedDocumentRegistryService,
+    LocalArtifactStorage,
+    MediaAssetRegistryService,
+    PlainText043Renderer,
+    Structured043ExportAssembler,
+)
 from app.application.timezone import DoctorTimezoneFormatter
 from app.application.policy import PolicyResolver
 from app.application.recommendation import RecommendationService
@@ -49,7 +57,7 @@ from app.infrastructure.db.patient_repository import (
 )
 from app.infrastructure.db.repositories import DbAccessRepository, DbClinicReferenceRepository, DbPolicyRepository
 from app.infrastructure.db.recommendation_repository import DbRecommendationRepository
-from app.infrastructure.db.document_repository import DbDocumentTemplateRepository, DbGeneratedDocumentRepository
+from app.infrastructure.db.document_repository import DbDocumentTemplateRepository, DbGeneratedDocumentRepository, DbMediaAssetRepository
 from app.infrastructure.search.meili_backend import MeiliSearchBackend
 from app.infrastructure.search.meili_client import HttpMeiliClient
 from app.infrastructure.search.postgres_backend import PostgresSearchBackend
@@ -82,6 +90,7 @@ class RuntimeRegistry:
         self.care_commerce_repository = DbCareCommerceRepository(settings.db)
         self.document_template_repository = DbDocumentTemplateRepository(settings.db)
         self.generated_document_repository = DbGeneratedDocumentRepository(settings.db)
+        self.media_asset_repository = DbMediaAssetRepository(settings.db)
         self.patient_registry_service = DbPatientRegistryService(self.patient_registry_repository)
         self.card_runtime_store = CardRuntimeStateStore(redis_client=build_card_runtime_redis(settings))
         self.card_runtime = CardRuntimeCoordinator(store=self.card_runtime_store)
@@ -91,6 +100,7 @@ class RuntimeRegistry:
         self.clinical_chart_service = ClinicalChartService(self.clinical_repository)
         self.template_registry_service = DocumentTemplateRegistryService(self.document_template_repository)
         self.generated_document_registry_service = GeneratedDocumentRegistryService(self.generated_document_repository)
+        self.media_asset_registry_service = MediaAssetRegistryService(self.media_asset_repository)
         self.timezone_formatter = DoctorTimezoneFormatter(self.reference_service, app_default_timezone=settings.app.default_timezone)
         self.export_payload_assembler = Structured043ExportAssembler(
             patient_registry=self.patient_registry_service,
@@ -103,6 +113,9 @@ class RuntimeRegistry:
             template_registry=self.template_registry_service,
             generated_document_registry=self.generated_document_registry_service,
             payload_assembler=self.export_payload_assembler,
+            renderer=PlainText043Renderer(),
+            artifact_storage=LocalArtifactStorage(),
+            media_asset_registry=self.media_asset_registry_service,
         )
         self.access_resolver = AccessResolver(self.access_repository)
         self.recommendation_service = RecommendationService(self.recommendation_repository)
