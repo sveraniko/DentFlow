@@ -149,6 +149,8 @@ def test_12a1_media_docs_document_registry_tables_declared() -> None:
     assert "CREATE TABLE IF NOT EXISTS media_docs.media_assets" in ddl
     assert "CREATE TABLE IF NOT EXISTS media_docs.document_templates" in ddl
     assert "CREATE TABLE IF NOT EXISTS media_docs.generated_documents" in ddl
-    assert "UNIQUE (clinic_id, template_type, locale, template_version)" in ddl
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_document_templates_clinic_scope" in ddl
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_document_templates_default_scope" in ddl
+    assert "WHERE clinic_id IS NULL" in ddl
     assert "CHECK (generation_status IN ('pending', 'generating', 'generated', 'failed'))" in ddl
     assert "generated_file_asset_id TEXT NULL REFERENCES media_docs.media_assets(media_asset_id) ON DELETE SET NULL" in ddl
