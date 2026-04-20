@@ -34,6 +34,12 @@ class ReminderRecoveryStats:
     no_response_escalated: int = 0
 
 
+@dataclass(slots=True, frozen=True)
+class ManualReminderRetryResult:
+    outcome: str
+    reminder_id: str | None = None
+
+
 @dataclass(slots=True)
 class ReminderRecoveryService:
     reminder_repository: ReminderRecoveryRepository
@@ -211,6 +217,61 @@ class ReminderRecoveryService:
     async def list_open_reminder_escalations(self, *, clinic_id: str, limit: int = 50) -> list[AdminEscalation]:
         items = await self.booking_repository.list_open_admin_escalations(clinic_id=clinic_id, limit=limit)
         return [item for item in items if item.reason_code.startswith("reminder") or item.reason_code == "booking_confirmation_no_response"]
+
+    async def retry_failed_reminder(self, *, reminder_id: str, now: datetime) -> ManualReminderRetryResult:
+        enabled = True
+        if not enabled:
+            return ManualReminderRetryResult(outcome="manual_retry_disabled")
+
+        failed = await self.reminder_repository.get_reminder(reminder_id=reminder_id)
+        if failed is None:
+            return ManualReminderRetryResult(outcome="missing")
+        if failed.status != "failed":
+            return ManualReminderRetryResult(outcome="not_failed")
+        if failed.booking_id is None:
+            return ManualReminderRetryResult(outcome="unsupported_context")
+
+        booking = await self.booking_repository.get_booking(failed.booking_id)
+        if booking is None or booking.status in {"confirmed", "canceled", "completed", "no_show"}:
+            return ManualReminderRetryResult(outcome="no_longer_relevant")
+
+        max_attempts = int(
+            self.policy_resolver.resolve_policy(
+                "communication.reminder_retry_max_attempts",
+                clinic_id=failed.clinic_id,
+            )
+            or 3
+        )
+        if failed.delivery_attempts_count >= max_attempts:
+            return ManualReminderRetryResult(outcome="retry_budget_exhausted")
+
+        retry_id = f"rem_mr_{reminder_id}"
+        existing = await self.reminder_repository.get_reminder(reminder_id=retry_id)
+        if existing is not None:
+            if existing.status in {"scheduled", "queued", "sent", "acknowledged"}:
+                return ManualReminderRetryResult(outcome="already_pending", reminder_id=retry_id)
+            return ManualReminderRetryResult(outcome="already_exists", reminder_id=retry_id)
+
+        retry = ReminderJob(
+            reminder_id=retry_id,
+            clinic_id=failed.clinic_id,
+            patient_id=failed.patient_id,
+            booking_id=failed.booking_id,
+            care_order_id=failed.care_order_id,
+            recommendation_id=failed.recommendation_id,
+            reminder_type=failed.reminder_type,
+            channel=failed.channel,
+            status="scheduled",
+            scheduled_for=now,
+            payload_key=failed.payload_key,
+            locale_at_send_time=failed.locale_at_send_time,
+            planning_group=f"{failed.planning_group or failed.reminder_id}:manual_retry",
+            supersedes_reminder_id=failed.reminder_id,
+            created_at=now,
+            updated_at=now,
+        )
+        await self.reminder_repository.create_reminder_job(retry)
+        return ManualReminderRetryResult(outcome="scheduled", reminder_id=retry_id)
 
     def _resolve_int_policy(self, *, key: str, clinic_id: str, fallback: int, cache: dict[str, int]) -> int:
         if clinic_id in cache:
