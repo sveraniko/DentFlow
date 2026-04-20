@@ -51,7 +51,7 @@ class PlainText043Renderer:
         doctor_label = self._humanize_text(payload.booking.doctor_label, fallback="Doctor")
         branch_label = self._humanize_text(payload.booking.branch_label, fallback="Branch")
         contact_label = self._render_contact(payload.patient.primary_contact_hint)
-        warnings_text = ", ".join(payload.warnings) if payload.warnings else "—"
+        warnings_text = self._render_warnings(payload.warnings)
 
         final_text = self._render_template(
             template_source_ref=template_source_ref,
@@ -60,22 +60,22 @@ class PlainText043Renderer:
                 "patient_number": payload.patient.patient_number or "—",
                 "patient_contact": contact_label,
                 "patient_language": payload.patient.preferred_language or "—",
-                "booking_id": payload.booking.booking_id or "—",
-                "booking_status": payload.booking.booking_status or "—",
+                "booking_id": self._render_booking_reference(payload.booking.booking_id),
+                "booking_status": self._humanize_text(payload.booking.booking_status, fallback="Not set"),
                 "booking_service": service_label,
                 "booking_doctor": doctor_label,
                 "booking_branch": branch_label,
                 "booking_start": payload.booking.scheduled_start_local_label or "—",
                 "booking_end": payload.booking.scheduled_end_local_label or "—",
                 "chart_number": payload.chart.chart_number or "—",
-                "chart_summary": payload.chart.chart_notes_summary or "—",
-                "diagnosis_text": payload.diagnosis.diagnosis_text or "—",
-                "treatment_plan": payload.treatment_plan.title or payload.treatment_plan.plan_text or "—",
-                "latest_note": payload.complaint_and_notes.latest_note_text or "—",
-                "imaging_count": str(payload.imaging.total_count),
+                "chart_summary": payload.chart.chart_notes_summary or "Not recorded",
+                "diagnosis_text": payload.diagnosis.diagnosis_text or "No current diagnosis recorded",
+                "treatment_plan": payload.treatment_plan.title or payload.treatment_plan.plan_text or "No current treatment plan recorded",
+                "latest_note": payload.complaint_and_notes.latest_note_text or "No chart note summary available",
+                "imaging_count": self._render_imaging_summary(payload.imaging.total_count),
                 "odontogram_surfaces": str(payload.odontogram.surface_count_hint)
                 if payload.odontogram.surface_count_hint is not None
-                else "—",
+                else "No snapshot recorded",
                 "warnings": warnings_text,
             },
         )
@@ -114,8 +114,37 @@ class PlainText043Renderer:
             "## Manual completion notes",
             "- Add clinic signature block if required.",
             "- Add stamp/attachment annotations if required.",
+            "- Editable source is supplemental; generated artifact remains the registry-tracked final export.",
         ]
         return "\n".join(lines).strip() + "\n"
+
+    def _render_booking_reference(self, booking_id: str | None) -> str:
+        return "Linked scheduled booking" if booking_id else "No linked booking"
+
+    def _render_imaging_summary(self, count: int) -> str:
+        if count <= 0:
+            return "No imaging references linked"
+        return f"{count} linked"
+
+    def _render_warnings(self, warnings: tuple[str, ...]) -> str:
+        if not warnings:
+            return "None"
+        labels = [self._warning_label(code) for code in warnings]
+        return ", ".join(sorted(set(labels)))
+
+    def _warning_label(self, code: str) -> str:
+        mapping = {
+            "booking_context_missing": "Booking context is missing",
+            "encounter_not_found_for_requested_id": "Encounter context could not be resolved",
+            "current_diagnosis_missing": "Current diagnosis is missing",
+            "current_treatment_plan_missing": "Current treatment plan is missing",
+            "imaging_references_missing": "Imaging references are missing",
+            "patient_contact_missing": "Patient contact is missing",
+            "booking_doctor_unresolved": "Doctor reference is unresolved",
+            "booking_service_unresolved": "Service reference is unresolved",
+            "booking_branch_unresolved": "Branch reference is unresolved",
+        }
+        return mapping.get(code, self._humanize_text(code, fallback="Unknown warning"))
 
     def _render_contact(self, contact_hint: str | None) -> str:
         if not contact_hint:

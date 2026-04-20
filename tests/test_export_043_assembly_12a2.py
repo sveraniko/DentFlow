@@ -13,6 +13,7 @@ from app.application.export import (
     GeneratedDocumentRegistryService,
     Structured043ExportAssembler,
 )
+from app.application.export.services import TemplateResolutionError
 from app.application.patient.registry import InMemoryPatientRegistryRepository, PatientRegistryService
 from app.application.timezone import DoctorTimezoneFormatter
 from app.domain.booking import Booking
@@ -349,6 +350,96 @@ def test_043_payload_assembly_is_sparse_safe() -> None:
     assert "current_diagnosis_missing" in payload.warnings
     assert "current_treatment_plan_missing" in payload.warnings
     assert "imaging_references_missing" in payload.warnings
+    assert "patient_contact_missing" not in payload.warnings
+
+
+def test_043_payload_assembly_flags_missing_contacts_and_unresolved_booking_refs() -> None:
+    patient_repo = InMemoryPatientRegistryRepository()
+    patient_service = PatientRegistryService(patient_repo)
+    reference_repo = InMemoryClinicReferenceRepository()
+    reference_service = ClinicReferenceService(reference_repo)
+    timezone_formatter = DoctorTimezoneFormatter(reference_service, app_default_timezone="UTC")
+    now = datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc)
+
+    reference_repo.upsert_clinic(Clinic(clinic_id="clinic_1", code="main", display_name="Main Clinic", timezone="UTC", default_locale="en"))
+    patient = patient_service.create_patient(
+        clinic_id="clinic_1",
+        first_name="Pat",
+        last_name="NoContact",
+        full_name_legal="Pat NoContact",
+        display_name="Pat NoContact",
+        patient_number="P-404",
+    )
+    chart = PatientChart(
+        chart_id="chart_404",
+        patient_id=patient.patient_id,
+        clinic_id="clinic_1",
+        chart_number="CH-404",
+        opened_at=now,
+        status="active",
+        created_at=now,
+        updated_at=now,
+    )
+    booking = Booking(
+        booking_id="booking_404",
+        clinic_id="clinic_1",
+        branch_id="branch_missing",
+        patient_id=patient.patient_id,
+        doctor_id="doctor_missing",
+        service_id="service_missing",
+        slot_id=None,
+        booking_mode="admin",
+        source_channel="telegram",
+        scheduled_start_at=now,
+        scheduled_end_at=now,
+        status="confirmed",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=False,
+        confirmed_at=None,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    assembler = Structured043ExportAssembler(
+        patient_registry=patient_service,
+        booking_repository=InMemoryBookingRepository(booking),
+        clinical_repository=InMemoryClinicalRepository(
+            chart=chart,
+            current_diagnosis=None,
+            current_treatment_plan=None,
+            notes=[],
+            imaging=[],
+            odontogram=None,
+            encounter=None,
+        ),
+        reference_service=reference_service,
+        timezone_formatter=timezone_formatter,
+    )
+    payload = asyncio.run(
+        assembler.assemble_payload(
+            ExportAssemblyRequest(
+                clinic_id="clinic_1",
+                patient_id=patient.patient_id,
+                chart_id=chart.chart_id,
+                booking_id=booking.booking_id,
+                template_type="043_card_export",
+                template_locale="en",
+            )
+        )
+    )
+    assert payload.patient.primary_contact_hint is None
+    assert payload.booking.doctor_label is None
+    assert payload.booking.service_label is None
+    assert payload.booking.branch_label is None
+    assert "patient_contact_missing" in payload.warnings
+    assert "booking_doctor_unresolved" in payload.warnings
+    assert "booking_service_unresolved" in payload.warnings
+    assert "booking_branch_unresolved" in payload.warnings
 
 
 def test_template_registry_rejects_duplicate_default_active_version() -> None:
@@ -452,3 +543,35 @@ def test_application_seam_creates_and_starts_generated_document_and_returns_payl
     assert result.payload.metadata.assembled_by_actor_id == "actor_1"
     assert persisted.generation_status == "generating"
     assert persisted.document_type == "043_card_export"
+
+
+def test_template_registry_raises_on_ambiguous_highest_version_selection() -> None:
+    now = datetime(2026, 4, 20, tzinfo=timezone.utc)
+    template_repo = InMemoryTemplateRepository()
+    template_repo.rows["a"] = DocumentTemplate(
+        document_template_id="a",
+        clinic_id=None,
+        template_type="043_card_export",
+        template_version=4,
+        locale="en",
+        render_engine="plain",
+        template_source_ref="builtin://043/plain_text/v1",
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    template_repo.rows["b"] = DocumentTemplate(
+        document_template_id="b",
+        clinic_id=None,
+        template_type="043_card_export",
+        template_version=4,
+        locale="en",
+        render_engine="plain",
+        template_source_ref="builtin://043/plain_text/clinic_v1",
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    service = DocumentTemplateRegistryService(template_repo)
+    with pytest.raises(TemplateResolutionError, match="Ambiguous active templates"):
+        asyncio.run(service.resolve_active_template(template_type="043_card_export", locale="en", clinic_id=None, template_version=None))

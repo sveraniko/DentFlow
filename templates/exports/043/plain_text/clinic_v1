@@ -13,7 +13,7 @@ Clinical First
 * Imaging refs: {imaging_count}
 
 Visit Context
-* Booking: {booking_id}
+* Booking context: {booking_id}
 * Status: {booking_status}
 * Service line: {booking_service}
 * Attending doctor: {booking_doctor}
