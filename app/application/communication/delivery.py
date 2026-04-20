@@ -8,6 +8,7 @@ from uuid import uuid4
 from app.domain.booking import Booking
 from app.domain.communication import MessageDelivery, ReminderJob
 from app.application.policy import PolicyResolver
+from app.application.communication.runtime_integrity import evaluate_booking_relevance
 
 
 @dataclass(slots=True, frozen=True)
@@ -56,6 +57,7 @@ class ReminderDeliveryRepository(Protocol):
         error_text: str,
     ) -> bool: ...
     async def mark_reminder_canceled(self, *, reminder_id: str, canceled_at: datetime, reason_code: str) -> bool: ...
+    async def mark_reminder_expired(self, *, reminder_id: str, expired_at: datetime, reason_code: str) -> bool: ...
     async def next_delivery_attempt_no(self, *, reminder_id: str) -> int: ...
 
 
@@ -97,48 +99,17 @@ class ReminderDeliveryService:
             )
             return
 
-        if reminder.booking_id is not None:
-            booking = await self.booking_reader.get_booking(reminder.booking_id)
-            if booking is None:
-                await self.repository.mark_reminder_canceled(
-                    reminder_id=reminder.reminder_id,
-                    canceled_at=now,
-                    reason_code="booking_missing",
-                )
-                await self.repository.create_message_delivery(
-                    MessageDelivery(
-                        message_delivery_id=f"md_{uuid4().hex}",
-                        reminder_id=reminder.reminder_id,
-                        patient_id=reminder.patient_id,
-                        channel=reminder.channel,
-                        delivery_status="canceled",
-                        provider_message_id=None,
-                        attempt_no=attempt_no,
-                        error_text="booking_missing",
-                        created_at=now,
-                    )
-                )
-                return
-            if booking.status in {"canceled", "completed", "no_show"}:
-                await self.repository.mark_reminder_canceled(
-                    reminder_id=reminder.reminder_id,
-                    canceled_at=now,
-                    reason_code=f"booking_{booking.status}",
-                )
-                await self.repository.create_message_delivery(
-                    MessageDelivery(
-                        message_delivery_id=f"md_{uuid4().hex}",
-                        reminder_id=reminder.reminder_id,
-                        patient_id=reminder.patient_id,
-                        channel=reminder.channel,
-                        delivery_status="canceled",
-                        provider_message_id=None,
-                        attempt_no=attempt_no,
-                        error_text=f"booking_{booking.status}",
-                        created_at=now,
-                    )
-                )
-                return
+        booking = await self.booking_reader.get_booking(reminder.booking_id) if reminder.booking_id is not None else None
+        relevance = evaluate_booking_relevance(reminder=reminder, booking=booking, now=now)
+        if not relevance.should_send:
+            await self._persist_non_send_terminal(
+                reminder=reminder,
+                attempt_no=attempt_no,
+                now=now,
+                terminal_status=relevance.terminal_status or "canceled",
+                reason_code=relevance.reason_code or "no_longer_relevant",
+            )
+            return
 
         resolution = await self.recipient_resolver.resolve(reminder=reminder)
         if resolution.kind != "target_found" or resolution.target is None:
@@ -172,6 +143,44 @@ class ReminderDeliveryService:
             )
         )
         await self.repository.mark_reminder_sent(reminder_id=reminder.reminder_id, sent_at=now)
+
+    async def _persist_non_send_terminal(
+        self,
+        *,
+        reminder: ReminderJob,
+        attempt_no: int,
+        now: datetime,
+        terminal_status: str,
+        reason_code: str,
+    ) -> None:
+        if terminal_status == "expired":
+            await self.repository.mark_reminder_expired(
+                reminder_id=reminder.reminder_id,
+                expired_at=now,
+                reason_code=reason_code,
+            )
+            delivery_status = "expired"
+        else:
+            await self.repository.mark_reminder_canceled(
+                reminder_id=reminder.reminder_id,
+                canceled_at=now,
+                reason_code=reason_code,
+            )
+            delivery_status = "canceled"
+
+        await self.repository.create_message_delivery(
+            MessageDelivery(
+                message_delivery_id=f"md_{uuid4().hex}",
+                reminder_id=reminder.reminder_id,
+                patient_id=reminder.patient_id,
+                channel=reminder.channel,
+                delivery_status=delivery_status,
+                provider_message_id=None,
+                attempt_no=attempt_no,
+                error_text=reason_code,
+                created_at=now,
+            )
+        )
 
     async def _persist_failure(self, *, reminder: ReminderJob, attempt_no: int, now: datetime, error_text: str, retryable: bool) -> None:
         await self.repository.create_message_delivery(

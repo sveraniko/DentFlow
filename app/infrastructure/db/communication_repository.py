@@ -119,6 +119,24 @@ class DbReminderJobRepository:
                     )
                 ).mappings()
             )
+            outbox = OutboxRepository(self._db_config)
+            for row in rows:
+                await outbox.append_on_connection(
+                    conn,
+                    build_event(
+                        event_name="reminder.queued",
+                        producer_context="communication.delivery",
+                        clinic_id=row["clinic_id"],
+                        entity_type="reminder",
+                        entity_id=row["reminder_id"],
+                        occurred_at=now,
+                        payload={
+                            "booking_id": row["booking_id"],
+                            "reminder_type": row["reminder_type"],
+                            "status": "queued",
+                        },
+                    ),
+                )
         await engine.dispose()
         return [ReminderJob(**dict(row)) for row in rows]
 
@@ -310,6 +328,40 @@ class DbReminderJobRepository:
                             entity_type="reminder",
                             entity_id=row["reminder_id"],
                             occurred_at=canceled_at,
+                            payload={"booking_id": row["booking_id"], "reason_code": reason_code},
+                        ),
+                    )
+                return bool(row)
+        finally:
+            await engine.dispose()
+
+    async def mark_reminder_expired(self, *, reminder_id: str, expired_at: datetime, reason_code: str) -> bool:
+        engine = create_engine(self._db_config)
+        try:
+            async with engine.begin() as conn:
+                result = await conn.execute(
+                    text(
+                        """
+                        UPDATE communication.reminder_jobs
+                        SET status='expired', updated_at=:now, queued_at=NULL, canceled_at=:now, cancel_reason_code=:reason_code
+                        WHERE reminder_id=:reminder_id
+                          AND status='queued'
+                        RETURNING reminder_id, clinic_id, booking_id
+                        """
+                    ),
+                    {"reminder_id": reminder_id, "now": expired_at, "reason_code": reason_code},
+                )
+                row = result.mappings().first()
+                if row:
+                    await OutboxRepository(self._db_config).append_on_connection(
+                        conn,
+                        build_event(
+                            event_name="reminder.expired",
+                            producer_context="communication.delivery",
+                            clinic_id=row["clinic_id"],
+                            entity_type="reminder",
+                            entity_id=row["reminder_id"],
+                            occurred_at=expired_at,
                             payload={"booking_id": row["booking_id"], "reason_code": reason_code},
                         ),
                     )

@@ -105,6 +105,22 @@ class _ReminderRepo:
         )
         return True
 
+    async def mark_reminder_expired(self, *, reminder_id: str, expired_at: datetime, reason_code: str) -> bool:
+        current = self.jobs[reminder_id]
+        if current.status != "queued":
+            return False
+        self.jobs[reminder_id] = ReminderJob(
+            **{
+                **asdict(current),
+                "status": "expired",
+                "updated_at": expired_at,
+                "queued_at": None,
+                "canceled_at": expired_at,
+                "cancel_reason_code": reason_code,
+            }
+        )
+        return True
+
     async def next_delivery_attempt_no(self, *, reminder_id: str) -> int:
         return 1 + len([row for row in self.message_deliveries if row.reminder_id == reminder_id])
 
@@ -205,7 +221,7 @@ def test_delivery_success_persists_message_and_marks_sent() -> None:
     repo = _ReminderRepo([reminder])
     service = ReminderDeliveryService(
         repository=repo,
-        booking_reader=_BookingReader([_booking("confirmed")]),
+        booking_reader=_BookingReader([_booking("pending_confirmation")]),
         recipient_resolver=_Resolver({"pat_1": RecipientResolution(kind="target_found", target=TelegramDeliveryTarget(patient_id="pat_1", telegram_user_id=3001))}),
         sender=_Sender(),
     )
@@ -268,21 +284,55 @@ def test_missing_or_invalid_telegram_target_fails_explicitly() -> None:
     assert {d.error_text for d in repo.message_deliveries} == {"telegram_target_missing", "telegram_target_invalid"}
 
 
-def test_booking_sanity_cancels_send_for_terminal_or_missing_booking() -> None:
+def test_booking_relevance_cancels_send_for_terminal_missing_or_reschedule_requested() -> None:
     now = datetime(2026, 4, 17, 9, 0, tzinfo=timezone.utc)
     repo = _ReminderRepo(
         [
             _job(reminder_id="r_cancel", patient_id="pat_1", booking_id="b1"),
             _job(reminder_id="r_missing", patient_id="pat_1", booking_id="b_missing"),
+            _job(reminder_id="r_rescheduled", patient_id="pat_1", booking_id="b2"),
         ]
     )
     service = ReminderDeliveryService(
         repository=repo,
-        booking_reader=_BookingReader([_booking("canceled")]),
+        booking_reader=_BookingReader([_booking("canceled"), Booking(**{**asdict(_booking("confirmed")), "booking_id": "b2", "status": "reschedule_requested"})]),
         recipient_resolver=_Resolver({"pat_1": RecipientResolution(kind="target_found", target=TelegramDeliveryTarget(patient_id="pat_1", telegram_user_id=3001))}),
         sender=_Sender(),
     )
     asyncio.run(service.deliver_due_reminders(now=now, batch_limit=10))
     assert repo.jobs["r_cancel"].status == "canceled"
     assert repo.jobs["r_missing"].status == "canceled"
-    assert {row.delivery_status for row in repo.message_deliveries} == {"canceled"}
+    assert repo.jobs["r_rescheduled"].status == "canceled"
+    assert {row.error_text for row in repo.message_deliveries} == {"booking_canceled", "booking_missing", "booking_reschedule_requested"}
+
+
+def test_booking_window_passed_marks_expired_instead_of_sending() -> None:
+    now = datetime(2026, 4, 17, 9, 0, tzinfo=timezone.utc)
+    reminder = _job(reminder_id="r1", patient_id="pat_1", reminder_type="booking_previsit")
+    repo = _ReminderRepo([reminder])
+    past_booking = Booking(**{**asdict(_booking("confirmed")), "scheduled_start_at": now - timedelta(minutes=5), "scheduled_end_at": now + timedelta(minutes=25)})
+    service = ReminderDeliveryService(
+        repository=repo,
+        booking_reader=_BookingReader([past_booking]),
+        recipient_resolver=_Resolver({"pat_1": RecipientResolution(kind="target_found", target=TelegramDeliveryTarget(patient_id="pat_1", telegram_user_id=3001))}),
+        sender=_Sender(),
+    )
+    asyncio.run(service.deliver_due_reminders(now=now, batch_limit=10))
+    assert repo.jobs["r1"].status == "expired"
+    assert repo.message_deliveries[0].delivery_status == "expired"
+    assert repo.message_deliveries[0].error_text == "booking_window_passed"
+
+
+def test_booking_confirmation_suppressed_when_booking_already_confirmed() -> None:
+    now = datetime(2026, 4, 17, 9, 0, tzinfo=timezone.utc)
+    reminder = _job(reminder_id="r1", patient_id="pat_1", reminder_type="booking_confirmation")
+    repo = _ReminderRepo([reminder])
+    service = ReminderDeliveryService(
+        repository=repo,
+        booking_reader=_BookingReader([_booking("confirmed")]),
+        recipient_resolver=_Resolver({"pat_1": RecipientResolution(kind="target_found", target=TelegramDeliveryTarget(patient_id="pat_1", telegram_user_id=3001))}),
+        sender=_Sender(),
+    )
+    asyncio.run(service.deliver_due_reminders(now=now, batch_limit=10))
+    assert repo.jobs["r1"].status == "canceled"
+    assert repo.message_deliveries[0].error_text == "booking_already_confirmed"
