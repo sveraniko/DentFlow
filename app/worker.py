@@ -1,7 +1,10 @@
 import asyncio
 import logging
 import os
+import socket
+from datetime import datetime, timezone
 from dataclasses import dataclass
+from uuid import uuid4
 
 from app.bootstrap.logging import configure_logging
 from app.application.communication import ReminderDeliveryService, ReminderRecoveryService
@@ -10,6 +13,7 @@ from app.config.settings import Settings, get_settings
 from app.infrastructure.communication import AiogramTelegramReminderSender, DbTelegramReminderRecipientResolver
 from app.infrastructure.db.booking_repository import DbBookingRepository
 from app.infrastructure.db.communication_repository import DbReminderJobRepository
+from app.infrastructure.db.reminder_worker_runtime_repository import DbReminderWorkerRuntimeRepository, ReminderWorkerHealthInspector
 from app.infrastructure.db.repositories import DbPolicyRepository
 from app.infrastructure.workers.reminder_delivery import run_reminder_delivery_once
 from app.infrastructure.workers.reminder_recovery import run_reminder_recovery_once
@@ -80,6 +84,9 @@ def _reminder_worker_config_from_env() -> ReminderWorkerConfig:
         recovery_batch_limit=max(1, int(os.getenv("REMINDER_WORKER_RECOVERY_BATCH_LIMIT", "100"))),
         poll_interval_sec=max(0.1, float(os.getenv("REMINDER_WORKER_POLL_INTERVAL_SEC", "2.0"))),
         startup_catchup_max_batches=max(1, int(os.getenv("REMINDER_WORKER_STARTUP_CATCHUP_MAX_BATCHES", "10"))),
+        lease_ttl_sec=max(5, int(os.getenv("REMINDER_WORKER_LEASE_TTL_SEC", "30"))),
+        max_consecutive_error_batches=max(1, int(os.getenv("REMINDER_WORKER_MAX_CONSECUTIVE_ERROR_BATCHES", "3"))),
+        error_cooldown_sec=max(0.1, float(os.getenv("REMINDER_WORKER_ERROR_COOLDOWN_SEC", "10.0"))),
     )
 
 
@@ -108,15 +115,39 @@ async def run_reminder_worker_forever() -> None:
     logger = logging.getLogger("dentflow.worker")
     logger.info("reminder worker runtime started")
     services = await build_reminder_worker_services(settings)
+    runtime_repository = DbReminderWorkerRuntimeRepository(settings.db)
+    worker_token = os.getenv("REMINDER_WORKER_INSTANCE_ID", "").strip() or f"{socket.gethostname()}-{os.getpid()}-{uuid4().hex[:8]}"
+    await runtime_repository.upsert_worker_status(
+        worker_name="reminder",
+        owner_token=worker_token,
+        mode="starting",
+        heartbeat_at=datetime.now(timezone.utc),
+    )
     reminder_worker = ReminderWorkerRuntime(
         runner=ReminderWorkerRunner(
             delivery_service=services.delivery,
             recovery_service=services.recovery,
         ),
         config=_reminder_worker_config_from_env(),
+        ops=runtime_repository,
+        worker_name="reminder",
+        owner_token=worker_token,
     )
     reminder_worker.install_signal_handlers()
     await reminder_worker.run_forever()
+
+
+async def inspect_reminder_worker_health() -> str:
+    settings = get_settings()
+    repository = DbReminderWorkerRuntimeRepository(settings.db)
+    inspector = ReminderWorkerHealthInspector(repository)
+    health = await inspector.inspect()
+    return (
+        f"status={health.status} worker={health.worker_name} mode={health.mode} "
+        f"heartbeat_age_sec={health.heartbeat_age_sec} "
+        f"last_success_age_sec={health.last_success_age_sec} "
+        f"lease_owner={health.lease_owner_token} details={health.details}"
+    )
 
 
 async def run_worker_forever() -> None:
