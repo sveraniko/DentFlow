@@ -11,10 +11,18 @@ from app.application.export.models import Structured043ExportPayload
 
 
 @dataclass(slots=True, frozen=True)
+class Editable043Document:
+    content: bytes
+    content_type: str
+    extension: str
+
+
+@dataclass(slots=True, frozen=True)
 class Rendered043Document:
     content: bytes
     content_type: str
     extension: str
+    editable_source: Editable043Document | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -35,48 +43,79 @@ class ArtifactStorage(Protocol):
 
 @dataclass(slots=True)
 class PlainText043Renderer:
-    locales_dir: Path = Path("locales")
+    locales_dir: Path | None = None
+    template_base_dir: Path | None = None
 
     def render(self, *, payload: Structured043ExportPayload, locale: str, template_source_ref: str) -> Rendered043Document:
-        del template_source_ref
         service_label = self._localize_or_humanize(payload.booking.service_label, locale=locale, fallback="Service")
         doctor_label = self._humanize_text(payload.booking.doctor_label, fallback="Doctor")
         branch_label = self._humanize_text(payload.booking.branch_label, fallback="Branch")
         contact_label = self._render_contact(payload.patient.primary_contact_hint)
+        warnings_text = ", ".join(payload.warnings) if payload.warnings else "—"
 
+        final_text = self._render_template(
+            template_source_ref=template_source_ref,
+            values={
+                "patient_name": payload.patient.full_name_legal or payload.patient.display_name,
+                "patient_number": payload.patient.patient_number or "—",
+                "patient_contact": contact_label,
+                "patient_language": payload.patient.preferred_language or "—",
+                "booking_id": payload.booking.booking_id or "—",
+                "booking_status": payload.booking.booking_status or "—",
+                "booking_service": service_label,
+                "booking_doctor": doctor_label,
+                "booking_branch": branch_label,
+                "booking_start": payload.booking.scheduled_start_local_label or "—",
+                "booking_end": payload.booking.scheduled_end_local_label or "—",
+                "chart_number": payload.chart.chart_number or "—",
+                "chart_summary": payload.chart.chart_notes_summary or "—",
+                "diagnosis_text": payload.diagnosis.diagnosis_text or "—",
+                "treatment_plan": payload.treatment_plan.title or payload.treatment_plan.plan_text or "—",
+                "latest_note": payload.complaint_and_notes.latest_note_text or "—",
+                "imaging_count": str(payload.imaging.total_count),
+                "odontogram_surfaces": str(payload.odontogram.surface_count_hint)
+                if payload.odontogram.surface_count_hint is not None
+                else "—",
+                "warnings": warnings_text,
+            },
+        )
+        editable_text = self._build_editable_source(payload=payload, rendered_text=final_text, template_source_ref=template_source_ref)
+        return Rendered043Document(
+            content=final_text.encode("utf-8"),
+            content_type="text/plain",
+            extension="txt",
+            editable_source=Editable043Document(
+                content=editable_text.encode("utf-8"),
+                content_type="text/markdown",
+                extension="md",
+            ),
+        )
+
+    def _render_template(self, *, template_source_ref: str, values: dict[str, str]) -> str:
+        template_text = self._load_template_text(template_source_ref)
+        rendered = template_text.format_map(values).strip() + "\n"
+        return rendered
+
+    def _build_editable_source(
+        self, *, payload: Structured043ExportPayload, rendered_text: str, template_source_ref: str
+    ) -> str:
         lines = [
-            "DentFlow 043 Export",
+            "# DentFlow 043 Editable Source",
             "",
-            "Patient",
-            f"- Name: {payload.patient.full_name_legal or payload.patient.display_name}",
-            f"- Patient #: {payload.patient.patient_number or '—'}",
-            f"- Contact: {contact_label}",
-            f"- Language: {payload.patient.preferred_language or '—'}",
+            f"- Template source: {template_source_ref}",
+            f"- Template locale: {payload.metadata.template_locale}",
+            f"- Template type: {payload.metadata.template_type}",
             "",
-            "Booking",
-            f"- Booking ID: {payload.booking.booking_id or '—'}",
-            f"- Status: {payload.booking.booking_status or '—'}",
-            f"- Service: {service_label}",
-            f"- Doctor: {doctor_label}",
-            f"- Branch: {branch_label}",
-            f"- Start: {payload.booking.scheduled_start_local_label or '—'}",
-            f"- End: {payload.booking.scheduled_end_local_label or '—'}",
+            "## Rendered Preview",
+            "```text",
+            rendered_text.rstrip("\n"),
+            "```",
             "",
-            "Chart",
-            f"- Chart #: {payload.chart.chart_number or '—'}",
-            f"- Notes summary: {payload.chart.chart_notes_summary or '—'}",
-            "",
-            "Clinical",
-            f"- Primary diagnosis: {payload.diagnosis.diagnosis_text or '—'}",
-            f"- Treatment plan: {payload.treatment_plan.title or payload.treatment_plan.plan_text or '—'}",
-            f"- Latest note: {payload.complaint_and_notes.latest_note_text or '—'}",
-            f"- Imaging refs: {payload.imaging.total_count}",
-            f"- Odontogram surfaces: {payload.odontogram.surface_count_hint if payload.odontogram.surface_count_hint is not None else '—'}",
+            "## Manual completion notes",
+            "- Add clinic signature block if required.",
+            "- Add stamp/attachment annotations if required.",
         ]
-        if payload.warnings:
-            lines.extend(["", "Warnings", f"- {', '.join(payload.warnings)}"])
-        text = "\n".join(lines).strip() + "\n"
-        return Rendered043Document(content=text.encode("utf-8"), content_type="text/plain", extension="txt")
+        return "\n".join(lines).strip() + "\n"
 
     def _render_contact(self, contact_hint: str | None) -> str:
         if not contact_hint:
@@ -104,10 +143,53 @@ class PlainText043Renderer:
         return self._humanize_text(raw, fallback=fallback)
 
     def _load_locale_catalog(self, locale: str) -> dict[str, str]:
-        locale_file = self.locales_dir / f"{locale}.json"
+        locale_file = self._resolve_locales_dir() / f"{locale}.json"
         if not locale_file.exists():
             return {}
         return json.loads(locale_file.read_text(encoding="utf-8"))
+
+    def _load_template_text(self, template_source_ref: str) -> str:
+        source = template_source_ref.strip()
+        if not source:
+            raise ValueError("template_source_ref must be non-empty")
+        if source.startswith("builtin://"):
+            rel = source.removeprefix("builtin://")
+            template_file = self._resolve_template_base_dir() / rel
+        elif source.startswith("file://"):
+            template_file = Path(source.removeprefix("file://")).expanduser()
+        else:
+            template_file = Path(source).expanduser()
+            if not template_file.is_absolute():
+                template_file = self._resolve_template_base_dir() / source
+        if not template_file.exists():
+            raise FileNotFoundError(f"template source not found: {template_source_ref}")
+        return template_file.read_text(encoding="utf-8")
+
+    def _resolve_locales_dir(self) -> Path:
+        if self.locales_dir is not None:
+            return self.locales_dir
+        env_override = os.environ.get("DENTFLOW_LOCALES_DIR")
+        if env_override:
+            candidate = Path(env_override).expanduser()
+            if candidate.exists():
+                return candidate
+        for candidate in (Path.cwd() / "locales", Path(__file__).resolve().parents[3] / "locales"):
+            if candidate.exists():
+                return candidate
+        return Path("locales")
+
+    def _resolve_template_base_dir(self) -> Path:
+        if self.template_base_dir is not None:
+            return self.template_base_dir
+        env_override = os.environ.get("DENTFLOW_EXPORT_TEMPLATES_DIR")
+        if env_override:
+            candidate = Path(env_override).expanduser()
+            if candidate.exists():
+                return candidate
+        for candidate in (Path.cwd() / "templates" / "exports", Path(__file__).resolve().parents[3] / "templates" / "exports"):
+            if candidate.exists():
+                return candidate
+        return Path("templates/exports")
 
     def _humanize_text(self, value: str | None, *, fallback: str) -> str:
         raw = (value or "").strip()

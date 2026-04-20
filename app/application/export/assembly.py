@@ -295,9 +295,27 @@ class DocumentExportApplicationService:
                 checksum_sha256=stored.checksum_sha256,
                 created_by_actor_id=request.assembled_by_actor_id,
             )
+            editable_source_asset_id = None
+            if rendered.editable_source is not None:
+                editable_stored = self.artifact_storage.store(
+                    generated_document_id=f"{generated_document.generated_document_id}.editable",
+                    artifact=rendered.editable_source,
+                )
+                editable_asset = await self.media_asset_registry.create_asset(
+                    clinic_id=request.clinic_id,
+                    asset_kind="generated_document_editable_source",
+                    storage_provider=editable_stored.storage_provider,
+                    storage_ref=editable_stored.storage_ref,
+                    content_type=rendered.editable_source.content_type,
+                    byte_size=editable_stored.byte_size,
+                    checksum_sha256=editable_stored.checksum_sha256,
+                    created_by_actor_id=request.assembled_by_actor_id,
+                )
+                editable_source_asset_id = editable_asset.media_asset_id
             await self.generated_document_registry.mark_generation_success(
                 generated_document_id=generated_document.generated_document_id,
                 generated_file_asset_id=asset.media_asset_id,
+                editable_source_asset_id=editable_source_asset_id,
             )
             return ExportGenerationResult(
                 generated_document_id=generated_document.generated_document_id,
