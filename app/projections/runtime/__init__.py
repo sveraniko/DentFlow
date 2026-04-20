@@ -1,8 +1,11 @@
+from .operations import ProjectorLagStatus, ProjectorOperationsService
 from .projectors import ProjectorRunResult, ProjectorRunner
 from .registry import ProjectorRegistry, RegisteredProjector, build_default_projector_registry
 from .worker import ProjectorWorkerConfig, ProjectorWorkerRuntime
 
 __all__ = [
+    "ProjectorLagStatus",
+    "ProjectorOperationsService",
     "ProjectorRunResult",
     "ProjectorRunner",
     "ProjectorRegistry",
