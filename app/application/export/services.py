@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import os
+from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
@@ -304,3 +306,44 @@ class MediaAssetRegistryService:
 
     async def get_media_asset(self, media_asset_id: str) -> MediaAsset | None:
         return await self.repository.get_media_asset(media_asset_id)
+
+
+@dataclass(slots=True, frozen=True)
+class GeneratedArtifactDeliveryResult:
+    mode: str
+    path: Path | None = None
+
+
+@dataclass(slots=True)
+class GeneratedArtifactDeliveryService:
+    local_artifacts_base_dir: Path = Path(os.environ.get("DENTFLOW_EXPORT_ARTIFACTS_DIR", "artifacts/generated_documents"))
+
+    def resolve(self, asset: MediaAsset) -> GeneratedArtifactDeliveryResult:
+        if asset.storage_provider != "local_fs":
+            return GeneratedArtifactDeliveryResult(mode="unsupported_provider")
+        safe_path = self._resolve_local_path(asset.storage_ref)
+        if safe_path is None:
+            return GeneratedArtifactDeliveryResult(mode="unavailable")
+        return GeneratedArtifactDeliveryResult(mode="local_file", path=safe_path)
+
+    def _resolve_local_path(self, storage_ref: str) -> Path | None:
+        raw = storage_ref.strip()
+        if not raw:
+            return None
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            candidate = (Path.cwd() / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+        base = self.local_artifacts_base_dir.expanduser()
+        if not base.is_absolute():
+            base = (Path.cwd() / base).resolve()
+        else:
+            base = base.resolve()
+        try:
+            candidate.relative_to(base)
+        except ValueError:
+            return None
+        if not candidate.exists() or not candidate.is_file():
+            return None
+        return candidate
