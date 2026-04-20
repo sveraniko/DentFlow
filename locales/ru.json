@@ -405,6 +405,7 @@
   "admin.queue.status.active": "Активно",
   "admin.queue.status.closed": "Закрыто",
   "admin.queue.status.canceled": "Отменено",
+  "service.cleaning": "Профессиональная чистка зубов",
   "reminder.message.layout": "Напоминание DentFlow\n📅 {datetime}\n👩‍⚕️ {doctor}\n🦷 {service}\n🏥 {branch}\n\n{summary}",
   "reminder.type.booking_confirmation.summary": "Подтвердите запись или выберите удобное изменение.",
   "reminder.type.booking_previsit.summary": "Напоминание о предстоящем визите. Проверьте время, пожалуйста.",
@@ -414,5 +415,8 @@
   "reminder.action.confirm": "✅ Подтвердить",
   "reminder.action.reschedule": "🔁 Перенести",
   "reminder.action.cancel": "❌ Отменить",
-  "reminder.action.ack": "👍 Получил(а)"
+  "reminder.action.ack": "👍 Получил(а)",
+  "reminder.context.doctor_unknown": "ваш врач",
+  "reminder.context.service_unknown": "стоматологическая услуга",
+  "reminder.context.branch_unknown": "филиал клиники"
 }

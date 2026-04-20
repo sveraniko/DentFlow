@@ -378,3 +378,34 @@ def test_manual_retry_failed_reminder_is_bounded_and_idempotent() -> None:
     assert first.reminder_id == "rem_mr_r1"
     assert reminder_repo.jobs["rem_mr_r1"].status == "scheduled"
     assert second.outcome == "already_pending"
+
+
+def test_manual_retry_respects_explicit_policy_toggle() -> None:
+    now = datetime(2026, 4, 17, 10, 0, tzinfo=timezone.utc)
+    failed = ReminderJob(
+        **{
+            **asdict(_reminder(status="failed", reminder_type="booking_confirmation", attempts=1)),
+            "status": "failed",
+            "last_error_code": "telegram_send_error",
+            "last_error_text": "timeout",
+        }
+    )
+    reminder_repo = _ReminderRepo([failed])
+    booking_repo = _BookingRepo([_booking(status="pending_confirmation")], [_session()])
+    policy_repo = InMemoryPolicyRepository()
+    policy_set = PolicySet(policy_set_id="ps_manual", policy_family="communication", scope_type="clinic", scope_ref="clinic_main")
+    policy_repo.upsert_policy_set(policy_set)
+    policy_repo.add_policy_value(
+        PolicyValue(
+            policy_value_id="pv_manual",
+            policy_set_id="ps_manual",
+            policy_key="communication.manual_retry_enabled",
+            value_type="bool",
+            value_json=False,
+        )
+    )
+    service = ReminderRecoveryService(reminder_repo, booking_repo, PolicyResolver(policy_repo))
+
+    result = asyncio.run(service.retry_failed_reminder(reminder_id="r1", now=now))
+    assert result.outcome == "manual_retry_disabled"
+    assert "rem_mr_r1" not in reminder_repo.jobs

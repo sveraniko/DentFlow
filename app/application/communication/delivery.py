@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from app.domain.booking import Booking
 from app.domain.communication import MessageDelivery, ReminderJob
 from app.application.policy import PolicyResolver
+from app.application.clinic_reference import ClinicReferenceService
 from app.application.communication.runtime_integrity import evaluate_booking_relevance
 from app.common.i18n import I18nService
 
@@ -79,6 +80,13 @@ class BookingTimezoneResolver(Protocol):
     def resolve_timezone(self, *, clinic_id: str, branch_id: str | None) -> str: ...
 
 
+@dataclass(slots=True, frozen=True)
+class ReminderContextLabels:
+    doctor: str
+    service: str
+    branch: str
+
+
 @dataclass(slots=True)
 class ReminderDeliveryService:
     repository: ReminderDeliveryRepository
@@ -88,6 +96,7 @@ class ReminderDeliveryService:
     policy_resolver: PolicyResolver | None = None
     i18n: I18nService | None = None
     timezone_resolver: BookingTimezoneResolver | None = None
+    reference_service: ClinicReferenceService | None = None
     app_default_timezone: str = "UTC"
 
     async def deliver_due_reminders(self, *, now: datetime, batch_limit: int) -> int:
@@ -136,6 +145,7 @@ class ReminderDeliveryService:
             booking=booking if reminder.booking_id is not None else None,
             i18n=self.i18n,
             timezone_resolver=self.timezone_resolver,
+            reference_service=self.reference_service,
             app_default_timezone=self.app_default_timezone,
         )
         try:
@@ -246,27 +256,39 @@ def render_booking_reminder_message(
     booking: Booking | None,
     i18n: I18nService | None = None,
     timezone_resolver: BookingTimezoneResolver | None = None,
+    reference_service: ClinicReferenceService | None = None,
     app_default_timezone: str = "UTC",
 ) -> RenderedReminderMessage:
     locale = (reminder.locale_at_send_time or "ru").lower()
+    fallback_locale = "ru"
     dt_label = "-"
-    doctor_label = "-"
-    service_label = "-"
-    branch_label = "-"
+    labels = ReminderContextLabels(
+        doctor=_t(i18n, locale, "reminder.context.doctor_unknown"),
+        service=_t(i18n, locale, "reminder.context.service_unknown"),
+        branch=_t(i18n, locale, "reminder.context.branch_unknown"),
+    )
     if booking is not None:
+        if reference_service is not None:
+            clinic = reference_service.get_clinic(booking.clinic_id)
+            if clinic is not None and clinic.default_locale:
+                fallback_locale = clinic.default_locale
         tz_name = app_default_timezone
         if timezone_resolver is not None:
             tz_name = timezone_resolver.resolve_timezone(clinic_id=booking.clinic_id, branch_id=booking.branch_id)
         dt_label = booking.scheduled_start_at.astimezone(_zone_or_utc(tz_name)).strftime("%Y-%m-%d %H:%M %Z")
-        doctor_label = booking.doctor_id or "-"
-        service_label = booking.service_id or "-"
-        branch_label = booking.branch_id or "-"
+        labels = _resolve_context_labels(
+            booking=booking,
+            locale=locale,
+            fallback_locale=fallback_locale,
+            i18n=i18n,
+            reference_service=reference_service,
+        )
 
     text = _t(i18n, locale, "reminder.message.layout").format(
         datetime=dt_label,
-        doctor=doctor_label,
-        service=service_label,
-        branch=branch_label,
+        doctor=labels.doctor,
+        service=labels.service,
+        branch=labels.branch,
         summary=_t(i18n, locale, f"reminder.type.{reminder.reminder_type}.summary"),
     )
     actions = _build_actions(reminder=reminder, i18n=i18n, locale=locale)
@@ -306,6 +328,52 @@ def _zone_or_utc(tz_name: str) -> ZoneInfo:
         return ZoneInfo("UTC")
 
 
+def _resolve_context_labels(
+    *,
+    booking: Booking,
+    locale: str,
+    fallback_locale: str,
+    i18n: I18nService | None,
+    reference_service: ClinicReferenceService | None,
+) -> ReminderContextLabels:
+    generic_doctor = _t(i18n, locale, "reminder.context.doctor_unknown")
+    generic_service = _t(i18n, locale, "reminder.context.service_unknown")
+    generic_branch = _t(i18n, locale, "reminder.context.branch_unknown")
+    if reference_service is None:
+        return ReminderContextLabels(doctor=generic_doctor, service=generic_service, branch=generic_branch)
+
+    doctor = reference_service.get_doctor(booking.clinic_id, booking.doctor_id or "") if booking.doctor_id else None
+    branch = reference_service.get_branch(booking.clinic_id, booking.branch_id or "") if booking.branch_id else None
+    service = reference_service.get_service(booking.clinic_id, booking.service_id or "") if booking.service_id else None
+
+    doctor_label = (doctor.display_name or "").strip() if doctor is not None else ""
+    branch_label = (branch.display_name or "").strip() if branch is not None else ""
+    service_label = _resolve_service_label(
+        service_title_key=(service.title_key if service is not None else None),
+        locale=locale,
+        fallback_locale=fallback_locale,
+        i18n=i18n,
+    )
+
+    return ReminderContextLabels(
+        doctor=doctor_label or generic_doctor,
+        service=service_label or generic_service,
+        branch=branch_label or generic_branch,
+    )
+
+
+def _resolve_service_label(*, service_title_key: str | None, locale: str, fallback_locale: str, i18n: I18nService | None) -> str | None:
+    if not service_title_key:
+        return None
+    localized = _t(i18n, locale, service_title_key)
+    if localized and localized != service_title_key:
+        return localized
+    fallback = _t(i18n, fallback_locale, service_title_key)
+    if fallback and fallback != service_title_key:
+        return fallback
+    return None
+
+
 _DEFAULT_EN = {
     "reminder.message.layout": "DentFlow reminder\n📅 {datetime}\n👩‍⚕️ {doctor}\n🦷 {service}\n🏥 {branch}\n\n{summary}",
     "reminder.type.booking_confirmation.summary": "Please confirm your appointment or request a change.",
@@ -317,6 +385,9 @@ _DEFAULT_EN = {
     "reminder.action.reschedule": "🔁 Reschedule",
     "reminder.action.cancel": "❌ Cancel",
     "reminder.action.ack": "👍 Got it",
+    "reminder.context.doctor_unknown": "your doctor",
+    "reminder.context.service_unknown": "dental service",
+    "reminder.context.branch_unknown": "clinic branch",
 }
 
 _DEFAULT_RU = {
@@ -330,4 +401,7 @@ _DEFAULT_RU = {
     "reminder.action.reschedule": "🔁 Перенести",
     "reminder.action.cancel": "❌ Отменить",
     "reminder.action.ack": "👍 Получил(а)",
+    "reminder.context.doctor_unknown": "ваш врач",
+    "reminder.context.service_unknown": "стоматологическая услуга",
+    "reminder.context.branch_unknown": "филиал клиники",
 }

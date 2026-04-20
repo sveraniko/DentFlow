@@ -219,13 +219,17 @@ class ReminderRecoveryService:
         return [item for item in items if item.reason_code.startswith("reminder") or item.reason_code == "booking_confirmation_no_response"]
 
     async def retry_failed_reminder(self, *, reminder_id: str, now: datetime) -> ManualReminderRetryResult:
-        enabled = True
-        if not enabled:
-            return ManualReminderRetryResult(outcome="manual_retry_disabled")
-
         failed = await self.reminder_repository.get_reminder(reminder_id=reminder_id)
         if failed is None:
             return ManualReminderRetryResult(outcome="missing")
+        enabled = bool(
+            self.policy_resolver.resolve_policy(
+                "communication.manual_retry_enabled",
+                clinic_id=failed.clinic_id,
+            )
+        )
+        if not enabled:
+            return ManualReminderRetryResult(outcome="manual_retry_disabled")
         if failed.status != "failed":
             return ManualReminderRetryResult(outcome="not_failed")
         if failed.booking_id is None:
