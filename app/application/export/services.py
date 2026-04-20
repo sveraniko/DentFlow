@@ -48,6 +48,16 @@ class DocumentTemplateRegistryService:
         is_active: bool = True,
     ) -> DocumentTemplate:
         now = datetime.now(timezone.utc)
+        existing_active = await self.repository.list_active_templates(
+            template_type=template_type.strip(),
+            locale=locale.strip().lower(),
+            clinic_id=clinic_id,
+        )
+        if is_active and any(item.template_version == template_version for item in existing_active):
+            scope = clinic_id if clinic_id is not None else "default"
+            raise ValueError(
+                f"active template version already exists for scope={scope}, template_type={template_type.strip()}, locale={locale.strip().lower()}, template_version={template_version}"
+            )
         template = DocumentTemplate(
             document_template_id=f"dtpl_{uuid4().hex[:16]}",
             clinic_id=clinic_id,

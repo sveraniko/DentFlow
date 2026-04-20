@@ -1032,9 +1032,18 @@ STACK1_TABLES: tuple[str, ...] = (
       template_source_ref TEXT NOT NULL,
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE (clinic_id, template_type, locale, template_version)
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_document_templates_clinic_scope
+    ON media_docs.document_templates (clinic_id, template_type, locale, template_version)
+    WHERE clinic_id IS NOT NULL
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_document_templates_default_scope
+    ON media_docs.document_templates (template_type, locale, template_version)
+    WHERE clinic_id IS NULL
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_document_templates_resolution
