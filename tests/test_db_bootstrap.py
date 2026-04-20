@@ -141,3 +141,14 @@ def test_aw5_google_calendar_projection_tables_declared() -> None:
     assert "CREATE TABLE IF NOT EXISTS integration.google_calendar_doctor_calendars" in ddl
     assert "CREATE TABLE IF NOT EXISTS integration.google_calendar_booking_event_map" in ddl
     assert "CHECK (sync_status IN ('synced', 'failed', 'canceled', 'cancel_failed'))" in ddl
+
+
+def test_12a1_media_docs_document_registry_tables_declared() -> None:
+    ddl = "\n".join(db_bootstrap.STACK1_TABLES)
+    assert "media_docs" in db_bootstrap.SCHEMAS
+    assert "CREATE TABLE IF NOT EXISTS media_docs.media_assets" in ddl
+    assert "CREATE TABLE IF NOT EXISTS media_docs.document_templates" in ddl
+    assert "CREATE TABLE IF NOT EXISTS media_docs.generated_documents" in ddl
+    assert "UNIQUE (clinic_id, template_type, locale, template_version)" in ddl
+    assert "CHECK (generation_status IN ('pending', 'generating', 'generated', 'failed'))" in ddl
+    assert "generated_file_asset_id TEXT NULL REFERENCES media_docs.media_assets(media_asset_id) ON DELETE SET NULL" in ddl
