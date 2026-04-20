@@ -9,6 +9,8 @@ from app.application.booking import BookingOrchestrationService, BookingService,
 from app.application.clinic_reference import ClinicReferenceService
 from app.application.clinical import ClinicalChartService
 from app.application.doctor import DOCTOR_ALLOWED_ACTIONS, DoctorOperationsService, DoctorPatientReader
+from app.application.export import DocumentExportApplicationService, ExportAssemblyRequest, GeneratedDocumentRegistryService, MediaAssetRegistryService
+from app.application.export.services import TemplateResolutionError
 from app.application.recommendation import RecommendationService
 from app.application.search.service import HybridSearchService
 from app.application.voice import SpeechToTextService, VoiceSearchModeStore
@@ -48,6 +50,9 @@ def make_router(
     patient_reader: DoctorPatientReader | None = None,
     clinical_service: ClinicalChartService | None = None,
     recommendation_service: RecommendationService | None = None,
+    document_export_service: DocumentExportApplicationService | None = None,
+    generated_document_registry: GeneratedDocumentRegistryService | None = None,
+    media_asset_registry: MediaAssetRegistryService | None = None,
     *,
     default_locale: str,
     max_voice_duration_sec: int,
@@ -95,6 +100,19 @@ def make_router(
         else None
     )
     booking_builder = BookingRuntimeViewBuilder()
+    export_document_type = "043_card_export"
+
+    def _doc_status_label(*, status: str, locale: str) -> str:
+        translated = i18n.t(f"document.status.{status}", locale)
+        return translated if translated != f"document.status.{status}" else status
+
+    def _doc_failure_hint(*, failure: str | None, locale: str) -> str:
+        if not failure:
+            return "-"
+        lowered = failure.lower()
+        if "template" in lowered:
+            return i18n.t("document.error.template_resolution_failed", locale)
+        return i18n.t("document.error.generation_failed", locale)
 
     def _resolve_booking_timezone(*, clinic_id: str, branch_id: str | None) -> str:
         if reference_service is None:
@@ -217,6 +235,211 @@ def make_router(
                 actions="/today_queue · /next_patient · /booking_open · /patient_open · /chart_open · /encounter_open · /recommend_issue",
             )
         )
+
+    @router.message(Command("doc_generate"))
+    async def doc_generate(message: Message) -> None:
+        if not await _guard_doctor(message) or not message.text:
+            return
+        doctor_id, locale, clinic_id = await _resolve_doctor_context(message)
+        actor = access_resolver.resolve_actor_context(message.from_user.id) if message.from_user else None
+        if (
+            doctor_id is None
+            or clinic_id is None
+            or actor is None
+            or operations is None
+            or booking_service is None
+            or clinical_service is None
+            or document_export_service is None
+        ):
+            await message.answer(i18n.t("doctor.surface.unavailable", locale))
+            return
+        parts = message.text.split()
+        if len(parts) not in {3, 4}:
+            await message.answer(i18n.t("doctor.doc.generate.usage", locale))
+            return
+        patient_id = parts[1].strip()
+        booking_id = parts[2].strip()
+        template_locale = parts[3].strip().lower() if len(parts) == 4 else locale
+        booking = await booking_service.load_booking(booking_id)
+        if booking is None or booking.clinic_id != clinic_id or booking.doctor_id != doctor_id or booking.patient_id != patient_id:
+            await message.answer(i18n.t("doctor.doc.generate.denied_or_missing", locale))
+            return
+        visible = await operations.build_patient_quick_card(patient_id=patient_id, doctor_id=doctor_id, require_visibility_guard=True)
+        if visible is None:
+            await message.answer(i18n.t("doctor.doc.generate.denied_or_missing", locale))
+            return
+        chart = await clinical_service.open_or_get_chart(patient_id=patient_id, clinic_id=clinic_id, primary_doctor_id=doctor_id)
+        try:
+            result = await document_export_service.generate_043_export(
+                ExportAssemblyRequest(
+                    clinic_id=clinic_id,
+                    patient_id=patient_id,
+                    chart_id=chart.chart_id,
+                    booking_id=booking_id,
+                    template_type=export_document_type,
+                    template_locale=template_locale,
+                    assembled_by_actor_id=actor.actor_id,
+                )
+            )
+        except TemplateResolutionError:
+            await message.answer(i18n.t("document.error.template_resolution_failed", locale))
+            return
+        except Exception:
+            await message.answer(i18n.t("document.error.generation_failed", locale))
+            return
+        await message.answer(
+            i18n.t("doctor.doc.generate.ok", locale).format(
+                generated_document_id=result.generated_document_id,
+                booking_id=booking_id,
+            )
+        )
+
+    @router.message(Command("doc_registry_booking"))
+    async def doc_registry_booking(message: Message) -> None:
+        if not await _guard_doctor(message) or not message.text:
+            return
+        doctor_id, locale, clinic_id = await _resolve_doctor_context(message)
+        if doctor_id is None or clinic_id is None or booking_service is None or generated_document_registry is None:
+            await message.answer(i18n.t("doctor.surface.unavailable", locale))
+            return
+        parts = message.text.split(maxsplit=1)
+        if len(parts) != 2:
+            await message.answer(i18n.t("doctor.doc.registry.booking.usage", locale))
+            return
+        booking_id = parts[1].strip()
+        booking = await booking_service.load_booking(booking_id)
+        if booking is None or booking.clinic_id != clinic_id or booking.doctor_id != doctor_id:
+            await message.answer(i18n.t("doctor.doc.registry.denied_or_missing", locale))
+            return
+        rows = await generated_document_registry.list_for_booking(booking_id=booking_id)
+        if not rows:
+            await message.answer(i18n.t("doctor.doc.registry.empty", locale))
+            return
+        lines = [i18n.t("doctor.doc.registry.title", locale).format(scope=f"booking {booking_id}")]
+        for row in rows[:10]:
+            lines.append(
+                i18n.t("doctor.doc.registry.row", locale).format(
+                    generated_document_id=row.generated_document_id,
+                    status=_doc_status_label(status=row.generation_status, locale=locale),
+                    created_at=row.created_at.strftime("%Y-%m-%d %H:%M"),
+                    failure=_doc_failure_hint(failure=row.generation_error_text, locale=locale),
+                )
+            )
+        await message.answer("\n".join(lines))
+
+    @router.message(Command("doc_open"))
+    async def doc_open(message: Message) -> None:
+        if not await _guard_doctor(message) or not message.text:
+            return
+        doctor_id, locale, clinic_id = await _resolve_doctor_context(message)
+        if doctor_id is None or clinic_id is None or operations is None or generated_document_registry is None or media_asset_registry is None:
+            await message.answer(i18n.t("doctor.surface.unavailable", locale))
+            return
+        parts = message.text.split(maxsplit=1)
+        if len(parts) != 2:
+            await message.answer(i18n.t("doctor.doc.open.usage", locale))
+            return
+        generated_document_id = parts[1].strip()
+        row = await generated_document_registry.get_generated_document(generated_document_id)
+        if row is None or row.clinic_id != clinic_id:
+            await message.answer(i18n.t("doctor.doc.registry.denied_or_missing", locale))
+            return
+        visible = await operations.build_patient_quick_card(patient_id=row.patient_id, doctor_id=doctor_id, require_visibility_guard=True)
+        if visible is None:
+            await message.answer(i18n.t("doctor.doc.registry.denied_or_missing", locale))
+            return
+        artifact_hint = i18n.t("doctor.doc.open.artifact_unavailable", locale)
+        if row.generated_file_asset_id:
+            asset = await media_asset_registry.get_media_asset(row.generated_file_asset_id)
+            if asset:
+                artifact_hint = i18n.t("doctor.doc.open.download_hint", locale).format(generated_document_id=row.generated_document_id)
+        elif row.generation_status == "generated":
+            artifact_hint = i18n.t("document.error.generated_missing_artifact", locale)
+        await message.answer(
+            i18n.t("doctor.doc.open.card", locale).format(
+                generated_document_id=row.generated_document_id,
+                document_type=row.document_type,
+                status=_doc_status_label(status=row.generation_status, locale=locale),
+                failure=_doc_failure_hint(failure=row.generation_error_text, locale=locale),
+                artifact=artifact_hint,
+            )
+        )
+
+    @router.message(Command("doc_download"))
+    async def doc_download(message: Message) -> None:
+        if not await _guard_doctor(message) or not message.text:
+            return
+        doctor_id, locale, clinic_id = await _resolve_doctor_context(message)
+        if doctor_id is None or clinic_id is None or operations is None or generated_document_registry is None or media_asset_registry is None:
+            await message.answer(i18n.t("doctor.surface.unavailable", locale))
+            return
+        parts = message.text.split(maxsplit=1)
+        if len(parts) != 2:
+            await message.answer(i18n.t("doctor.doc.download.usage", locale))
+            return
+        row = await generated_document_registry.get_generated_document(parts[1].strip())
+        if row is None or row.clinic_id != clinic_id:
+            await message.answer(i18n.t("doctor.doc.registry.denied_or_missing", locale))
+            return
+        visible = await operations.build_patient_quick_card(patient_id=row.patient_id, doctor_id=doctor_id, require_visibility_guard=True)
+        if visible is None:
+            await message.answer(i18n.t("doctor.doc.registry.denied_or_missing", locale))
+            return
+        if not row.generated_file_asset_id:
+            await message.answer(i18n.t("doctor.doc.open.artifact_unavailable", locale))
+            return
+        asset = await media_asset_registry.get_media_asset(row.generated_file_asset_id)
+        if asset is None:
+            await message.answer(i18n.t("doctor.doc.open.artifact_unavailable", locale))
+            return
+        await message.answer(
+            i18n.t("doctor.doc.download.ok", locale).format(
+                generated_document_id=row.generated_document_id,
+                artifact_ref=asset.storage_ref,
+            )
+        )
+
+    @router.message(Command("doc_regenerate"))
+    async def doc_regenerate(message: Message) -> None:
+        if not await _guard_doctor(message) or not message.text:
+            return
+        doctor_id, locale, clinic_id = await _resolve_doctor_context(message)
+        actor = access_resolver.resolve_actor_context(message.from_user.id) if message.from_user else None
+        if doctor_id is None or clinic_id is None or actor is None or operations is None or generated_document_registry is None or document_export_service is None:
+            await message.answer(i18n.t("doctor.surface.unavailable", locale))
+            return
+        parts = message.text.split(maxsplit=1)
+        if len(parts) != 2:
+            await message.answer(i18n.t("doctor.doc.regenerate.usage", locale))
+            return
+        source = await generated_document_registry.get_generated_document(parts[1].strip())
+        if source is None or source.clinic_id != clinic_id:
+            await message.answer(i18n.t("doctor.doc.registry.denied_or_missing", locale))
+            return
+        visible = await operations.build_patient_quick_card(patient_id=source.patient_id, doctor_id=doctor_id, require_visibility_guard=True)
+        if visible is None or source.chart_id is None:
+            await message.answer(i18n.t("doctor.doc.regenerate.not_supported", locale))
+            return
+        try:
+            result = await document_export_service.generate_043_export(
+                ExportAssemblyRequest(
+                    clinic_id=source.clinic_id,
+                    patient_id=source.patient_id,
+                    chart_id=source.chart_id,
+                    booking_id=source.booking_id,
+                    encounter_id=source.encounter_id,
+                    template_type=source.document_type,
+                    template_locale=locale,
+                    assembled_by_actor_id=actor.actor_id,
+                )
+            )
+        except TemplateResolutionError:
+            await message.answer(i18n.t("document.error.template_resolution_failed", locale))
+            return
+        except Exception:
+            await message.answer(i18n.t("document.error.generation_failed", locale))
+            return
+        await message.answer(i18n.t("doctor.doc.regenerate.ok", locale).format(generated_document_id=result.generated_document_id))
 
     @router.message(Command("recommend_issue"))
     async def recommend_issue(message: Message) -> None:

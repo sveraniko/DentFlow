@@ -13,6 +13,8 @@ from app.application.care_commerce import CareCommerceService
 from app.application.booking.telegram_flow import BookingPatientFlowService
 from app.application.communication import ReminderRecoveryService
 from app.application.clinic_reference import ClinicReferenceService
+from app.application.export import DocumentExportApplicationService, ExportAssemblyRequest, GeneratedDocumentRegistryService, MediaAssetRegistryService
+from app.application.export.services import TemplateResolutionError
 from app.application.search.service import HybridSearchService
 from app.application.search.models import PatientSearchResult, SearchQuery
 from app.application.voice import SpeechToTextService, VoiceSearchModeStore
@@ -79,6 +81,9 @@ def make_router(
     care_commerce_service: CareCommerceService | None = None,
     admin_workdesk: AdminWorkdeskReadService | None = None,
     reminder_recovery: ReminderRecoveryService | None = None,
+    document_export_service: DocumentExportApplicationService | None = None,
+    generated_document_registry: GeneratedDocumentRegistryService | None = None,
+    media_asset_registry: MediaAssetRegistryService | None = None,
     *,
     default_locale: str,
     max_voice_duration_sec: int,
@@ -97,6 +102,7 @@ def make_router(
     admin_care_pickups_scope = "admin_care_pickups_state"
     admin_issues_scope = "admin_issues_state"
     patient_builder = PatientRuntimeViewBuilder()
+    export_document_type = "043_card_export"
 
     def _resolved_service_label(*, clinic_id: str, service_id: str, raw_label: str, locale: str) -> str:
         translated = i18n.t(raw_label, locale)
@@ -121,6 +127,18 @@ def make_router(
     def _status_chip(*, status: str, locale: str) -> str:
         translated = i18n.t(f"booking.status.{status}", locale)
         return translated if translated != f"booking.status.{status}" else status
+
+    def _doc_status_label(*, status: str, locale: str) -> str:
+        translated = i18n.t(f"document.status.{status}", locale)
+        return translated if translated != f"document.status.{status}" else status
+
+    def _doc_failure_hint(*, failure: str | None, locale: str) -> str:
+        if not failure:
+            return "-"
+        lowered = failure.lower()
+        if "template" in lowered:
+            return i18n.t("document.error.template_resolution_failed", locale)
+        return i18n.t("document.error.generation_failed", locale)
 
     def _localized_label(*, raw_label: str | None, locale: str) -> str:
         if not raw_label:
@@ -826,6 +844,171 @@ def make_router(
             clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
         )
         await message.answer(i18n.t("role.admin.home", locale))
+
+    @router.message(Command("admin_doc_generate"))
+    async def admin_doc_generate(message: Message) -> None:
+        locale = await _run_search(message, access_resolver=access_resolver, i18n=i18n, default_locale=default_locale)
+        if locale is None or not message.text:
+            return
+        actor = access_resolver.resolve_actor_context(message.from_user.id) if message.from_user else None
+        if actor is None or document_export_service is None:
+            await message.answer(i18n.t("common.placeholder", locale))
+            return
+        parts = message.text.split()
+        if len(parts) not in {3, 4}:
+            await message.answer(i18n.t("admin.doc.generate.usage", locale))
+            return
+        patient_id = parts[1].strip()
+        chart_id = parts[2].strip()
+        template_locale = parts[3].strip().lower() if len(parts) == 4 else locale
+        try:
+            result = await document_export_service.generate_043_export(
+                ExportAssemblyRequest(
+                    clinic_id=actor.clinic_id,
+                    patient_id=patient_id,
+                    chart_id=chart_id,
+                    template_type=export_document_type,
+                    template_locale=template_locale,
+                    assembled_by_actor_id=actor.actor_id,
+                )
+            )
+        except TemplateResolutionError:
+            await message.answer(i18n.t("document.error.template_resolution_failed", locale))
+            return
+        except Exception:
+            await message.answer(i18n.t("document.error.generation_failed", locale))
+            return
+        await message.answer(i18n.t("admin.doc.generate.ok", locale).format(generated_document_id=result.generated_document_id))
+
+    @router.message(Command("admin_doc_registry_patient"))
+    async def admin_doc_registry_patient(message: Message) -> None:
+        locale = await _run_search(message, access_resolver=access_resolver, i18n=i18n, default_locale=default_locale)
+        if locale is None or not message.text:
+            return
+        actor = access_resolver.resolve_actor_context(message.from_user.id) if message.from_user else None
+        if actor is None or generated_document_registry is None:
+            await message.answer(i18n.t("common.placeholder", locale))
+            return
+        parts = message.text.split(maxsplit=1)
+        if len(parts) != 2:
+            await message.answer(i18n.t("admin.doc.registry.patient.usage", locale))
+            return
+        patient_id = parts[1].strip()
+        rows = await generated_document_registry.list_for_patient(patient_id=patient_id, clinic_id=actor.clinic_id)
+        if not rows:
+            await message.answer(i18n.t("admin.doc.registry.empty", locale))
+            return
+        lines = [i18n.t("admin.doc.registry.title", locale).format(scope=f"patient {patient_id}")]
+        for row in rows[:10]:
+            lines.append(
+                i18n.t("admin.doc.registry.row", locale).format(
+                    generated_document_id=row.generated_document_id,
+                    status=_doc_status_label(status=row.generation_status, locale=locale),
+                    created_at=row.created_at.strftime("%Y-%m-%d %H:%M"),
+                    failure=_doc_failure_hint(failure=row.generation_error_text, locale=locale),
+                )
+            )
+        await message.answer("\n".join(lines))
+
+    @router.message(Command("admin_doc_open"))
+    async def admin_doc_open(message: Message) -> None:
+        locale = await _run_search(message, access_resolver=access_resolver, i18n=i18n, default_locale=default_locale)
+        if locale is None or not message.text:
+            return
+        actor = access_resolver.resolve_actor_context(message.from_user.id) if message.from_user else None
+        if actor is None or generated_document_registry is None or media_asset_registry is None:
+            await message.answer(i18n.t("common.placeholder", locale))
+            return
+        parts = message.text.split(maxsplit=1)
+        if len(parts) != 2:
+            await message.answer(i18n.t("admin.doc.open.usage", locale))
+            return
+        row = await generated_document_registry.get_generated_document(parts[1].strip())
+        if row is None or row.clinic_id != actor.clinic_id:
+            await message.answer(i18n.t("admin.doc.registry.denied_or_missing", locale))
+            return
+        artifact_hint = i18n.t("admin.doc.open.artifact_unavailable", locale)
+        if row.generated_file_asset_id:
+            asset = await media_asset_registry.get_media_asset(row.generated_file_asset_id)
+            if asset:
+                artifact_hint = i18n.t("admin.doc.open.download_hint", locale).format(generated_document_id=row.generated_document_id)
+        elif row.generation_status == "generated":
+            artifact_hint = i18n.t("document.error.generated_missing_artifact", locale)
+        await message.answer(
+            i18n.t("admin.doc.open.card", locale).format(
+                generated_document_id=row.generated_document_id,
+                document_type=row.document_type,
+                status=_doc_status_label(status=row.generation_status, locale=locale),
+                failure=_doc_failure_hint(failure=row.generation_error_text, locale=locale),
+                artifact=artifact_hint,
+            )
+        )
+
+    @router.message(Command("admin_doc_download"))
+    async def admin_doc_download(message: Message) -> None:
+        locale = await _run_search(message, access_resolver=access_resolver, i18n=i18n, default_locale=default_locale)
+        if locale is None or not message.text:
+            return
+        actor = access_resolver.resolve_actor_context(message.from_user.id) if message.from_user else None
+        if actor is None or generated_document_registry is None or media_asset_registry is None:
+            await message.answer(i18n.t("common.placeholder", locale))
+            return
+        parts = message.text.split(maxsplit=1)
+        if len(parts) != 2:
+            await message.answer(i18n.t("admin.doc.download.usage", locale))
+            return
+        row = await generated_document_registry.get_generated_document(parts[1].strip())
+        if row is None or row.clinic_id != actor.clinic_id or not row.generated_file_asset_id:
+            await message.answer(i18n.t("admin.doc.open.artifact_unavailable", locale))
+            return
+        asset = await media_asset_registry.get_media_asset(row.generated_file_asset_id)
+        if asset is None:
+            await message.answer(i18n.t("admin.doc.open.artifact_unavailable", locale))
+            return
+        await message.answer(
+            i18n.t("admin.doc.download.ok", locale).format(
+                generated_document_id=row.generated_document_id,
+                artifact_ref=asset.storage_ref,
+            )
+        )
+
+    @router.message(Command("admin_doc_regenerate"))
+    async def admin_doc_regenerate(message: Message) -> None:
+        locale = await _run_search(message, access_resolver=access_resolver, i18n=i18n, default_locale=default_locale)
+        if locale is None or not message.text:
+            return
+        actor = access_resolver.resolve_actor_context(message.from_user.id) if message.from_user else None
+        if actor is None or generated_document_registry is None or document_export_service is None:
+            await message.answer(i18n.t("common.placeholder", locale))
+            return
+        parts = message.text.split(maxsplit=1)
+        if len(parts) != 2:
+            await message.answer(i18n.t("admin.doc.regenerate.usage", locale))
+            return
+        source = await generated_document_registry.get_generated_document(parts[1].strip())
+        if source is None or source.clinic_id != actor.clinic_id or source.chart_id is None:
+            await message.answer(i18n.t("admin.doc.regenerate.not_supported", locale))
+            return
+        try:
+            result = await document_export_service.generate_043_export(
+                ExportAssemblyRequest(
+                    clinic_id=source.clinic_id,
+                    patient_id=source.patient_id,
+                    chart_id=source.chart_id,
+                    booking_id=source.booking_id,
+                    encounter_id=source.encounter_id,
+                    template_type=source.document_type,
+                    template_locale=locale,
+                    assembled_by_actor_id=actor.actor_id,
+                )
+            )
+        except TemplateResolutionError:
+            await message.answer(i18n.t("document.error.template_resolution_failed", locale))
+            return
+        except Exception:
+            await message.answer(i18n.t("document.error.generation_failed", locale))
+            return
+        await message.answer(i18n.t("admin.doc.regenerate.ok", locale).format(generated_document_id=result.generated_document_id))
 
     @router.message(Command("search_patient"))
     async def search_patient(message: Message) -> None:
