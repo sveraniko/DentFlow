@@ -334,6 +334,7 @@ def test_generate_043_export_creates_artifact_and_marks_generated(tmp_path: Path
     gdoc = generated_repo.rows[result.generated_document_id]
     assert gdoc.generation_status == "generated"
     assert gdoc.generated_file_asset_id == result.generated_file_asset_id
+    assert gdoc.editable_source_asset_id is not None
 
     asset = media_repo.rows[result.generated_file_asset_id]
     assert asset.asset_kind == "generated_document"
@@ -344,6 +345,11 @@ def test_generate_043_export_creates_artifact_and_marks_generated(tmp_path: Path
     assert "Contact: Phone: +380501112233" in text
     assert "Doctor: Dr. Ada" in text
     assert "Branch: Central Branch" in text
+    editable_asset = media_repo.rows[gdoc.editable_source_asset_id]
+    assert editable_asset.asset_kind == "generated_document_editable_source"
+    editable_text = Path(editable_asset.storage_ref).read_text(encoding="utf-8")
+    assert "# DentFlow 043 Editable Source" in editable_text
+    assert "Template source: builtin://043/plain_text/v1" in editable_text
 
 
 def test_generate_043_export_marks_failed_and_persists_error_on_storage_failure(tmp_path: Path) -> None:
@@ -419,3 +425,75 @@ def test_plain_text_renderer_humanizes_machine_labels_when_needed(tmp_path: Path
     assert "Branch: Branch 1" in output
     assert "Service: Root canal initial" in output
     assert generated_repo.rows[result.generated_document_id].generation_status == "generated"
+
+
+def test_template_source_ref_changes_output_layout_deterministically(tmp_path: Path) -> None:
+    app_service, _generated_repo, media_repo, patient_id = _build_export_context(tmp_path)
+
+    default_result = asyncio.run(
+        app_service.generate_043_export(
+            ExportAssemblyRequest(
+                clinic_id="clinic_1",
+                patient_id=patient_id,
+                chart_id="chart_1",
+                encounter_id="enc_1",
+                booking_id="booking_1",
+                template_type="043_card_export",
+                template_locale="en",
+            )
+        )
+    )
+    default_text = Path(media_repo.rows[default_result.generated_file_asset_id].storage_ref).read_text(encoding="utf-8")
+
+    template_registry = app_service.template_registry
+    asyncio.run(
+        template_registry.register_template(
+            template_type="043_card_export",
+            locale="en",
+            clinic_id="clinic_1",
+            render_engine="plain_text_043_v1",
+            template_source_ref="builtin://043/plain_text/clinic_v1",
+            template_version=1,
+            is_active=True,
+        )
+    )
+    clinic_result = asyncio.run(
+        app_service.generate_043_export(
+            ExportAssemblyRequest(
+                clinic_id="clinic_1",
+                patient_id=patient_id,
+                chart_id="chart_1",
+                encounter_id="enc_1",
+                booking_id="booking_1",
+                template_type="043_card_export",
+                template_locale="en",
+            )
+        )
+    )
+    clinic_text = Path(media_repo.rows[clinic_result.generated_file_asset_id].storage_ref).read_text(encoding="utf-8")
+
+    assert "Patient\n- Name:" in default_text
+    assert "Patient Snapshot" in clinic_text
+    assert "Clinical First" in clinic_text
+    assert default_text != clinic_text
+
+
+def test_renderer_locale_resolution_is_not_cwd_fragile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    app_service, _generated_repo, media_repo, patient_id = _build_export_context(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = asyncio.run(
+        app_service.generate_043_export(
+            ExportAssemblyRequest(
+                clinic_id="clinic_1",
+                patient_id=patient_id,
+                chart_id="chart_1",
+                encounter_id="enc_1",
+                booking_id="booking_1",
+                template_type="043_card_export",
+                template_locale="en",
+            )
+        )
+    )
+    output = Path(media_repo.rows[result.generated_file_asset_id].storage_ref).read_text(encoding="utf-8")
+    assert "Service: Teeth cleaning" in output

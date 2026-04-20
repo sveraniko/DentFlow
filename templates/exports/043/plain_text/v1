@@ -1,0 +1,30 @@
+DentFlow 043 Export
+
+Patient
+- Name: {patient_name}
+- Patient #: {patient_number}
+- Contact: {patient_contact}
+- Language: {patient_language}
+
+Booking
+- Booking ID: {booking_id}
+- Status: {booking_status}
+- Service: {booking_service}
+- Doctor: {booking_doctor}
+- Branch: {booking_branch}
+- Start: {booking_start}
+- End: {booking_end}
+
+Chart
+- Chart #: {chart_number}
+- Notes summary: {chart_summary}
+
+Clinical
+- Primary diagnosis: {diagnosis_text}
+- Treatment plan: {treatment_plan}
+- Latest note: {latest_note}
+- Imaging refs: {imaging_count}
+- Odontogram surfaces: {odontogram_surfaces}
+
+Warnings
+- {warnings}

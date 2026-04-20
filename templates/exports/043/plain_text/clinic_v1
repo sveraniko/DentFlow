@@ -1,0 +1,28 @@
+DentFlow 043 Export — Clinic Layout
+
+Patient Snapshot
+* {patient_name} (#{patient_number})
+* Contact: {patient_contact}
+* Preferred language: {patient_language}
+
+Clinical First
+* Diagnosis: {diagnosis_text}
+* Treatment plan: {treatment_plan}
+* Latest note: {latest_note}
+* Odontogram surfaces: {odontogram_surfaces}
+* Imaging refs: {imaging_count}
+
+Visit Context
+* Booking: {booking_id}
+* Status: {booking_status}
+* Service line: {booking_service}
+* Attending doctor: {booking_doctor}
+* Branch unit: {booking_branch}
+* Window: {booking_start} — {booking_end}
+
+Chart Context
+* Chart #: {chart_number}
+* Summary: {chart_summary}
+
+System Warnings
+* {warnings}
