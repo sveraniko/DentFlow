@@ -1,5 +1,7 @@
 # 1. Executive Summary
 
+> **Outdated claim notice (added 2026-04-20):** Some claims in this legacy audit are now outdated. For current convergence state, use `docs/report/CONVERGENCE_PACK_DELTA_AUDIT_2026-04-20.md` as the source of truth. Superseded categories include projector runtime integration status and card runtime/callback codec integration in real routes.
+
 DentFlow has a **solid architectural skeleton** (bounded modules, repositories, events, projections, card runtime primitives), but the current runtime is **not fully converged** with the documented target state.
 
 The biggest practical findings:
