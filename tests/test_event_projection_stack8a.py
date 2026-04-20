@@ -27,12 +27,23 @@ class _OutboxRepo:
 class _CheckpointRepo:
     def __init__(self):
         self.values = {}
+        self.failures = []
 
     async def get_checkpoint(self, *, projector_name: str):
         return self.values.get(projector_name, 0)
 
     async def save_checkpoint(self, *, projector_name: str, last_outbox_event_id: int):
         self.values[projector_name] = last_outbox_event_id
+
+    async def record_failure(self, *, projector_name: str, outbox_event_id: int, event_id: str, error_text: str):
+        self.failures.append(
+            {
+                "projector_name": projector_name,
+                "outbox_event_id": outbox_event_id,
+                "event_id": event_id,
+                "error_text": error_text,
+            }
+        )
 
 
 @dataclass
@@ -83,6 +94,7 @@ def test_projector_runner_updates_checkpoints_and_handles_failure() -> None:
 
     assert cp.values["p.ok"] == 1
     assert "p.bad" not in cp.values
+    assert cp.failures and cp.failures[0]["projector_name"] == "p.bad"
     assert outbox.failed and outbox.failed[0][0] == 1
     assert result.scanned_events == 1
     assert result.failed_outbox_event_id == 1

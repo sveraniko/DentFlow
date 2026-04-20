@@ -45,7 +45,16 @@ class ProjectorRunner:
                 for projector in self.projectors:
                     if outbox_event_id <= checkpoints[projector.name]:
                         continue
-                    handled = await projector.handle(event, outbox_event_id)
+                    try:
+                        handled = await projector.handle(event, outbox_event_id)
+                    except Exception as exc:  # noqa: BLE001
+                        await self.checkpoint_repository.record_failure(
+                            projector_name=projector.name,
+                            outbox_event_id=outbox_event_id,
+                            event_id=event.event_id,
+                            error_text=str(exc),
+                        )
+                        raise
                     if handled:
                         stats[projector.name] += 1
                     checkpoints[projector.name] = outbox_event_id

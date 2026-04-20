@@ -66,6 +66,46 @@ class OutboxRepository:
         finally:
             await engine.dispose()
 
+    async def get_tail(self) -> dict[str, object] | None:
+        engine = create_engine(self.db_config)
+        try:
+            async with engine.connect() as conn:
+                row = (
+                    await conn.execute(
+                        text(
+                            """
+                            SELECT outbox_event_id, event_id, produced_at, status, created_at
+                            FROM system_runtime.event_outbox
+                            ORDER BY outbox_event_id DESC
+                            LIMIT 1
+                            """
+                        )
+                    )
+                ).mappings().first()
+                return dict(row) if row else None
+        finally:
+            await engine.dispose()
+
+    async def get_event_meta(self, *, outbox_event_id: int) -> dict[str, object] | None:
+        engine = create_engine(self.db_config)
+        try:
+            async with engine.connect() as conn:
+                row = (
+                    await conn.execute(
+                        text(
+                            """
+                            SELECT outbox_event_id, event_id, produced_at, status, created_at
+                            FROM system_runtime.event_outbox
+                            WHERE outbox_event_id=:outbox_event_id
+                            """
+                        ),
+                        {"outbox_event_id": outbox_event_id},
+                    )
+                ).mappings().first()
+                return dict(row) if row else None
+        finally:
+            await engine.dispose()
+
     async def mark_event_processed(self, *, outbox_event_id: int) -> None:
         engine = create_engine(self.db_config)
         try:
@@ -97,6 +137,26 @@ class OutboxRepository:
                     ),
                     {"outbox_event_id": outbox_event_id, "error_text": error_text[:1000]},
                 )
+        finally:
+            await engine.dispose()
+
+    async def retry_event(self, *, outbox_event_id: int) -> bool:
+        engine = create_engine(self.db_config)
+        try:
+            async with engine.begin() as conn:
+                rowcount = (
+                    await conn.execute(
+                        text(
+                            """
+                            UPDATE system_runtime.event_outbox
+                            SET status='pending', last_error_text=NULL
+                            WHERE outbox_event_id=:outbox_event_id
+                            """
+                        ),
+                        {"outbox_event_id": outbox_event_id},
+                    )
+                ).rowcount
+                return bool(rowcount)
         finally:
             await engine.dispose()
 
@@ -146,3 +206,90 @@ class ProjectorCheckpointRepository:
 
     async def reset_checkpoint(self, *, projector_name: str) -> None:
         await self.save_checkpoint(projector_name=projector_name, last_outbox_event_id=0)
+
+    async def list_checkpoints(self) -> list[dict[str, object]]:
+        engine = create_engine(self.db_config)
+        try:
+            async with engine.connect() as conn:
+                rows = (
+                    await conn.execute(
+                        text(
+                            """
+                            SELECT projector_name, last_outbox_event_id, updated_at
+                            FROM system_runtime.projector_checkpoints
+                            ORDER BY projector_name ASC
+                            """
+                        )
+                    )
+                ).mappings().all()
+                return [dict(row) for row in rows]
+        finally:
+            await engine.dispose()
+
+    async def record_failure(
+        self,
+        *,
+        projector_name: str,
+        outbox_event_id: int,
+        event_id: str,
+        error_text: str,
+    ) -> None:
+        engine = create_engine(self.db_config)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO system_runtime.projector_failures (
+                          projector_name, outbox_event_id, event_id, error_text
+                        ) VALUES (
+                          :projector_name, :outbox_event_id, :event_id, :error_text
+                        )
+                        """
+                    ),
+                    {
+                        "projector_name": projector_name,
+                        "outbox_event_id": outbox_event_id,
+                        "event_id": event_id,
+                        "error_text": error_text[:1000],
+                    },
+                )
+        finally:
+            await engine.dispose()
+
+    async def list_recent_failures(self, *, limit: int = 50, projector_name: str | None = None) -> list[dict[str, object]]:
+        engine = create_engine(self.db_config)
+        try:
+            async with engine.connect() as conn:
+                if projector_name:
+                    rows = (
+                        await conn.execute(
+                            text(
+                                """
+                                SELECT projector_failure_id, projector_name, outbox_event_id, event_id, error_text, failed_at
+                                FROM system_runtime.projector_failures
+                                WHERE projector_name=:projector_name
+                                ORDER BY projector_failure_id DESC
+                                LIMIT :limit
+                                """
+                            ),
+                            {"projector_name": projector_name, "limit": limit},
+                        )
+                    ).mappings().all()
+                else:
+                    rows = (
+                        await conn.execute(
+                            text(
+                                """
+                                SELECT projector_failure_id, projector_name, outbox_event_id, event_id, error_text, failed_at
+                                FROM system_runtime.projector_failures
+                                ORDER BY projector_failure_id DESC
+                                LIMIT :limit
+                                """
+                            ),
+                            {"limit": limit},
+                        )
+                    ).mappings().all()
+                return [dict(row) for row in rows]
+        finally:
+            await engine.dispose()
