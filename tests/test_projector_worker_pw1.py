@@ -87,6 +87,17 @@ def test_projector_registry_registration_and_lookup(required_env) -> None:
     assert built[0].name == "analytics.event_ledger"
 
 
+def test_default_registry_contains_pw2_key_projectors(required_env) -> None:
+    registry = build_default_projector_registry()
+    assert registry.names() == (
+        "analytics.event_ledger",
+        "admin.workdesk",
+        "owner.daily_metrics",
+        "integrations.google_calendar_schedule",
+        "search.patient_projection",
+    )
+
+
 def test_projector_runner_advances_checkpoints_only_on_success() -> None:
     event = build_event(
         event_name="patient.updated",
@@ -178,6 +189,13 @@ def test_default_registry_projector_runs_through_worker_runtime(required_env, mo
         return True
 
     monkeypatch.setattr("app.projections.analytics.event_ledger_projector.AnalyticsEventLedgerProjector.handle", _fake_handle)
+    monkeypatch.setattr("app.projections.admin.workdesk_projector.AdminWorkdeskProjector.handle", _fake_handle)
+    monkeypatch.setattr("app.projections.owner.daily_metrics_projector.OwnerDailyMetricsProjector.handle", _fake_handle)
+    monkeypatch.setattr(
+        "app.projections.integrations.google_calendar_schedule_projector.GoogleCalendarScheduleProjector.handle",
+        _fake_handle,
+    )
+    monkeypatch.setattr("app.projections.search.patient_event_projector.PatientSearchProjector.handle", _fake_handle)
     event = build_event(
         event_name="patient.created",
         producer_context="tests",
@@ -204,5 +222,17 @@ def test_default_registry_projector_runs_through_worker_runtime(required_env, mo
         runner=runner,
     )
     asyncio.run(runtime._run_startup_catchup())
-    assert seen == ["analytics.event_ledger:patient.created:1"]
-    assert checkpoints.values["analytics.event_ledger"] == 1
+    assert seen == [
+        "analytics.event_ledger:patient.created:1",
+        "admin.workdesk:patient.created:1",
+        "owner.daily_metrics:patient.created:1",
+        "integrations.google_calendar_schedule:patient.created:1",
+        "search.patient_projection:patient.created:1",
+    ]
+    assert checkpoints.values == {
+        "analytics.event_ledger": 1,
+        "admin.workdesk": 1,
+        "owner.daily_metrics": 1,
+        "integrations.google_calendar_schedule": 1,
+        "search.patient_projection": 1,
+    }
