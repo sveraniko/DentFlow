@@ -8,6 +8,7 @@ from app.application.access import AccessResolver
 from app.application.booking import BookingOrchestrationService, BookingService, BookingStateService
 from app.application.clinic_reference import ClinicReferenceService
 from app.application.clinical import ClinicalChartService
+from app.application.care_commerce import CareCommerceService
 from app.application.doctor import DOCTOR_ALLOWED_ACTIONS, DoctorOperationsService, DoctorPatientReader
 from app.application.export import DocumentExportApplicationService, ExportAssemblyRequest, GeneratedDocumentRegistryService, MediaAssetRegistryService
 from app.application.export.services import TemplateResolutionError
@@ -23,6 +24,9 @@ from app.interfaces.cards import (
     BookingCardAdapter,
     BookingRuntimeSnapshot,
     BookingRuntimeViewBuilder,
+    CareOrderCardAdapter,
+    CareOrderRuntimeSnapshot,
+    CareOrderRuntimeViewBuilder,
     CardAction,
     CardCallback,
     CardCallbackCodec,
@@ -50,6 +54,7 @@ def make_router(
     patient_reader: DoctorPatientReader | None = None,
     clinical_service: ClinicalChartService | None = None,
     recommendation_service: RecommendationService | None = None,
+    care_commerce_service: CareCommerceService | None = None,
     document_export_service: DocumentExportApplicationService | None = None,
     generated_document_registry: GeneratedDocumentRegistryService | None = None,
     media_asset_registry: MediaAssetRegistryService | None = None,
@@ -100,6 +105,7 @@ def make_router(
         else None
     )
     booking_builder = BookingRuntimeViewBuilder()
+    care_order_builder = CareOrderRuntimeViewBuilder()
     export_document_type = "043_card_export"
 
     def _doc_status_label(*, status: str, locale: str) -> str:
@@ -201,6 +207,128 @@ def make_router(
                 ]
             ]
         )
+
+    def _select_latest_recommendation(rows: list[object]) -> object | None:
+        if not rows:
+            return None
+        return max(
+            rows,
+            key=lambda row: (
+                getattr(row, "updated_at", None) or getattr(row, "created_at", None),
+                getattr(row, "created_at", None),
+                getattr(row, "recommendation_id", ""),
+            ),
+        )
+
+    async def _render_linked_recommendation_panel(*, booking_id: str, locale: str) -> str:
+        if recommendation_service is None:
+            return i18n.t("staff.linked.recommendation.missing", locale)
+        rows = await recommendation_service.list_for_booking(booking_id=booking_id)
+        recommendation = _select_latest_recommendation(rows)
+        if recommendation is None:
+            return i18n.t("staff.linked.recommendation.missing", locale)
+        recommendation_type_key = f"recommendation.type.{recommendation.recommendation_type}"
+        recommendation_type = i18n.t(recommendation_type_key, locale)
+        if recommendation_type == recommendation_type_key:
+            recommendation_type = recommendation.recommendation_type
+        recommendation_status_key = f"recommendation.status.{recommendation.status}"
+        recommendation_status = i18n.t(recommendation_status_key, locale)
+        if recommendation_status == recommendation_status_key:
+            recommendation_status = recommendation.status
+        body_or_rationale = recommendation.rationale_text or recommendation.body_text
+        if body_or_rationale:
+            body_or_rationale = str(body_or_rationale).strip()
+        snippet = (body_or_rationale or "-")[:240]
+        return i18n.t("staff.linked.recommendation.panel", locale).format(
+            recommendation_id=recommendation.recommendation_id,
+            title=recommendation.title,
+            recommendation_type=recommendation_type,
+            status=recommendation_status,
+            snippet=snippet,
+        )
+
+    def _select_latest_care_order(rows: list[object], *, booking_id: str) -> object | None:
+        linked = [row for row in rows if getattr(row, "booking_id", None) == booking_id]
+        if not linked:
+            return None
+        return max(
+            linked,
+            key=lambda row: (
+                getattr(row, "updated_at", None) or getattr(row, "created_at", None),
+                getattr(row, "created_at", None),
+                getattr(row, "care_order_id", ""),
+            ),
+        )
+
+    async def _build_care_order_item_summary(*, order, locale: str) -> str:
+        if care_commerce_service is None:
+            return "-"
+        items = await care_commerce_service.repository.list_order_items(order.care_order_id)
+        if not items:
+            return "-"
+        labels: list[str] = []
+        for item in items[:2]:
+            product = await care_commerce_service.repository.get_product(item.care_product_id)
+            if product is None:
+                continue
+            content = await care_commerce_service.resolve_product_content(
+                clinic_id=order.clinic_id,
+                product=product,
+                locale=locale,
+            )
+            title = content.title or content.short_label or product.sku or product.care_product_id
+            labels.append(f"{title} ×{item.quantity}")
+        if not labels:
+            return str(len(items))
+        if len(items) > 2:
+            labels.append(i18n.t("staff.linked.care_order.more_items", locale).format(count=len(items) - 2))
+        return ", ".join(labels)
+
+    async def _render_linked_care_order_panel(*, clinic_id: str, patient_id: str, booking_id: str, locale: str) -> str:
+        if care_commerce_service is None:
+            return i18n.t("staff.linked.care_order.missing", locale)
+        orders = await care_commerce_service.list_patient_orders(clinic_id=clinic_id, patient_id=patient_id)
+        care_order = _select_latest_care_order(orders, booking_id=booking_id)
+        if care_order is None:
+            return i18n.t("staff.linked.care_order.missing", locale)
+        branch_label = "-"
+        if care_order.pickup_branch_id and reference_service is not None:
+            branch = next((row for row in reference_service.list_branches(clinic_id) if row.branch_id == care_order.pickup_branch_id), None)
+            branch_label = branch.display_name if branch is not None else care_order.pickup_branch_id
+        elif care_order.pickup_branch_id:
+            branch_label = care_order.pickup_branch_id
+        reservations = await care_commerce_service.repository.list_reservations_for_order(care_order_id=care_order.care_order_id)
+        active_reservation = next((row for row in reservations if row.status == "active"), None)
+        reservation_hint = (
+            i18n.t("staff.linked.care_order.reservation.active", locale)
+            if active_reservation
+            else i18n.t("staff.linked.care_order.reservation.none", locale)
+        )
+        seed = care_order_builder.build_seed(
+            snapshot=CareOrderRuntimeSnapshot(
+                care_order_id=care_order.care_order_id,
+                status=care_order.status,
+                total_amount=care_order.total_amount,
+                currency_code=care_order.currency_code,
+                state_token=care_order.care_order_id,
+                item_summary=await _build_care_order_item_summary(order=care_order, locale=locale),
+                branch_label=branch_label,
+                pickup_ready=care_order.status in {"ready_for_pickup", "issued", "fulfilled"},
+                reservation_hint=reservation_hint,
+                issued=care_order.status in {"issued", "fulfilled"},
+                fulfilled=care_order.status == "fulfilled",
+            ),
+            i18n=i18n,
+            locale=locale,
+        )
+        shell = CareOrderCardAdapter.build(
+            seed=seed,
+            source=SourceRef(context=SourceContext.DOCTOR_QUEUE, source_ref="doctor.booking.linked.care_order"),
+            i18n=i18n,
+            locale=locale,
+            mode=CardMode.EXPANDED,
+        )
+        return CardShellRenderer.to_panel(shell).text
 
     async def _resolve_doctor_context(message: Message) -> tuple[str | None, str, str | None]:
         locale = await resolve_locale(message, access_resolver=access_resolver, fallback_locale=default_locale)
@@ -804,17 +932,19 @@ def make_router(
                 )
             return
         elif decoded.page_or_index == "open_recommendation":
-            if recommendation_service is None:
-                return
-            recs = await recommendation_service.list_for_patient(patient_id=detail.patient_card.patient_id, include_terminal=False)
             await callback.message.edit_text(
-                recs[0].title if recs else "-",
+                await _render_linked_recommendation_panel(booking_id=detail.booking_id, locale=locale),
                 reply_markup=await _doctor_linked_back_keyboard(booking_id=detail.booking_id, locale=locale),
             )
             return
         elif decoded.page_or_index == "open_care_order":
             await callback.message.edit_text(
-                f"care_order :: patient={detail.patient_card.patient_id}",
+                await _render_linked_care_order_panel(
+                    clinic_id=clinic_id,
+                    patient_id=detail.patient_card.patient_id,
+                    booking_id=detail.booking_id,
+                    locale=locale,
+                ),
                 reply_markup=await _doctor_linked_back_keyboard(booking_id=detail.booking_id, locale=locale),
             )
             return
