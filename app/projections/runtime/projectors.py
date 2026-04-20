@@ -15,14 +15,22 @@ class Projector(Protocol):
 
 
 @dataclass(slots=True)
+class ProjectorRunResult:
+    scanned_events: int
+    handled_by_projector: dict[str, int]
+    failed_outbox_event_id: int | None = None
+
+
+@dataclass(slots=True)
 class ProjectorRunner:
     outbox_repository: OutboxRepository
     checkpoint_repository: ProjectorCheckpointRepository
     projectors: tuple[Projector, ...]
 
-    async def run_once(self, *, limit: int = 200) -> dict[str, int]:
+    async def run_once(self, *, limit: int = 200) -> ProjectorRunResult:
         logger = logging.getLogger("dentflow.projector")
         stats = {projector.name: 0 for projector in self.projectors}
+        scanned_events = 0
         checkpoints = {
             projector.name: await self.checkpoint_repository.get_checkpoint(projector_name=projector.name)
             for projector in self.projectors
@@ -30,6 +38,7 @@ class ProjectorRunner:
         base_last = min(checkpoints.values()) if checkpoints else 0
         rows = await self.outbox_repository.list_after(last_outbox_event_id=base_last, limit=limit)
         for row in rows:
+            scanned_events += 1
             event = EventEnvelope.from_record(row)
             outbox_event_id = int(row["outbox_event_id"])
             try:
@@ -48,5 +57,9 @@ class ProjectorRunner:
             except Exception as exc:  # noqa: BLE001
                 logger.exception("projector processing failed", extra={"extra": {"event_id": event.event_id, "error": str(exc)}})
                 await self.outbox_repository.mark_event_failed(outbox_event_id=outbox_event_id, error_text=str(exc))
-                break
-        return stats
+                return ProjectorRunResult(
+                    scanned_events=scanned_events,
+                    handled_by_projector=stats,
+                    failed_outbox_event_id=outbox_event_id,
+                )
+        return ProjectorRunResult(scanned_events=scanned_events, handled_by_projector=stats)

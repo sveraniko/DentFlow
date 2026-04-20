@@ -79,8 +79,10 @@ def test_projector_runner_updates_checkpoints_and_handles_failure() -> None:
     cp = _CheckpointRepo()
 
     runner = ProjectorRunner(outbox_repository=outbox, checkpoint_repository=cp, projectors=(ok, bad))
-    asyncio.run(runner.run_once(limit=10))
+    result = asyncio.run(runner.run_once(limit=10))
 
     assert cp.values["p.ok"] == 1
     assert "p.bad" not in cp.values
     assert outbox.failed and outbox.failed[0][0] == 1
+    assert result.scanned_events == 1
+    assert result.failed_outbox_event_id == 1
