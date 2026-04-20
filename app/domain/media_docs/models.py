@@ -37,3 +37,18 @@ class GeneratedDocument:
     created_at: datetime
     updated_at: datetime
     generation_error_text: str | None
+
+
+@dataclass(slots=True, frozen=True)
+class MediaAsset:
+    media_asset_id: str
+    clinic_id: str
+    asset_kind: str
+    storage_provider: str
+    storage_ref: str
+    content_type: str | None
+    byte_size: int | None
+    checksum_sha256: str | None
+    created_by_actor_id: str | None
+    created_at: datetime
+    updated_at: datetime

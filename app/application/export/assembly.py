@@ -8,6 +8,7 @@ from app.application.clinic_reference import ClinicReferenceService
 from app.application.export.models import (
     ExportAssemblyRequest,
     ExportAssemblyResult,
+    ExportGenerationResult,
     ExportBookingContext043,
     ExportChartContext043,
     ExportDiagnosis043,
@@ -19,7 +20,8 @@ from app.application.export.models import (
     ExportTreatmentPlan043,
     Structured043ExportPayload,
 )
-from app.application.export.services import DocumentTemplateRegistryService, GeneratedDocumentRegistryService
+from app.application.export.rendering import ArtifactStorage, Export043Renderer
+from app.application.export.services import DocumentTemplateRegistryService, GeneratedDocumentRegistryService, MediaAssetRegistryService
 from app.application.patient.registry import PatientRegistryService
 from app.application.timezone import DoctorTimezoneFormatter
 from app.domain.booking import Booking
@@ -223,6 +225,9 @@ class DocumentExportApplicationService:
     template_registry: DocumentTemplateRegistryService
     generated_document_registry: GeneratedDocumentRegistryService
     payload_assembler: Structured043ExportAssembler
+    renderer: Export043Renderer | None = None
+    artifact_storage: ArtifactStorage | None = None
+    media_asset_registry: MediaAssetRegistryService | None = None
 
     async def assemble_043_export(self, request: ExportAssemblyRequest) -> ExportAssemblyResult:
         template = await self.template_registry.resolve_active_template(
@@ -255,3 +260,54 @@ class DocumentExportApplicationService:
             document_template_id=template.document_template_id,
             payload=payload,
         )
+
+    async def generate_043_export(self, request: ExportAssemblyRequest) -> ExportGenerationResult:
+        if self.renderer is None or self.artifact_storage is None or self.media_asset_registry is None:
+            raise ValueError("renderer, artifact_storage, and media_asset_registry must be configured for generation")
+        template = await self.template_registry.resolve_active_template(
+            template_type=request.template_type,
+            locale=request.template_locale,
+            clinic_id=request.clinic_id,
+            template_version=request.template_version,
+        )
+        generated_document = await self.generated_document_registry.create_generated_document(
+            clinic_id=request.clinic_id,
+            patient_id=request.patient_id,
+            chart_id=request.chart_id,
+            encounter_id=request.encounter_id,
+            booking_id=request.booking_id,
+            document_template_id=template.document_template_id,
+            document_type=request.template_type,
+            created_by_actor_id=request.assembled_by_actor_id,
+        )
+        try:
+            await self.generated_document_registry.mark_generation_started(generated_document_id=generated_document.generated_document_id)
+            payload = await self.payload_assembler.assemble_payload(request)
+            rendered = self.renderer.render(payload=payload, locale=request.template_locale, template_source_ref=template.template_source_ref)
+            stored = self.artifact_storage.store(generated_document_id=generated_document.generated_document_id, artifact=rendered)
+            asset = await self.media_asset_registry.create_asset(
+                clinic_id=request.clinic_id,
+                asset_kind="generated_document",
+                storage_provider=stored.storage_provider,
+                storage_ref=stored.storage_ref,
+                content_type=rendered.content_type,
+                byte_size=stored.byte_size,
+                checksum_sha256=stored.checksum_sha256,
+                created_by_actor_id=request.assembled_by_actor_id,
+            )
+            await self.generated_document_registry.mark_generation_success(
+                generated_document_id=generated_document.generated_document_id,
+                generated_file_asset_id=asset.media_asset_id,
+            )
+            return ExportGenerationResult(
+                generated_document_id=generated_document.generated_document_id,
+                document_template_id=template.document_template_id,
+                generated_file_asset_id=asset.media_asset_id,
+                artifact_storage_ref=asset.storage_ref,
+            )
+        except Exception as exc:
+            await self.generated_document_registry.mark_generation_failed(
+                generated_document_id=generated_document.generated_document_id,
+                error_text=str(exc),
+            )
+            raise

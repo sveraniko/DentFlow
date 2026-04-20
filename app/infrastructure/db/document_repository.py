@@ -4,7 +4,7 @@ from dataclasses import asdict
 
 from sqlalchemy import text
 
-from app.domain.media_docs import DocumentTemplate, GeneratedDocument
+from app.domain.media_docs import DocumentTemplate, GeneratedDocument, MediaAsset
 from app.infrastructure.db.engine import create_engine
 
 
@@ -167,3 +167,58 @@ class DbGeneratedDocumentRepository:
             )
         await engine.dispose()
         return [GeneratedDocument(**dict(row)) for row in rows]
+
+
+class DbMediaAssetRepository:
+    def __init__(self, db_config) -> None:
+        self._db_config = db_config
+
+    async def save_media_asset(self, item: MediaAsset) -> None:
+        payload = asdict(item)
+        engine = create_engine(self._db_config)
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO media_docs.media_assets (
+                      media_asset_id, clinic_id, asset_kind, storage_provider, storage_ref,
+                      content_type, byte_size, checksum_sha256, created_by_actor_id, created_at, updated_at
+                    )
+                    VALUES (
+                      :media_asset_id, :clinic_id, :asset_kind, :storage_provider, :storage_ref,
+                      :content_type, :byte_size, :checksum_sha256, :created_by_actor_id, :created_at, :updated_at
+                    )
+                    ON CONFLICT (media_asset_id) DO UPDATE SET
+                      clinic_id=EXCLUDED.clinic_id,
+                      asset_kind=EXCLUDED.asset_kind,
+                      storage_provider=EXCLUDED.storage_provider,
+                      storage_ref=EXCLUDED.storage_ref,
+                      content_type=EXCLUDED.content_type,
+                      byte_size=EXCLUDED.byte_size,
+                      checksum_sha256=EXCLUDED.checksum_sha256,
+                      created_by_actor_id=EXCLUDED.created_by_actor_id,
+                      updated_at=EXCLUDED.updated_at
+                    """
+                ),
+                payload,
+            )
+        await engine.dispose()
+
+    async def get_media_asset(self, media_asset_id: str) -> MediaAsset | None:
+        engine = create_engine(self._db_config)
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT media_asset_id, clinic_id, asset_kind, storage_provider, storage_ref,
+                               content_type, byte_size, checksum_sha256, created_by_actor_id, created_at, updated_at
+                        FROM media_docs.media_assets
+                        WHERE media_asset_id=:media_asset_id
+                        """
+                    ),
+                    {"media_asset_id": media_asset_id},
+                )
+            ).mappings().first()
+        await engine.dispose()
+        return MediaAsset(**dict(row)) if row is not None else None
