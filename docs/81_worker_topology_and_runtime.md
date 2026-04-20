@@ -116,3 +116,22 @@ This worker topology PR does not add:
 - large observability platform redesign.
 
 Those are later hardening concerns.
+
+## 10. WR-2 operational hardening additions
+
+WR-2 adds bounded operational safety and visibility for the reminder worker line:
+
+- **Lease-based active-worker gating** (`system_runtime.worker_leases`) so only one reminder worker instance actively processes reminder batches at a time.
+- **Worker status heartbeat surface** (`system_runtime.worker_status`) with:
+  - last heartbeat time,
+  - current mode (`starting` / `active` / `standby`),
+  - last successful processing time,
+  - last error timestamp/text.
+- **Bounded error cooldown** in reminder runtime to avoid tight infinite error loops.
+- **Health inspection command** via `python -m app.reminder_worker_status`.
+
+### WR-2 semantics (explicit limits)
+
+- Lease protection is **bounded best-effort single-active-worker safety**.
+- If lease holder crashes, lease expiry allows another worker to take ownership.
+- This is not a cross-region consensus system and does not claim strict exactly-once delivery semantics.

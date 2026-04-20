@@ -30,6 +30,17 @@ class _FakeRunner:
         return ReminderWorkerBatchResult(delivery_claimed=0, recovery_processed=0)
 
 
+class _FakeOps:
+    async def try_acquire_or_renew_lease(self, *, lease_name: str, owner_token: str, now, ttl) -> bool:  # type: ignore[no-untyped-def]
+        return True
+
+    async def release_lease(self, *, lease_name: str, owner_token: str, now) -> None:  # type: ignore[no-untyped-def]
+        return None
+
+    async def upsert_worker_status(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        return None
+
+
 def test_reminder_worker_startup_catchup_is_bounded() -> None:
     stop_event = asyncio.Event()
     runner = _FakeRunner(
@@ -42,6 +53,7 @@ def test_reminder_worker_startup_catchup_is_bounded() -> None:
     )
     runtime = ReminderWorkerRuntime(
         runner=runner,  # type: ignore[arg-type]
+        ops=_FakeOps(),  # type: ignore[arg-type]
         config=ReminderWorkerConfig(
             delivery_batch_limit=5,
             recovery_batch_limit=7,
@@ -71,6 +83,7 @@ def test_reminder_worker_graceful_shutdown_stops_at_batch_boundary() -> None:
     runner = _BoundaryRunner(results=[])
     runtime = ReminderWorkerRuntime(
         runner=runner,  # type: ignore[arg-type]
+        ops=_FakeOps(),  # type: ignore[arg-type]
         config=ReminderWorkerConfig(
             delivery_batch_limit=3,
             recovery_batch_limit=4,
@@ -102,6 +115,7 @@ def test_reminder_worker_startup_catchup_stops_when_backlog_drained(
     runner = _FakeRunner(results=results, stop_event=stop_event)
     runtime = ReminderWorkerRuntime(
         runner=runner,  # type: ignore[arg-type]
+        ops=_FakeOps(),  # type: ignore[arg-type]
         config=ReminderWorkerConfig(
             delivery_batch_limit=2,
             recovery_batch_limit=2,

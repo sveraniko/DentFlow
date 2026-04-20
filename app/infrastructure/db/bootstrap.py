@@ -1143,6 +1143,27 @@ STACK1_TABLES: tuple[str, ...] = (
       failed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS system_runtime.worker_leases (
+      lease_name TEXT PRIMARY KEY,
+      owner_token TEXT NOT NULL,
+      lease_expires_at TIMESTAMPTZ NOT NULL,
+      heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS system_runtime.worker_status (
+      worker_name TEXT PRIMARY KEY,
+      owner_token TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      heartbeat_at TIMESTAMPTZ NOT NULL,
+      last_success_at TIMESTAMPTZ NULL,
+      last_error_at TIMESTAMPTZ NULL,
+      last_error_text TEXT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
 
 
     """
