@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.bootstrap.logging import configure_logging
+from app.application.clinic_reference import ClinicReferenceService
 from app.application.communication import ReminderDeliveryService, ReminderRecoveryService
 from app.application.policy import PolicyResolver
 from app.common.i18n import I18nService
@@ -36,6 +37,7 @@ async def build_reminder_worker_services(settings: Settings) -> ReminderWorkerSe
     clinic_reference_repository = await DbClinicReferenceRepository.load(settings.db)
     policy_resolver = PolicyResolver(policy_repository)
     booking_repository = DbBookingRepository(settings.db)
+    clinic_reference_service = ClinicReferenceService(clinic_reference_repository)
     i18n = I18nService(Path("locales"), default_locale=settings.app.default_locale)
     timezone_resolver = _ReminderTimezoneResolver(clinic_reference_repository=clinic_reference_repository, app_default_timezone=settings.app.default_timezone)
     return ReminderWorkerServices(
@@ -47,6 +49,7 @@ async def build_reminder_worker_services(settings: Settings) -> ReminderWorkerSe
             policy_resolver=policy_resolver,
             i18n=i18n,
             timezone_resolver=timezone_resolver,
+            reference_service=clinic_reference_service,
             app_default_timezone=settings.app.default_timezone,
         ),
         recovery=ReminderRecoveryService(

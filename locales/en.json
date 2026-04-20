@@ -405,6 +405,7 @@
   "admin.queue.status.active": "Active",
   "admin.queue.status.closed": "Closed",
   "admin.queue.status.canceled": "Canceled",
+  "service.cleaning": "Teeth cleaning",
   "reminder.message.layout": "DentFlow reminder\n📅 {datetime}\n👩‍⚕️ {doctor}\n🦷 {service}\n🏥 {branch}\n\n{summary}",
   "reminder.type.booking_confirmation.summary": "Please confirm your appointment or request a change.",
   "reminder.type.booking_previsit.summary": "Upcoming visit reminder. Please check the time.",
@@ -414,5 +415,8 @@
   "reminder.action.confirm": "✅ Confirm",
   "reminder.action.reschedule": "🔁 Reschedule",
   "reminder.action.cancel": "❌ Cancel",
-  "reminder.action.ack": "👍 Got it"
+  "reminder.action.ack": "👍 Got it",
+  "reminder.context.doctor_unknown": "your doctor",
+  "reminder.context.service_unknown": "dental service",
+  "reminder.context.branch_unknown": "clinic branch"
 }

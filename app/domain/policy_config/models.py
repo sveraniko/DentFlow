@@ -58,6 +58,7 @@ DEFAULT_POLICY_VALUES: dict[str, object] = {
     "booking.next_visit_recall_enabled": True,
     "booking.next_visit_recall_after_days": 180,
     "communication.reminder_retry_enabled": True,
+    "communication.manual_retry_enabled": True,
     "communication.reminder_retry_max_attempts": 3,
     "communication.reminder_retry_delay_minutes": 5,
     "communication.reminder_stale_queued_after_minutes": 15,

@@ -3,14 +3,18 @@ from __future__ import annotations
 import asyncio
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
+from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
 from app.application.communication.delivery import render_booking_reminder_message
 from app.application.communication.recovery import ReminderRecoveryService
 from app.application.communication.reminders import BookingReminderPlanner
 from app.application.policy import InMemoryPolicyRepository, PolicyResolver
 from app.domain.booking import Booking, BookingSession
+from app.domain.clinic_reference.models import Branch, Clinic, Doctor, Service
 from app.domain.communication import ReminderJob
 from app.domain.policy_config.models import PolicySet, PolicyValue
+from app.common.i18n import I18nService
 
 
 def _booking(*, status: str = "pending_confirmation") -> Booking:
@@ -80,6 +84,47 @@ def test_rendering_localized_copy_and_local_time() -> None:
     ru = render_booking_reminder_message(reminder=ru_reminder, booking=booking, timezone_resolver=_TZ())
     assert "Напоминание DentFlow" in ru.text
     assert "Сегодня ваш визит" in ru.text
+
+
+def test_reminder_context_uses_human_labels_instead_of_raw_ids() -> None:
+    repo = InMemoryClinicReferenceRepository()
+    repo.upsert_clinic(Clinic(clinic_id="clinic_main", code="main", display_name="Main", timezone="UTC", default_locale="ru"))
+    repo.upsert_doctor(Doctor(doctor_id="doctor_1", clinic_id="clinic_main", display_name="Dr. Anna", specialty_code="gen", branch_id="branch_1"))
+    repo.upsert_branch(Branch(branch_id="branch_1", clinic_id="clinic_main", display_name="Central Branch", address_text="-", timezone="UTC"))
+    repo.upsert_service(Service(service_id="svc_1", clinic_id="clinic_main", code="CLEAN", title_key="service.cleaning", duration_minutes=30))
+    i18n = I18nService(Path("locales"), default_locale="ru")
+    message = render_booking_reminder_message(
+        reminder=_reminder(reminder_type="booking_previsit"),
+        booking=_booking(),
+        i18n=i18n,
+        reference_service=ClinicReferenceService(repo),
+    )
+    assert "Dr. Anna" in message.text
+    assert "Teeth cleaning" in message.text
+    assert "Central Branch" in message.text
+    assert "doctor_1" not in message.text
+    assert "svc_1" not in message.text
+    assert "branch_1" not in message.text
+    assert "service.cleaning" not in message.text
+
+
+def test_reminder_context_falls_back_to_clinic_default_locale_then_safe_generic_text() -> None:
+    repo = InMemoryClinicReferenceRepository()
+    repo.upsert_clinic(Clinic(clinic_id="clinic_main", code="main", display_name="Main", timezone="UTC", default_locale="ru"))
+    repo.upsert_doctor(Doctor(doctor_id="doctor_1", clinic_id="clinic_main", display_name="", specialty_code="gen", branch_id="branch_1"))
+    repo.upsert_branch(Branch(branch_id="branch_1", clinic_id="clinic_main", display_name="", address_text="-", timezone="UTC"))
+    repo.upsert_service(Service(service_id="svc_1", clinic_id="clinic_main", code="CLEAN", title_key="service.cleaning", duration_minutes=30))
+    i18n = I18nService(Path("locales"), default_locale="ru")
+    reminder = ReminderJob(**{**asdict(_reminder(reminder_type="booking_previsit")), "locale_at_send_time": "ka"})
+    message = render_booking_reminder_message(
+        reminder=reminder,
+        booking=_booking(),
+        i18n=i18n,
+        reference_service=ClinicReferenceService(repo),
+    )
+    assert "Профессиональная чистка зубов" in message.text
+    assert "ваш врач" in message.text
+    assert "филиал клиники" in message.text
 
 
 class _RecoveryRepo:
