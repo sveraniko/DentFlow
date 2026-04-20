@@ -1,46 +1,84 @@
 # 71) Role scenarios and acceptance map
 
+> Operational end-to-end scenario map for DentFlow.
+>
+> This document answers a different question from the PR plan.
+> The PR plan explains **how we are building**.
+> This file explains **what the product already does, what each role actually experiences, and what is still incomplete**.
+
 ## 1. Purpose
 
-This document defines **real operational end-to-end scenarios** for DentFlow and maps each scenario to current implementation visibility.
+This document defines the real role journeys DentFlow is expected to support and maps them to current implementation reality.
 
 It exists to answer, in one place:
-1. what role journeys DentFlow is expected to support,
-2. what each actor sees/clicks at a practical level,
-3. what outbound notifications are sent,
-4. what state/object transitions happen,
-5. whether the scenario is implemented, partial, or missing,
-6. what existing docs/reports/tests currently evidence the scenario.
 
-How this differs from nearby documents:
-- `docs/70_bot_flows.md` gives role flow maps; this file adds **acceptance status + evidence + known gaps** per concrete scenario.
-- `booking_docs/booking_test_scenarios.md` is a booking test pack; this file is **product-operational role journey mapping**, not a test-case catalog.
-- `docs/72_admin_doctor_owner_ui_contracts.md` defines UI contracts; this file gives **cross-role scenario coverage visibility** and implementation maturity.
+1. what concrete user/role scenarios DentFlow should support;
+2. what each actor sees and clicks at a practical Telegram level;
+3. which notifications or follow-up messages are sent;
+4. which objects and states change underneath;
+5. whether the scenario is implemented, partial, or missing;
+6. what current docs, code paths, and reports support that conclusion.
+
+This file is deliberately different from nearby documents:
+
+- `docs/70_bot_flows.md` gives the high-level role map.
+- `booking_docs/*` define booking logic and UI contracts in depth.
+- `docs/72_admin_doctor_owner_ui_contracts.md` defines surface rules for staff/owner UI.
+- `docs/73_governance_and_reference_ops.md` covers governance, registries, references, and master-data operating model.
+- this file is the **acceptance map** for real user journeys.
 
 ---
 
 ## 2. How to read scenario status
 
 - **Implemented**
-  - Scenario is operationally present end-to-end for the role path,
-  - with grounded evidence in current docs/reports/tests,
-  - and no known blocking gap called out in the latest convergence reports.
+  - The main operational path exists in current runtime, with no known blocking gap for normal usage.
 
 - **Partial**
-  - Core path exists, but one or more required parts are incomplete, constrained, or not yet exposed in role UI.
-  - Use this status when there is real progress but not full acceptance closure.
+  - The core path exists, but one or more materially important pieces are still weak, command-centric, not yet first-class in UI, or only partially evidenced.
 
 - **Missing**
-  - Scenario is expected by product docs but no credible implementation surface is evidenced.
+  - The scenario is expected by the product model, but current runtime does not provide a credible end-to-end surface.
 
 - **Unknown**
-  - Evidence is insufficient or ambiguous. Prefer this over bluffing.
+  - Evidence is insufficient. Prefer this over bluffing.
+
+General rule:
+- when in doubt, this document should degrade to **Partial** or **Unknown**, not invent closure.
 
 ---
 
-## 3. Scenario format
+## 3. Product guardrails used by all scenarios
 
-Every scenario in this document uses these fields:
+The following rules are assumed by every scenario in this file:
+
+1. **DentFlow is source of truth** for bookings, patient links, statuses, reminders, care orders, and generated artifacts.
+2. **Google Calendar is a mirror**, not a second scheduling truth.
+3. **Google Sheets is allowed for care catalog authoring**, not for live booking truth.
+4. **Patient data collection should be just-in-time**. The patient should not be interrogated with a giant intake form before intent is clear.
+5. **One actor may carry multiple roles**. “Lead doctor” is not a separate canonical runtime role yet; it is a composite operational persona.
+6. **Generated documents are baseline artifacts now**. This is already useful, but it is not the same thing as a fully expanded document/PDF program.
+
+---
+
+## 4. Role/persona model
+
+The product-facing personas used in this map are:
+
+- **New patient**: first contact, no trusted continuity yet.
+- **Returning patient**: prior history exists; lower friction is expected.
+- **Booked patient**: already has a booking and interacts with reminders, confirmation, change, and follow-up.
+- **Admin / reception**: clinic workdesk role for confirmations, schedule rescue, patient access, pickup, and issue handling.
+- **Doctor**: queue, patient context, encounter progression, recommendations, booking-linked operational actions.
+- **Lead doctor persona**: composite operational persona, typically doctor + wider clinic awareness. This is not a separate canonical role code in current runtime.
+- **Owner**: digest, snapshot, alerts, and business/operational oversight consumer.
+
+---
+
+## 5. Scenario format
+
+Each scenario in this document contains:
+
 - **Scenario ID**
 - **Actor / persona**
 - **Preconditions**
@@ -54,423 +92,498 @@ Every scenario in this document uses these fields:
 
 ---
 
-## 4. Role/persona model
-
-Product-facing personas used in this map:
-- **New patient**: first contact, no trusted prior continuity context.
-- **Returning patient**: prior history exists, continuity and speed are expected.
-- **Booked patient**: has an existing booking and receives confirmations/reminders/change actions.
-- **Admin / reception**: operational workdesk owner for confirmations, reschedules, check-in, communication exceptions, and pickup operations.
-- **Doctor**: queue and encounter progression persona.
-- **Lead doctor persona (composite/operational)**: not a separate canonical system role by default; used where one doctor functionally combines treatment and local operational coordination.
-- **Owner**: digest/snapshot/anomaly/care performance consumer.
-
----
-
-## 5. Patient scenarios
+## 6. Patient scenarios
 
 ### PAT-001 — New visitor first booking
 - **Actor / persona:** New patient.
-- **Preconditions:** Patient opens PatientBot without established booking session.
-- **Entry point:** `/start` in PatientBot.
+- **Preconditions:** Patient opens PatientBot without an active booking session.
+- **Entry point:** `/start` -> current runtime home -> `/book`.
 - **Main flow:**
-  1. Patient sees initial start panel for booking entry (compact Telegram-first flow).
-  2. Greeting/intro is expected as short UX copy, not long narrative.
-  3. Language selection path is available (first-run or settings-driven), with RU/EN model.
-  4. System captures intent/problem/service direction first (booking-first, not form-first).
-  5. System proposes doctor/slot route (including preference/code path where applicable).
-  6. **Only then** asks minimal identity/contact confirmation needed to finalize booking.
-  7. Review panel shows service/time/doctor/contact snapshot.
-  8. Final confirmation creates booking and starts reminder chain.
-- **Outbound messages / notifications:** booking confirmation-needed/confirmed message, then reminder chain according to policy.
-- **State / object transitions:** booking draft/session progression -> `booking.bookings` created in `pending_confirmation` or `confirmed`; reminder scheduling intent emitted to Communication context.
-- **Current implementation status:** **Implemented (core flow) / Partial (full UX evidence granularity)**.
-- **Evidence:** `booking_docs/10_booking_flow_dental.md` (booking-first principle, flow order, contact confirmation late); `booking_docs/50_booking_telegram_ui_contract.md` (step contract, contact confirmation, review panel, reminder action UI); `docs/17_localization_and_i18n.md` (language selection/switching rules); `docs/70_bot_flows.md` (canonical patient flows).
-- **Known gaps / comments:** Current evidence is documentation + booking test coverage model; this file does not certify every literal first-message copy variant in runtime.
+  1. Patient opens the bot.
+  2. Current runtime shows a home text surface (`/start`), not yet a full first-run CTA panel.
+  3. Patient enters `/book`.
+  4. System starts or resumes a booking session.
+  5. Patient chooses service.
+  6. Patient chooses doctor preference.
+  7. Patient chooses slot.
+  8. Only after slot selection does the system request contact/phone.
+  9. System resolves or creates the patient linkage from contact.
+  10. State machine marks review-ready.
+  11. Runtime currently finalizes immediately after contact resolution instead of showing a rich explicit pre-final-confirmation review card.
+- **Outbound messages / notifications:** booking success message, then reminder chain according to clinic policy.
+- **State / object transitions:** booking session progresses through service/doctor/slot/contact steps -> `review_ready` -> booking created and reminder planning is emitted.
+- **Current implementation status:** **Partial**.
+- **Evidence:** `app/interfaces/bots/patient/router.py` (`start`, `book_entry`, `select_service`, `select_doctor_preference`, `select_slot`, `_handle_contact_submission`, `_render_resume_panel`); `booking_docs/10_booking_flow_dental.md`; `booking_docs/50_booking_telegram_ui_contract.md`; `docs/17_localization_and_i18n.md`.
+- **Known gaps / comments:**
+  - `/start` is still a text-command home, not a polished first-run intent panel.
+  - explicit first-run language picker is not evidenced in current patient runtime;
+  - state machine supports `review_ready`, but runtime currently finalizes immediately after contact resolution;
+  - success copy still uses raw identifiers (`doctor_id`, `service_id`, `branch_id`) instead of human display labels.
 
 ### PAT-002 — Returning patient quick booking
 - **Actor / persona:** Returning patient.
-- **Preconditions:** Existing patient history/continuity context can be resolved.
-- **Entry point:** Patient booking entry from bot menu or `/start`.
+- **Preconditions:** Patient already exists in DentFlow and returns to booking.
+- **Entry point:** `/book`.
 - **Main flow:**
-  1. System recognizes likely returning patient context.
-  2. Offers continuity with previous doctor where policy permits.
-  3. Patient selects slot quickly with reduced friction compared to new patient path.
-  4. Minimal contact confirmation if needed.
-  5. Booking confirmation path continues.
-- **Outbound messages / notifications:** booking confirmation/reminders.
-- **State / object transitions:** new booking in canonical status set; continuity-routing analytics hooks.
-- **Current implementation status:** **Implemented**.
-- **Evidence:** `booking_docs/10_booking_flow_dental.md` (Route B continuity, repeat patient faster); `booking_docs/booking_test_scenarios.md` BKG-002; `docs/70_bot_flows.md` returning-patient quick booking.
-- **Known gaps / comments:** Continuity policy edge-cases (doctor availability/branch constraints) may still require admin fallback.
+  1. Patient enters booking again.
+  2. Booking session resumes or starts.
+  3. Patient proceeds through booking with reduced identity friction because contact-based patient resolution already exists.
+  4. Continuity assumptions may influence route selection.
+- **Outbound messages / notifications:** booking success and reminder chain.
+- **State / object transitions:** new booking created and linked to an existing patient identity when resolution succeeds.
+- **Current implementation status:** **Partial**.
+- **Evidence:** `app/interfaces/bots/patient/router.py` (`book_entry`, `_handle_contact_submission`); `booking_docs/10_booking_flow_dental.md` (repeat-patient and continuity ideas); `docs/70_bot_flows.md`.
+- **Known gaps / comments:**
+  - current runtime clearly supports contact-based identity continuity;
+  - explicit “quick booking with previous doctor / continuity-first shortcut” is not strongly evidenced as a fully polished patient-visible branch.
 
 ### PAT-003 — Existing booked patient confirmation flow
 - **Actor / persona:** Booked patient.
-- **Preconditions:** Booking exists in `pending_confirmation` or active reminder window.
-- **Entry point:** reminder/action-required message CTA.
-- **Main flow:** patient acknowledges confirmation intent (or action alternative).
-- **Outbound messages / notifications:** confirmation reminder + acknowledgement result messaging.
-- **State / object transitions:** reminder acknowledgement stored; booking remains confirmed/continues per policy without introducing hidden statuses.
+- **Preconditions:** Booking exists and is confirmation-eligible.
+- **Entry point:** reminder CTA or `/my_booking` booking card action.
+- **Main flow:**
+  1. Patient opens current booking context.
+  2. Patient confirms from booking card or reminder action.
+  3. UI updates booking panel accordingly.
+- **Outbound messages / notifications:** reminder acknowledgement, optional booking status update.
+- **State / object transitions:** confirmation acknowledgement recorded; booking remains in the canonical booking lifecycle.
 - **Current implementation status:** **Implemented**.
-- **Evidence:** `booking_docs/10_booking_flow_dental.md` reminder/confirmation logic; `booking_docs/50_booking_telegram_ui_contract.md` action-required reminder UI; `booking_docs/booking_test_scenarios.md` BKG-006/BKG-007.
-- **Known gaps / comments:** No separate “reminder engine truth” inside booking by design.
+- **Evidence:** `app/interfaces/bots/patient/router.py` (`my_booking_entry`, booking-card callbacks, `reminder_action_callback`); `booking_docs/10_booking_flow_dental.md`; `booking_docs/booking_test_scenarios.md`.
+- **Known gaps / comments:** reminder truth remains in communication/reminder layer by design, not as a fake parallel booking truth.
 
 ### PAT-004 — Reschedule flow
 - **Actor / persona:** Booked patient.
 - **Preconditions:** Active booking exists.
 - **Entry point:** booking card action or reminder CTA.
-- **Main flow:** patient requests reschedule, receives alternative slot path or admin-assisted fallback.
-- **Outbound messages / notifications:** reschedule acknowledgement + updated booking/reminder messages.
-- **State / object transitions:** booking enters `reschedule_requested`, then updated to new slot/status path with history and reminder updates.
+- **Main flow:**
+  1. Patient requests reschedule.
+  2. Runtime updates booking state into reschedule-requested path.
+  3. Booking card is re-rendered.
+  4. Admin/rescue path can continue later if needed.
+- **Outbound messages / notifications:** reschedule-related messaging and later updated booking/reminder messages.
+- **State / object transitions:** booking enters `reschedule_requested`; reminder and operational follow-up are updated downstream.
 - **Current implementation status:** **Implemented**.
-- **Evidence:** `booking_docs/10_booking_flow_dental.md` section 9; `booking_docs/booking_test_scenarios.md` BKG-008; `docs/16-4_booking_card_profile.md` patient actions include reschedule.
-- **Known gaps / comments:** Operational rescue dependency exists when automated proposals are insufficient.
+- **Evidence:** `app/interfaces/bots/patient/router.py` (`request_reschedule`, booking-card callback branch for reschedule); `booking_docs/10_booking_flow_dental.md`; `booking_docs/booking_test_scenarios.md`.
+- **Known gaps / comments:** advanced rescue and operator intervention live on admin side, not patient side.
 
 ### PAT-005 — Cancel flow
 - **Actor / persona:** Booked patient.
 - **Preconditions:** Active booking exists.
-- **Entry point:** booking card or reminder-action path.
-- **Main flow:** patient cancels booking and receives bounded confirmation.
-- **Outbound messages / notifications:** cancellation confirmation; reminder chain update.
-- **State / object transitions:** booking status -> `canceled`; reminder plan updated.
+- **Entry point:** booking card cancel action.
+- **Main flow:**
+  1. Patient opens cancel prompt.
+  2. Patient confirms or aborts.
+  3. Booking card updates after cancellation.
+- **Outbound messages / notifications:** cancellation confirmation and downstream reminder adjustments.
+- **State / object transitions:** booking moves to canceled state.
 - **Current implementation status:** **Implemented**.
-- **Evidence:** `booking_docs/10_booking_flow_dental.md` section 10; `booking_docs/booking_test_scenarios.md` BKG-009; `docs/16-4_booking_card_profile.md` patient actions include cancel.
-- **Known gaps / comments:** None critical surfaced in convergence pack.
+- **Evidence:** `app/interfaces/bots/patient/router.py` (`cancel_prompt_by_runtime`, `cancel_prompt`, `cancel_confirm`); `booking_docs/10_booking_flow_dental.md`; `booking_docs/booking_test_scenarios.md`.
+- **Known gaps / comments:** no major acceptance blocker surfaced in the convergence pack.
 
 ### PAT-006 — Reminder acknowledgement flow
 - **Actor / persona:** Booked patient.
-- **Preconditions:** Reminder issued (24h/same-day/action-required).
-- **Entry point:** reminder notification CTA.
-- **Main flow:** patient taps acknowledgement action (confirm/on my way/reschedule/cancel path per policy).
-- **Outbound messages / notifications:** acknowledgement feedback + downstream update notifications where needed.
-- **State / object transitions:** communication acknowledgement record updated; booking follow-up logic applied.
+- **Preconditions:** Reminder has been sent.
+- **Entry point:** reminder callback.
+- **Main flow:** patient taps `ack`, `confirm`, `reschedule`, or `cancel` according to reminder policy.
+- **Outbound messages / notifications:** reminder-action acceptance/stale/invalid feedback.
+- **State / object transitions:** reminder acknowledgement record updates; downstream booking handling continues.
 - **Current implementation status:** **Implemented**.
-- **Evidence:** `booking_docs/10_booking_flow_dental.md` action-required reminder pattern; `booking_docs/50_booking_telegram_ui_contract.md` reminder CTA contract; `booking_docs/booking_test_scenarios.md` BKG-006/BKG-007.
-- **Known gaps / comments:** Detailed reminder debugging remains admin/issue view, not patient booking card.
+- **Evidence:** `app/interfaces/bots/patient/router.py` (`reminder_action_callback`); `booking_docs/10_booking_flow_dental.md`; `booking_docs/50_booking_telegram_ui_contract.md`.
+- **Known gaps / comments:** detailed reminder debugging stays with admin/issues and owner analytics, not patient UX.
 
 ### PAT-007 — Post-visit recommendation / aftercare flow
-- **Actor / persona:** Returning or recently treated patient.
-- **Preconditions:** Recommendation/aftercare output linked to encounter/booking context.
-- **Entry point:** patient recommendation/aftercare message or linked panel.
-- **Main flow:** patient receives recommendation/aftercare guidance and can proceed toward care actions where supported.
-- **Outbound messages / notifications:** recommendation and aftercare localized messaging.
-- **State / object transitions:** recommendation lifecycle updates; possible link to care reserve flow.
+- **Actor / persona:** Recently treated patient.
+- **Preconditions:** Recommendation or aftercare content exists for this patient.
+- **Entry point:** `/recommendations`, recommendation open/action routes, or linked follow-up path.
+- **Main flow:**
+  1. Patient resolves to own patient identity.
+  2. Patient lists recommendations.
+  3. Patient opens recommendation detail.
+  4. Patient can acknowledge / accept / decline.
+  5. Patient may continue into recommendation-linked product flow.
+- **Outbound messages / notifications:** recommendation text, action acknowledgement, potential follow-up guidance.
+- **State / object transitions:** recommendation status may change from issued -> viewed/acknowledged/accepted/declined.
 - **Current implementation status:** **Partial**.
-- **Evidence:** `docs/70_bot_flows.md` includes recommendation response; `docs/60_care_commerce.md` recommendation-first model; `docs/17_localization_and_i18n.md` localized recommendation/aftercare expectations; `docs/report/CONVERGENCE_PACK_DELTA_AUDIT_2026-04-20.md` indicates some cross-role linked-object convergence focused on admin/doctor and identifies patient-facing document/cross-surface gaps.
-- **Known gaps / comments:** Patient-facing breadth of post-visit linked surfaces is not fully evidenced as complete end-to-end in convergence reports.
+- **Evidence:** `app/interfaces/bots/patient/router.py` (`recommendations_list`, `recommendations_open`, `recommendations_action`, `recommendation_products`); `docs/60_care_commerce.md`; `docs/70_bot_flows.md`.
+- **Known gaps / comments:**
+  - patient-facing recommendations exist as commands and flows;
+  - broader post-visit document delivery and richer linked aftercare packaging are still incomplete.
 
-### PAT-008 — Care reserve/pickup flow
-- **Actor / persona:** Patient (post-recommendation or direct care intent).
-- **Preconditions:** Care catalog/order pathways enabled for clinic.
-- **Entry point:** recommendation-linked care action or patient care surface.
-- **Main flow:** patient reserves care item(s), receives pickup guidance, completes pickup with admin involvement.
-- **Outbound messages / notifications:** reserve confirmation, pickup readiness/update messages.
-- **State / object transitions:** care reservation/order state updates; pickup status transitions.
+### PAT-008 — Care reserve / pickup flow
+- **Actor / persona:** Patient.
+- **Preconditions:** Care catalog and care-order surfaces are enabled.
+- **Entry point:** `/care`, recommendation-linked product flow, or care-order list.
+- **Main flow:**
+  1. Patient browses care categories or recommendation-linked products.
+  2. Patient opens product card.
+  3. Patient selects branch if needed.
+  4. Patient reserves/creates care order.
+  5. Patient can list own care orders and repeat eligible orders.
+  6. Pickup is completed with admin-side operational handling.
+- **Outbound messages / notifications:** order creation, reserve/pickup update messages.
+- **State / object transitions:** care order created, confirmed, and later processed through pickup lifecycle.
 - **Current implementation status:** **Partial**.
-- **Evidence:** `docs/60_care_commerce.md` scope includes care order lifecycle + pickup; `docs/68_admin_reception_workdesk.md` care pickup queue; `docs/70_bot_flows.md` care reserve/pickup canonical patient flow.
-- **Known gaps / comments:** Convergence/delta report notes operator UI expansion areas in 13A (integration surfaces), so full operational closure should be treated as partial.
+- **Evidence:** `app/interfaces/bots/patient/router.py` (`care_catalog`, `recommendation_products`, `care_product_open`, `care_order_create`, `care_orders`, `care_order_repeat`, callback handlers for product/branch/reserve/order open); `docs/60_care_commerce.md`; `docs/68_admin_reception_workdesk.md`.
+- **Known gaps / comments:** core patient care-commerce path exists, but broader commercial polish, operator sync, and governance surfaces are still evolving.
+
+### PAT-DOC-001 — Patient receives a post-visit document artifact
+- **Actor / persona:** Patient.
+- **Preconditions:** Clinic wants to deliver generated aftercare/recommendation/export artifact directly to patient.
+- **Entry point:** patient post-visit follow-up or document delivery action.
+- **Main flow:** expected future path for patient-visible document delivery.
+- **Outbound messages / notifications:** generated artifact delivery or secure link.
+- **State / object transitions:** generated artifact becomes patient-visible.
+- **Current implementation status:** **Missing**.
+- **Evidence:** `docs/65_document_templates_and_043_mapping.md` defines the family concept; convergence and 12B reports explicitly focused current delivery on admin/doctor surfaces.
+- **Known gaps / comments:** current generated document baseline is useful for staff but is not yet a patient-facing document delivery program.
 
 ---
 
-## 6. Admin scenarios
+## 7. Admin / reception scenarios
 
 ### ADM-001 — Open today workdesk
 - **Actor / persona:** Admin / reception.
-- **Preconditions:** Admin role binding active.
-- **Entry point:** ClinicAdminBot main workdesk entry.
-- **Main flow:** open Today section with pending confirmations, upcoming bookings, reschedules, pickups, and issue indicators.
-- **Outbound messages / notifications:** compact workdesk panel updates.
-- **State / object transitions:** read/projection refresh only unless action invoked.
-- **Current implementation status:** **Partial**.
-- **Evidence:** `docs/68_admin_reception_workdesk.md` (Today model is canonical); `docs/70_bot_flows.md` canonical admin flow includes today/workdesk.
-- **Known gaps / comments:** Documented model is clear; full panel-by-panel implementation evidence is not asserted here.
+- **Preconditions:** Admin role binding exists.
+- **Entry point:** `/admin_today`.
+- **Main flow:** open today workdesk, inspect queues and operational slices, drill into booking objects.
+- **Outbound messages / notifications:** compact workdesk panel render.
+- **State / object transitions:** read/projection only until an action is selected.
+- **Current implementation status:** **Implemented**.
+- **Evidence:** `app/interfaces/bots/admin/router.py` (`admin_today`, `admin_today_callback` and related AW2/AW4 callback paths); `docs/68_admin_reception_workdesk.md`; convergence/admin reports from AW wave.
+- **Known gaps / comments:** queue-source context/back-behavior still has some polish room, but the workdesk surface itself is present.
 
 ### ADM-002 — Search/open patient
 - **Actor / persona:** Admin / reception.
-- **Preconditions:** Search index/read models available.
-- **Entry point:** admin search action.
-- **Main flow:** search patient, open patient quick card, jump to related booking/care context.
-- **Outbound messages / notifications:** search results + card render.
-- **State / object transitions:** mostly read transitions; optional linked open actions.
-- **Current implementation status:** **Partial**.
-- **Evidence:** `docs/68_admin_reception_workdesk.md` sections on Patients and search-as-workdesk tool; `docs/10_architecture.md` clinic operations contour.
-- **Known gaps / comments:** End-to-end runtime proof in this convergence set is limited.
+- **Preconditions:** Patient registry/read model exists.
+- **Entry point:** `/admin_patients` or `/search_patient`.
+- **Main flow:**
+  1. Admin searches patients.
+  2. Admin opens patient row/card.
+  3. Admin navigates to booking or linked operational context.
+- **Outbound messages / notifications:** search results and patient card render.
+- **State / object transitions:** mostly read/navigation transitions.
+- **Current implementation status:** **Implemented**.
+- **Evidence:** `app/interfaces/bots/admin/router.py` (`admin_patients`, `search_patient`, patient-card related callbacks); `docs/68_admin_reception_workdesk.md`.
+- **Known gaps / comments:** this is an operational registry view, not yet a full governance console.
 
 ### ADM-003 — Search/open booking
 - **Actor / persona:** Admin / reception.
-- **Preconditions:** booking exists.
-- **Entry point:** booking list/search row -> booking card open.
-- **Main flow:** open booking card with admin compact/expanded operational actions.
-- **Outbound messages / notifications:** card render and optional bounded updates.
-- **State / object transitions:** read -> optional booking action transition.
+- **Preconditions:** Booking exists.
+- **Entry point:** `/booking_open`, today/workdesk rows, or search result.
+- **Main flow:** admin opens booking card and acts from compact/expanded operational panel.
+- **Outbound messages / notifications:** booking card render and any downstream patient updates caused by actions.
+- **State / object transitions:** booking state may change through confirmation, check-in, reschedule, cancel, etc.
 - **Current implementation status:** **Implemented**.
-- **Evidence:** `docs/16-4_booking_card_profile.md` admin booking card variant/actions; `docs/68_admin_reception_workdesk.md` booking list/card as core; convergence 12B reports focus on improving linked opens from booking cards (implying base booking open path present).
-- **Known gaps / comments:** None blocking at base “open booking” path level.
+- **Evidence:** `app/interfaces/bots/admin/router.py` (`booking_open`, booking callbacks); `docs/16-4_booking_card_profile.md`; `docs/68_admin_reception_workdesk.md`.
+- **Known gaps / comments:** none blocking at base acceptance level.
 
-### ADM-004 — Confirm/check-in booking
+### ADM-004 — Confirm / check-in booking
 - **Actor / persona:** Admin / reception.
-- **Preconditions:** booking in confirmation/check-in eligible state.
-- **Entry point:** booking card or confirmation queue.
-- **Main flow:** confirm booking and/or mark patient arrival/check-in.
-- **Outbound messages / notifications:** patient-facing booking status update/reminder adjustments as needed.
-- **State / object transitions:** `pending_confirmation` -> `confirmed`; then `checked_in` when arrival marked.
+- **Preconditions:** Booking is in a confirmation/check-in eligible state.
+- **Entry point:** booking card or queue action.
+- **Main flow:** admin confirms booking and/or marks arrival/check-in.
+- **Outbound messages / notifications:** patient-facing status update and reminder adjustments where appropriate.
+- **State / object transitions:** `pending_confirmation` -> `confirmed`; later `checked_in`.
 - **Current implementation status:** **Implemented**.
-- **Evidence:** canonical status model in README + booking docs; admin actions in `docs/68_admin_reception_workdesk.md`; booking card admin actions in `docs/16-4_booking_card_profile.md`.
-- **Known gaps / comments:** Exact role split for check-in vs doctor-side check-in is policy-sensitive; admin ownership is strongly emphasized.
+- **Evidence:** admin booking actions in `app/interfaces/bots/admin/router.py`; `docs/16-4_booking_card_profile.md`; `docs/68_admin_reception_workdesk.md`.
+- **Known gaps / comments:** exact policy split between admin and doctor still depends on clinic practice, but operational path exists.
 
 ### ADM-005 — Reschedule handling
 - **Actor / persona:** Admin / reception.
-- **Preconditions:** reschedule request exists or patient contact issue requires reschedule.
-- **Entry point:** Reschedules queue or booking card action.
-- **Main flow:** open requested booking, inspect context, offer/assign new slot, close request.
-- **Outbound messages / notifications:** patient reschedule updates.
-- **State / object transitions:** `reschedule_requested` -> updated booking slot/status; reminder chain recalculated.
+- **Preconditions:** Reschedule request exists or a booking needs manual rescue.
+- **Entry point:** `/admin_reschedules` or booking context.
+- **Main flow:** admin opens the request, reviews the booking, and progresses the booking into a corrected slot/state path.
+- **Outbound messages / notifications:** patient reschedule updates and downstream reminder updates.
+- **State / object transitions:** `reschedule_requested` -> updated booking path.
 - **Current implementation status:** **Implemented**.
-- **Evidence:** `docs/68_admin_reception_workdesk.md` reschedule queue and actions; `booking_docs/10_booking_flow_dental.md` reschedule behavior.
-- **Known gaps / comments:** Heavy edge-cases may still require manual rescue path.
+- **Evidence:** `app/interfaces/bots/admin/router.py` (`admin_reschedules` and related queue callbacks); `docs/68_admin_reception_workdesk.md`; booking docs.
+- **Known gaps / comments:** the path exists; complex rescue cases may still remain operator-heavy by design.
 
 ### ADM-006 — Reminder exception / no-response handling
 - **Actor / persona:** Admin / reception.
-- **Preconditions:** reminder failure or no-response signal exists.
-- **Entry point:** Confirmations queue / Issues queue.
-- **Main flow:** admin opens issue-linked booking context and applies rescue action (confirm, reschedule, cancel, manual follow-up path).
-- **Outbound messages / notifications:** patient contact attempts and internal issue resolution updates.
-- **State / object transitions:** reminder issue state updates; booking state changes as needed.
+- **Preconditions:** Reminder failure, stale action, or no-response issue exists.
+- **Entry point:** `/admin_confirmations`, `/admin_issues`, or issue-linked booking context.
+- **Main flow:** admin opens issue queue, inspects affected booking, and applies rescue action.
+- **Outbound messages / notifications:** patient contact or internal issue resolution messaging.
+- **State / object transitions:** reminder/issue state updates and possible booking state changes.
 - **Current implementation status:** **Partial**.
-- **Evidence:** `docs/68_admin_reception_workdesk.md` confirmations/issues queue semantics; `docs/16-4_booking_card_profile.md` reminder issue hints on admin/owner variants.
-- **Known gaps / comments:** Detailed issue-control surfaces are described as bounded/non-overloaded; not all low-level operations are proven as complete in latest reports.
+- **Evidence:** `app/interfaces/bots/admin/router.py` (`admin_confirmations`, `admin_issues`, issue callbacks); `docs/68_admin_reception_workdesk.md`; owner/issue analytics docs.
+- **Known gaps / comments:** the queue surfaces exist, but not every rescue path is evidenced as fully polished end-to-end.
 
-### ADM-007 — Linked recommendation handling
+### ADM-007 — Linked recommendation handling from booking
 - **Actor / persona:** Admin / reception.
-- **Preconditions:** booking has linked recommendation.
+- **Preconditions:** Booking has a linked recommendation.
 - **Entry point:** booking card linked object action.
-- **Main flow:** open bounded recommendation panel from booking and navigate back safely.
-- **Outbound messages / notifications:** localized panel messaging.
-- **State / object transitions:** mostly read/navigation unless explicit recommendation action triggered.
+- **Main flow:** admin opens bounded recommendation panel from booking and navigates back without falling into raw placeholder text.
+- **Outbound messages / notifications:** localized bounded recommendation panel.
+- **State / object transitions:** mainly read/navigation.
 - **Current implementation status:** **Implemented**.
-- **Evidence:** `docs/report/PR_12B1_REPORT.md` states admin linked recommendation placeholder replaced with bounded localized panel + tests.
-- **Known gaps / comments:** Focus is linked-open convergence; broader recommendation management outside this path may still vary.
+- **Evidence:** `docs/report/PR_12B1_REPORT.md`; `app/interfaces/bots/admin/router.py` (linked recommendation branch after convergence).
+- **Known gaps / comments:** broader recommendation management outside booking-linked open is a separate concern.
 
-### ADM-008 — Linked care-order / pickup handling
+### ADM-008 — Linked care-order / pickup handling from booking
 - **Actor / persona:** Admin / reception.
-- **Preconditions:** booking/patient has linked care order.
-- **Entry point:** booking card linked care-order action or care pickup queue.
-- **Main flow:** open bounded care-order panel from booking; continue to pickup operations in workdesk context.
-- **Outbound messages / notifications:** localized panel + pickup updates.
-- **State / object transitions:** care order/pickup status progression.
-- **Current implementation status:** **Implemented (linked open) / Partial (full pickup operations closure)**.
-- **Evidence:** `docs/report/PR_12B1_REPORT.md` linked open convergence for admin care order; `docs/68_admin_reception_workdesk.md` care pickups queue model.
-- **Known gaps / comments:** End-to-end pickup operation breadth remains partly operational-model driven.
+- **Preconditions:** Booking/patient has linked care order.
+- **Entry point:** booking card linked object action or care pickup queue.
+- **Main flow:** admin opens bounded care-order panel and continues pickup-oriented workdesk handling.
+- **Outbound messages / notifications:** localized care-order panel and pickup updates.
+- **State / object transitions:** care-order lifecycle and pickup transitions continue in operational layer.
+- **Current implementation status:** **Implemented**.
+- **Evidence:** `docs/report/PR_12B1_REPORT.md`; `app/interfaces/bots/admin/router.py` (linked care-order open); `app/interfaces/bots/admin/router.py` (`admin_care_pickups`);
+- **Known gaps / comments:** governance and authoring of care catalog are out of scope for this scenario and covered separately in `docs/73_governance_and_reference_ops.md`.
 
 ### ADM-009 — Calendar mirror awareness flow
 - **Actor / persona:** Admin / reception.
-- **Preconditions:** Google Calendar projection configured.
-- **Entry point:** admin calendar mirror open action.
-- **Main flow:** view visual schedule mirror for awareness, then return to DentFlow for actions.
-- **Outbound messages / notifications:** projection status awareness surfaces.
-- **State / object transitions:** no truth transitions in Calendar; DentFlow remains action truth.
-- **Current implementation status:** **Missing (admin mirror UI surface)**.
-- **Evidence:** `docs/69_google_calendar_schedule_projection.md` defines mirror model; `docs/report/CONVERGENCE_PACK_DELTA_AUDIT_2026-04-20.md` explicitly marks admin calendar mirror UI as absent (13A).
-- **Known gaps / comments:** Do not treat Calendar as system of record.
+- **Preconditions:** Calendar projection backend is enabled for the clinic.
+- **Entry point:** external Google Calendar visual layer + DentFlow as action surface.
+- **Main flow:**
+  1. Admin uses Calendar for visual awareness of day/week load.
+  2. Admin returns to DentFlow for actual mutations and operational truth.
+- **Outbound messages / notifications:** calendar event projection updates happen from DentFlow changes.
+- **State / object transitions:** DentFlow booking changes project outward to calendar.
+- **Current implementation status:** **Partial**.
+- **Evidence:** `docs/69_google_calendar_schedule_projection.md`; `app/application/integration/google_calendar_projection.py`; projector worker/runtime docs and reports.
+- **Known gaps / comments:** backend projection exists, but a first-class admin mirror surface inside Telegram is not yet the main operational UX.
+
+### ADM-DOC-001 — Generate 043/export artifact from staff context
+- **Actor / persona:** Admin / reception.
+- **Preconditions:** Export services and template resolution are configured.
+- **Entry point:** `/admin_doc_generate` and related patient/booking context.
+- **Main flow:** admin triggers document generation for patient/booking-linked context.
+- **Outbound messages / notifications:** generation result/status messages.
+- **State / object transitions:** generated document artifact is created and registered.
+- **Current implementation status:** **Implemented**.
+- **Evidence:** `app/interfaces/bots/admin/router.py` (`admin_doc_generate`); `app/application/export/*`; `docs/65_document_templates_and_043_mapping.md`; PR 12A/12B reports.
+- **Known gaps / comments:** current baseline is artifact generation, not a final broad PDF/document family rollout.
+
+### ADM-DOC-002 — Open and download generated document
+- **Actor / persona:** Admin / reception.
+- **Preconditions:** Generated document already exists.
+- **Entry point:** `/admin_doc_open`, `/admin_doc_download`, registry/open flows.
+- **Main flow:** admin opens metadata/status view and downloads the actual artifact when supported.
+- **Outbound messages / notifications:** metadata card and Telegram document delivery.
+- **State / object transitions:** read/download only.
+- **Current implementation status:** **Implemented**.
+- **Evidence:** `app/interfaces/bots/admin/router.py` (`admin_doc_open`, `admin_doc_download`); `docs/report/PR_12B2_REPORT.md`.
+- **Known gaps / comments:** provider support is intentionally bounded; not every storage provider is a direct delivery surface.
 
 ---
 
-## 7. Doctor scenarios
+## 8. Doctor scenarios
 
 ### DOC-001 — Open upcoming queue
 - **Actor / persona:** Doctor.
-- **Preconditions:** doctor role binding and schedule data available.
-- **Entry point:** doctor surface queue command.
-- **Main flow:** open upcoming list, select booking, move into focused booking context.
-- **Outbound messages / notifications:** queue panel/card updates.
-- **State / object transitions:** read transitions until action.
-- **Current implementation status:** **Partial**.
-- **Evidence:** `docs/70_bot_flows.md` canonical doctor flow includes upcoming queue; `docs/16-4_booking_card_profile.md` doctor variant and source-context behavior.
-- **Known gaps / comments:** Current doc/report set emphasizes linked-open convergence rather than explicit queue completeness proof.
+- **Preconditions:** Doctor role binding exists.
+- **Entry point:** `/today_queue` or `/next_patient`.
+- **Main flow:** doctor opens queue, inspects current and upcoming patients, and jumps into booking context.
+- **Outbound messages / notifications:** queue panel render.
+- **State / object transitions:** read/navigation until explicit action is taken.
+- **Current implementation status:** **Implemented**.
+- **Evidence:** `app/interfaces/bots/doctor/router.py` (`today_queue`, `next_patient`); doctor operational reports.
+- **Known gaps / comments:** queue is intentionally operational and narrow, not a giant chart dashboard.
 
 ### DOC-002 — Open current booking
 - **Actor / persona:** Doctor.
-- **Preconditions:** active booking exists.
-- **Entry point:** queue row/booking open action.
-- **Main flow:** open doctor booking card with compact operational context.
-- **Outbound messages / notifications:** card render and bounded updates.
-- **State / object transitions:** read -> optional state action.
+- **Preconditions:** Booking is visible to this doctor.
+- **Entry point:** queue row or `/booking_open`.
+- **Main flow:** doctor opens booking card and enters treatment-related operational context.
+- **Outbound messages / notifications:** booking card render.
+- **State / object transitions:** read/navigation until doctor acts.
 - **Current implementation status:** **Implemented**.
-- **Evidence:** `docs/16-4_booking_card_profile.md` doctor booking card profile; `docs/70_bot_flows.md` open current booking listed as canonical.
-- **Known gaps / comments:** None blocking for base open path.
+- **Evidence:** `app/interfaces/bots/doctor/router.py` (`booking_open`, booking callbacks); `docs/72_admin_doctor_owner_ui_contracts.md`.
+- **Known gaps / comments:** none blocking at base acceptance level.
 
 ### DOC-003 — Mark in service / start encounter
 - **Actor / persona:** Doctor.
-- **Preconditions:** booking arrived/eligible for encounter start.
-- **Entry point:** doctor booking card action.
-- **Main flow:** doctor marks encounter start.
-- **Outbound messages / notifications:** internal operational update; optional downstream signals.
-- **State / object transitions:** `checked_in` -> `in_service`.
+- **Preconditions:** Booking is visible and in a valid state.
+- **Entry point:** booking action from doctor booking card.
+- **Main flow:** doctor marks booking progression to `checked_in`, `in_service`, or similar operational state.
+- **Outbound messages / notifications:** updated card/state messaging.
+- **State / object transitions:** booking state transitions through doctor-allowed actions.
 - **Current implementation status:** **Implemented**.
-- **Evidence:** canonical statuses in README and booking docs; doctor operational actions in booking card profile.
-- **Known gaps / comments:** Check-in ownership should remain policy-consistent with admin flow.
+- **Evidence:** `app/application/doctor/operations.py` (`DOCTOR_ALLOWED_ACTIONS`); `app/interfaces/bots/doctor/router.py` (`booking_action`).
+- **Known gaps / comments:** encounter lifecycle is intentionally bounded and does not try to mimic a giant EMR from day one.
 
 ### DOC-004 — Add quick note / see relevant patient context
 - **Actor / persona:** Doctor.
-- **Preconditions:** current booking selected.
-- **Entry point:** booking context during encounter.
-- **Main flow:** doctor reviews compact patient/booking context and records quick note.
-- **Outbound messages / notifications:** minimal operational confirmations.
-- **State / object transitions:** chart/note projection update (without redefining booking truth).
+- **Preconditions:** Doctor can access the patient/booking.
+- **Entry point:** `/patient_open`, `/chart_open`, `/encounter_open`, `/encounter_note`.
+- **Main flow:** doctor opens current patient/chart context and adds or reviews concise encounter information.
+- **Outbound messages / notifications:** chart/encounter note response.
+- **State / object transitions:** encounter or chart note content updates.
 - **Current implementation status:** **Partial**.
-- **Evidence:** `docs/10_architecture.md` doctor contour includes quick notes/context; `docs/16-4_booking_card_profile.md` chart boundary and compact contextual hints.
-- **Known gaps / comments:** Full encounter note UX path is not fully evidenced in provided convergence docs.
+- **Evidence:** `app/interfaces/bots/doctor/router.py` (`patient_open`, `chart_open`, `encounter_open`, `encounter_note`); clinical/chart docs and reports.
+- **Known gaps / comments:** baseline context exists, but this is still intentionally narrower than a full deep-chart workplace.
 
 ### DOC-005 — Issue recommendation
-- **Actor / persona:** Doctor (or lead doctor operationally).
-- **Preconditions:** encounter context exists.
-- **Entry point:** doctor booking/encounter action.
-- **Main flow:** issue recommendation and link to patient/care path.
-- **Outbound messages / notifications:** patient recommendation message, localized copy.
-- **State / object transitions:** recommendation object created/linked to booking/patient.
-- **Current implementation status:** **Implemented (core) / Partial (full downstream breadth)**.
-- **Evidence:** `docs/70_bot_flows.md` doctor canonical flow includes issue recommendation; `docs/60_care_commerce.md` recommendation-first care model; `docs/report/PR_12B1_REPORT.md` doctor linked recommendation open convergence.
-- **Known gaps / comments:** Full downstream patient/document/care expansion remains staged across packs.
-
-### DOC-006 — Open linked care-order
 - **Actor / persona:** Doctor.
-- **Preconditions:** linked care order exists for booking/patient.
-- **Entry point:** booking linked object action.
-- **Main flow:** open bounded care-order panel and return to booking flow.
-- **Outbound messages / notifications:** localized panel text.
-- **State / object transitions:** primarily navigation/read.
+- **Preconditions:** Doctor has valid patient/booking context.
+- **Entry point:** `/recommend_issue`.
+- **Main flow:** doctor issues recommendation linked to patient/booking context.
+- **Outbound messages / notifications:** recommendation creation feedback and later patient/admin visibility.
+- **State / object transitions:** recommendation created/issued.
 - **Current implementation status:** **Implemented**.
-- **Evidence:** `docs/report/PR_12B1_REPORT.md` doctor linked care-order placeholder replaced with bounded panel and tests.
-- **Known gaps / comments:** Does not imply complete doctor-side care fulfillment console.
+- **Evidence:** `app/interfaces/bots/doctor/router.py` (`recommend_issue`); recommendation service; related product docs.
+- **Known gaps / comments:** recommendation analytics and broader uptake reporting belong to owner/business layer.
 
-### DOC-007 — Complete encounter
+### DOC-006 — Open linked care-order from booking
 - **Actor / persona:** Doctor.
-- **Preconditions:** booking in service.
-- **Entry point:** booking/encounter completion action.
-- **Main flow:** doctor marks completion and triggers post-visit continuity outputs.
-- **Outbound messages / notifications:** completion-linked follow-up/recommendation/aftercare where configured.
-- **State / object transitions:** `in_service` -> `completed`.
-- **Current implementation status:** **Implemented (status path) / Partial (post-visit bundle consistency)**.
-- **Evidence:** canonical status model in README + booking docs; doctor flow completion intent in `docs/70_bot_flows.md`.
-- **Known gaps / comments:** Post-visit unified messaging and linked patient document surfaces are not universally closed.
+- **Preconditions:** Booking has linked care-order context.
+- **Entry point:** booking linked object action.
+- **Main flow:** doctor opens bounded care-order panel from booking and returns safely.
+- **Outbound messages / notifications:** localized care-order panel.
+- **State / object transitions:** mainly read/navigation.
+- **Current implementation status:** **Implemented**.
+- **Evidence:** `docs/report/PR_12B1_REPORT.md`; `app/interfaces/bots/doctor/router.py` linked care-order branch after convergence.
+- **Known gaps / comments:** doctor is not the warehouse operator; this is a clinical/operational awareness surface, not a fulfillment console.
+
+### DOC-007 — Complete encounter / visit
+- **Actor / persona:** Doctor.
+- **Preconditions:** Booking is in a progressable state.
+- **Entry point:** doctor booking action.
+- **Main flow:** doctor marks booking as completed and finishes visit-side operational progression.
+- **Outbound messages / notifications:** updated booking card/state messaging.
+- **State / object transitions:** booking progresses to `completed` when valid.
+- **Current implementation status:** **Implemented**.
+- **Evidence:** `app/application/doctor/operations.py`; `app/interfaces/bots/doctor/router.py` (`booking_action`).
+- **Known gaps / comments:** deeper post-visit document delivery and broader patient follow-up are separate layers.
+
+### DOC-DOC-001 — Doctor document registry / open / download
+- **Actor / persona:** Doctor.
+- **Preconditions:** Generated document exists or can be generated for booking context.
+- **Entry point:** `/doc_generate`, `/doc_registry_booking`, `/doc_open`, `/doc_download`, `/doc_regenerate`.
+- **Main flow:** doctor generates or opens a booking-linked document and downloads the artifact when supported.
+- **Outbound messages / notifications:** registry, metadata card, Telegram document delivery.
+- **State / object transitions:** generated artifact created or retrieved.
+- **Current implementation status:** **Implemented**.
+- **Evidence:** `app/interfaces/bots/doctor/router.py`; `docs/report/PR_12B2_REPORT.md`; `docs/65_document_templates_and_043_mapping.md`.
+- **Known gaps / comments:** this is a staff-side document baseline, not patient delivery.
 
 ---
 
-## 8. Owner scenarios
+## 9. Owner scenarios
 
 ### OWN-001 — Open daily digest
 - **Actor / persona:** Owner.
-- **Preconditions:** owner role binding and digest projections available.
-- **Entry point:** OwnerBot digest command.
-- **Main flow:** owner opens compact daily digest and scans key clinic signals.
-- **Outbound messages / notifications:** daily digest message/panel.
-- **State / object transitions:** projection read only.
-- **Current implementation status:** **Partial**.
-- **Evidence:** `docs/70_bot_flows.md` owner daily digest canonical flow; `docs/10_architecture.md` owner contour responsibilities.
-- **Known gaps / comments:** This map does not assert full runtime parity across all digest slices.
+- **Preconditions:** Owner role binding exists.
+- **Entry point:** `/owner_digest`.
+- **Main flow:** owner opens latest digest with booking and alert counts.
+- **Outbound messages / notifications:** digest message.
+- **State / object transitions:** read-only projection consumption.
+- **Current implementation status:** **Implemented**.
+- **Evidence:** `app/interfaces/bots/owner/router.py` (`owner_digest`); owner analytics service.
+- **Known gaps / comments:** digest is intentionally compact, not a BI warehouse.
 
 ### OWN-002 — Open live clinic snapshot
 - **Actor / persona:** Owner.
-- **Preconditions:** real-time/projection snapshot available.
-- **Entry point:** owner snapshot action.
-- **Main flow:** owner opens live state snapshot for current operational pulse.
-- **Outbound messages / notifications:** snapshot panel.
-- **State / object transitions:** projection read only.
-- **Current implementation status:** **Partial**.
-- **Evidence:** `docs/70_bot_flows.md` live snapshot canonical flow; `docs/10_architecture.md` owner contour.
-- **Known gaps / comments:** Implementation depth per metric dimension may vary.
+- **Preconditions:** Owner role binding exists.
+- **Entry point:** `/owner_today`.
+- **Main flow:** owner opens current clinic snapshot for today.
+- **Outbound messages / notifications:** snapshot message.
+- **State / object transitions:** read-only projection consumption.
+- **Current implementation status:** **Implemented**.
+- **Evidence:** `app/interfaces/bots/owner/router.py` (`owner_today`); owner analytics service.
+- **Known gaps / comments:** current snapshot is compact; deeper drilldowns remain limited.
 
 ### OWN-003 — Open anomaly / exception view
 - **Actor / persona:** Owner.
-- **Preconditions:** exception/anomaly projections produced.
-- **Entry point:** owner anomaly command or digest drill-down.
-- **Main flow:** owner reviews anomalies (e.g., reminder/no-show/backlog patterns) and may drill into bounded context.
-- **Outbound messages / notifications:** anomaly panel/alerts.
-- **State / object transitions:** projection read, optional drill-down navigation.
-- **Current implementation status:** **Partial**.
-- **Evidence:** `docs/70_bot_flows.md` anomaly and exception flows; owner visibility principles in architecture.
-- **Known gaps / comments:** Calendar mirror UI absence for admin does not block owner anomaly read models but reduces some operational transparency chains.
+- **Preconditions:** Owner alerts exist.
+- **Entry point:** `/owner_alerts`, `/owner_alert_open`.
+- **Main flow:** owner lists alerts and opens a specific anomaly/exception item.
+- **Outbound messages / notifications:** alert list and alert detail.
+- **State / object transitions:** read-only analytics/alert consumption.
+- **Current implementation status:** **Implemented**.
+- **Evidence:** `app/interfaces/bots/owner/router.py` (`owner_alerts`, `owner_alert_open`).
+- **Known gaps / comments:** alert model exists, but owner still lacks many planned business drilldowns.
 
 ### OWN-004 — Open care-performance view
 - **Actor / persona:** Owner.
-- **Preconditions:** care-commerce and recommendation projections available.
-- **Entry point:** owner care-performance view.
-- **Main flow:** owner inspects care uptake/attach-rate style performance indicators.
-- **Outbound messages / notifications:** care-performance summary/drill-down panels.
-- **State / object transitions:** analytics projection read.
-- **Current implementation status:** **Partial**.
-- **Evidence:** `docs/70_bot_flows.md` owner care-performance canonical flow; `docs/60_care_commerce.md` owner measurement objective.
-- **Known gaps / comments:** Detailed operator-facing integration UI remains staged (13A-oriented in delta audit).
+- **Preconditions:** Care-commerce metrics are expected at owner level.
+- **Entry point:** dedicated owner care-performance surface.
+- **Main flow:** planned owner view for attach-rate / care-performance visibility.
+- **Outbound messages / notifications:** care-performance summary.
+- **State / object transitions:** read-only analytics consumption.
+- **Current implementation status:** **Missing**.
+- **Evidence:** `docs/50_analytics_and_owner_metrics.md` and `docs/70_bot_flows.md` describe the need; current owner router does not expose a dedicated care-performance command.
+- **Known gaps / comments:** owner surface today is digest/snapshot/alerts baseline, not the full planned analytics set.
 
 ---
 
-## 9. Cross-role notification map
+## 10. Cross-role notification map
 
-Key outbound notifications/messages across roles:
+The key outbound message classes currently intended by the product are:
 
-- **Booking confirmation**
-  - Patient receives booking created/confirmation-needed or confirmed output.
-  - Admin/doctor see booking status chips/queues reflecting confirmation state.
-
-- **Reminder**
-  - Patient receives 24h/same-day/action-required reminder CTAs.
-  - Admin receives exception/no-response visibility in workdesk queues.
-  - Owner sees aggregate impacts/anomalies in digest/snapshot layers.
-
-- **Reschedule/cancel updates**
-  - Patient receives update acknowledgement and next-step panel.
-  - Admin queue/workdesk reflects changed operational load.
-  - Calendar mirror (when present) reflects DentFlow-side changes as projection only.
-
-- **Recommendation / aftercare**
-  - Doctor/admin initiate recommendation-linked continuity actions.
-  - Patient receives localized recommendation/aftercare guidance.
-  - Owner receives uptake/performance projection signals.
-
-- **Care reserve/pickup related notifications**
-  - Patient receives reserve/pickup readiness updates.
-  - Admin sees pickup queue and linked booking/patient context.
-  - Owner observes care attach/performance patterns.
+| Notification class | Primary recipient(s) | Current role meaning | Current status |
+|---|---|---|---|
+| Booking creation / success | Patient | Confirms created booking and starts reminder lifecycle | Implemented |
+| Reminder chain | Patient | Confirms / nudges / routes reschedule-cancel decisions | Implemented |
+| Reminder issue / no-response visibility | Admin, Owner | Makes operational failures visible for rescue or oversight | Partial |
+| Reschedule / cancel updates | Patient, Admin | Keeps booking state aligned across patient and workdesk | Implemented |
+| Recommendation / aftercare | Patient, Doctor, Admin | Clinical follow-up and product-bridge layer | Partial |
+| Care reserve / pickup updates | Patient, Admin | Connects patient care order with reception fulfillment | Partial |
+| Generated document artifact status | Admin, Doctor | Staff-side export/open/download baseline | Implemented |
+| Patient-facing document delivery | Patient | Post-visit export/aftercare artifact delivery | Missing |
+| Owner digest / alerts | Owner | Aggregated clinic visibility | Implemented |
 
 ---
 
-## 10. Current coverage snapshot
+## 11. Current coverage snapshot
 
 | Scenario ID | Role | Status | Primary evidence | Next action if partial/missing |
 |---|---|---|---|---|
-| PAT-001 | Patient | Implemented / Partial | booking flow + booking UI contract + i18n + bot flow docs | Add explicit runtime UX evidence trace for `/start` panel variants and language-first-entry rendering. |
-| PAT-002 | Patient | Implemented | booking Route B + BKG-002 | Monitor continuity edge-cases under branch/availability constraints. |
-| PAT-003 | Patient | Implemented | booking reminder logic + BKG-006/007 | Keep reminder acknowledgements visible in admin/owner projections. |
-| PAT-004 | Patient | Implemented | booking reschedule flow + BKG-008 | Continue validating admin rescue branch under high-load clinics. |
-| PAT-005 | Patient | Implemented | booking cancel flow + BKG-009 | Keep reminder recalculation consistency checks. |
-| PAT-006 | Patient | Implemented | reminder action contract + BKG-006/007 | No immediate gap; maintain localization parity. |
-| PAT-007 | Patient | Partial | bot flow + care-commerce + delta audit | Consolidate end-to-end post-visit continuity visibility (patient-facing linked surfaces). |
-| PAT-008 | Patient | Partial | care-commerce + admin workdesk care queue + bot flow | Complete operator/patient care flow surfaces targeted in follow-up integration stack. |
-| ADM-001 | Admin | Partial | admin workdesk canonical model | Validate/close concrete runtime panel coverage against model. |
-| ADM-002 | Admin | Partial | admin search/workdesk model + architecture | Add/confirm explicit acceptance evidence for search-to-patient open path. |
-| ADM-003 | Admin | Implemented | booking card profile + workdesk booking list/card + 12B linked-open context | None critical. |
-| ADM-004 | Admin | Implemented | canonical statuses + admin actions in workdesk/card docs | Keep role-boundary discipline for check-in ownership. |
-| ADM-005 | Admin | Implemented | admin reschedule queue model + booking reschedule behavior | None critical. |
-| ADM-006 | Admin | Partial | admin confirmations/issues queues + reminder hints | Harden exception-handling acceptance checks as dedicated scenario pack. |
-| ADM-007 | Admin | Implemented | PR_12B1 linked recommendation convergence | Maintain localized bounded panel quality. |
-| ADM-008 | Admin | Implemented / Partial | PR_12B1 linked care-order convergence + care pickup model | Expand full pickup-operation acceptance map beyond linked open path. |
-| ADM-009 | Admin | Missing | calendar projection doc + delta audit missing UI statement | Implement admin calendar mirror UI as read-only projection (13A path). |
-| DOC-001 | Doctor | Partial | bot flow canonical queue + booking card source behavior | Add explicit doctor queue runtime acceptance evidence. |
-| DOC-002 | Doctor | Implemented | doctor booking card + bot flow | None critical. |
-| DOC-003 | Doctor | Implemented | canonical statuses + doctor action model | Keep state transition guardrails aligned with admin check-in ownership. |
-| DOC-004 | Doctor | Partial | architecture doctor contour + booking/chart boundary | Add end-to-end note/context evidence in doctor runtime docs/tests. |
-| DOC-005 | Doctor | Implemented / Partial | doctor recommendation flow + care-commerce + PR_12B1 | Complete broader downstream continuity surfaces. |
-| DOC-006 | Doctor | Implemented | PR_12B1 linked care-order convergence | None critical for linked-open acceptance. |
-| DOC-007 | Doctor | Implemented / Partial | canonical completion status + bot flow | Tighten unified post-completion continuity acceptance trace. |
-| OWN-001 | Owner | Partial | owner digest flow map + architecture owner contour | Add implementation-facing evidence map for digest widgets. |
-| OWN-002 | Owner | Partial | owner live snapshot flow map | Add runtime acceptance evidence for snapshot consistency. |
-| OWN-003 | Owner | Partial | owner anomaly/exception flow map | Expand anomaly scenario evidence and drill-down linkage map. |
-| OWN-004 | Owner | Partial | owner care-performance flow + care-commerce objectives | Add measurable acceptance hooks for care KPIs and projections. |
+| PAT-001 | Patient | Partial | patient router + booking docs | polish `/start`, add true home CTA panel, explicit review-before-finalize, human labels in success copy |
+| PAT-002 | Patient | Partial | patient router + booking docs | add stronger continuity-first UX for returning patients |
+| PAT-003 | Patient | Implemented | patient router + reminder flows | keep regression coverage |
+| PAT-004 | Patient | Implemented | patient router reschedule callbacks | keep regression coverage |
+| PAT-005 | Patient | Implemented | patient router cancel callbacks | keep regression coverage |
+| PAT-006 | Patient | Implemented | reminder callback flow | keep regression coverage |
+| PAT-007 | Patient | Partial | recommendation routes + care docs | deepen aftercare/document bridge |
+| PAT-008 | Patient | Partial | care router flows + admin pickup docs | finish commercial/operator polish |
+| PAT-DOC-001 | Patient | Missing | document docs + convergence reports | design patient-facing artifact delivery |
+| ADM-001 | Admin | Implemented | admin workdesk routes | continue workdesk polish only as needed |
+| ADM-002 | Admin | Implemented | admin patient search/list routes | add governance/reporting companion surfaces separately |
+| ADM-003 | Admin | Implemented | booking open/card routes | keep regression coverage |
+| ADM-004 | Admin | Implemented | admin booking actions | keep regression coverage |
+| ADM-005 | Admin | Implemented | admin reschedules | keep regression coverage |
+| ADM-006 | Admin | Partial | confirmations/issues queues | strengthen rescue/issue-control acceptance where needed |
+| ADM-007 | Admin | Implemented | PR 12B-1 + admin router | keep regression coverage |
+| ADM-008 | Admin | Implemented | PR 12B-1 + pickup routes | separate governance/catalog concerns into 73 |
+| ADM-009 | Admin | Partial | calendar projection docs + integration code | build visible admin mirror surface if product still wants it |
+| ADM-DOC-001 | Admin | Implemented | export services + admin doc commands | embed deeper into contextual workdesk only if needed |
+| ADM-DOC-002 | Admin | Implemented | PR 12B-2 + admin doc routes | keep provider support bounded |
+| DOC-001 | Doctor | Implemented | doctor queue routes | keep regression coverage |
+| DOC-002 | Doctor | Implemented | doctor booking open | keep regression coverage |
+| DOC-003 | Doctor | Implemented | doctor booking actions | keep regression coverage |
+| DOC-004 | Doctor | Partial | doctor chart/patient/note routes | deepen only if operationally needed |
+| DOC-005 | Doctor | Implemented | recommendation issue route | keep regression coverage |
+| DOC-006 | Doctor | Implemented | PR 12B-1 + doctor router | keep regression coverage |
+| DOC-007 | Doctor | Implemented | doctor booking actions | keep regression coverage |
+| DOC-DOC-001 | Doctor | Implemented | doctor doc routes + PR 12B-2 | keep provider support bounded |
+| OWN-001 | Owner | Implemented | owner digest route | extend only if business needs real drilldowns |
+| OWN-002 | Owner | Implemented | owner today route | extend only if business needs real drilldowns |
+| OWN-003 | Owner | Implemented | owner alerts routes | extend only if business needs real drilldowns |
+| OWN-004 | Owner | Missing | owner metrics docs only | define and implement care-performance owner surface |
 
 ---
 
-### Notes for audit use
+## 12. Relationship to governance and next-step control
 
-- This scenario map intentionally separates **role journeys** from **UI callback contracts** and **test-case scripts**.
-- Calendar remains projection/mirror only; DentFlow remains operational truth.
-- Where evidence is not closure-grade, status is marked Partial/Missing instead of inferred complete.
+This document answers:
+- what real users and staff should be able to do;
+- how far each role journey has progressed.
+
+It does **not** answer, in full:
+- who governs patient base as a clinic asset;
+- how doctor/staff registry changes are managed;
+- how chief-doctor authority should be represented;
+- what belongs in Google Sheets vs DentFlow vs Google Calendar;
+- how generated document families should be governed beyond current staff baseline.
+
+Those questions are covered in:
+- `docs/73_governance_and_reference_ops.md`
+
+The practical reading order should now be:
+1. `docs/70_bot_flows.md` — role map
+2. `docs/71_role_scenarios_and_acceptance.md` — scenario acceptance reality
+3. `docs/73_governance_and_reference_ops.md` — governance/master-data operating model
+4. `booking_docs/*` and UI contract docs — lower-level detail
