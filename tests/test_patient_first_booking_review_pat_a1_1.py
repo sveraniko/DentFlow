@@ -110,8 +110,15 @@ class _BookingFlowStub:
         self.validate_callback_result = True
         self.finalize_result = "success"
         self.finalize_calls = 0
+        self.start_or_resume_calls = 0
+        self.start_or_resume_existing_calls = 0
 
     async def start_or_resume_session(self, **kwargs):  # noqa: ANN003
+        self.start_or_resume_calls += 1
+        return self.session
+
+    async def start_or_resume_existing_booking_session(self, **kwargs):  # noqa: ANN003
+        self.start_or_resume_existing_calls += 1
         return self.session
 
     async def determine_resume_panel(self, **kwargs):  # noqa: ANN003
@@ -228,6 +235,30 @@ def test_contact_submission_stops_at_review_ready_panel() -> None:
     assert booking_flow.session.status == "review_ready"
     assert "Review your booking before confirming" in msg.answers[-1][0]
     assert msg.answers[-1][1].inline_keyboard[0][0].callback_data == "book:confirm:sess_1"
+
+
+def test_start_renders_inline_patient_home_panel() -> None:
+    router, _, _ = _build_router_and_flow()
+    msg = _Message(text="/start", user_id=1001)
+
+    asyncio.run(_handler(router, "start")(msg))
+
+    text, keyboard = msg.answers[-1]
+    assert "Choose an action" in text
+    callbacks = [row[0].callback_data for row in keyboard.inline_keyboard]
+    assert callbacks == ["phome:book", "phome:my_booking"]
+
+
+def test_home_book_callback_reuses_booking_entry_helper() -> None:
+    router, booking_flow, runtime = _build_router_and_flow()
+    callback = _Callback(data="phome:book", user_id=1001, message_id=501)
+
+    asyncio.run(_handler(router, "patient_home_book", kind="callback")(callback))
+
+    assert booking_flow.start_or_resume_calls == 1
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_session_id"] == "sess_1"
+    assert callback.answers[-1] == "Share your phone contact or type the number in chat."
 
 
 def test_explicit_confirm_callback_finalizes_booking() -> None:
