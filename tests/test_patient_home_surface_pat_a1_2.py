@@ -1,0 +1,263 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
+
+from app.application.booking.orchestration_outcomes import OrchestrationSuccess
+from app.application.booking.telegram_flow import BookingResumePanel
+from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
+from app.common.i18n import I18nService
+from app.domain.booking import BookingSession
+from app.domain.clinic_reference.models import Branch, Clinic
+from app.interfaces.bots.patient.router import make_router
+from app.interfaces.cards import CardCallbackCodec, CardRuntimeCoordinator, CardRuntimeStateStore
+from app.interfaces.cards.runtime_state import InMemoryRedis
+
+
+class _Bot:
+    async def edit_message_text(self, **kwargs):  # noqa: ANN003
+        return None
+
+
+class _Message:
+    def __init__(self, text: str, user_id: int = 1001) -> None:
+        self.text = text
+        self.bot = _Bot()
+        self.chat = SimpleNamespace(id=9001)
+        self.from_user = SimpleNamespace(id=user_id, full_name="Pat One")
+        self.answers: list[tuple[str, object | None]] = []
+
+    async def answer(self, text: str, reply_markup=None):
+        self.answers.append((text, reply_markup))
+        return SimpleNamespace(chat=self.chat, message_id=500 + len(self.answers))
+
+
+class _CallbackMessage:
+    def __init__(self, message_id: int) -> None:
+        self.chat = SimpleNamespace(id=9001)
+        self.message_id = message_id
+        self.edits: list[tuple[str, object | None]] = []
+
+    async def edit_text(self, text: str, reply_markup=None):
+        self.edits.append((text, reply_markup))
+
+
+class _Callback:
+    def __init__(self, data: str, *, user_id: int, message_id: int = 500) -> None:
+        self.data = data
+        self.bot = _Bot()
+        self.chat = SimpleNamespace(id=9001)
+        self.from_user = SimpleNamespace(id=user_id)
+        self.message = _CallbackMessage(message_id=message_id)
+        self.answers: list[str] = []
+
+    async def answer(self, text: str = "", show_alert: bool = False, reply_markup=None) -> None:
+        if text:
+            self.answers.append(text)
+        return SimpleNamespace(chat=self.chat, message_id=self.message.message_id)
+
+
+class _ReminderActions:
+    async def handle_action(self, **kwargs):  # noqa: ANN003
+        return SimpleNamespace(kind="invalid")
+
+
+class _BookingFlowStub:
+    def __init__(self) -> None:
+        now = datetime(2026, 4, 22, 10, 0, tzinfo=timezone.utc)
+        self.session = BookingSession(
+            booking_session_id="sess_1",
+            clinic_id="clinic_main",
+            branch_id="branch_1",
+            telegram_user_id=1001,
+            resolved_patient_id="pat_1",
+            status="awaiting_contact_confirmation",
+            route_type="service_first",
+            service_id="service_consult",
+            urgency_type=None,
+            requested_date_type=None,
+            requested_date=None,
+            time_window=None,
+            doctor_preference_type="any",
+            doctor_id=None,
+            doctor_code_raw=None,
+            selected_slot_id=None,
+            selected_hold_id=None,
+            contact_phone_snapshot=None,
+            notes=None,
+            expires_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        self.start_or_resume_calls = 0
+        self.start_or_resume_existing_calls = 0
+
+    async def start_or_resume_session(self, **kwargs):  # noqa: ANN003
+        self.start_or_resume_calls += 1
+        return self.session
+
+    async def start_or_resume_existing_booking_session(self, **kwargs):  # noqa: ANN003
+        self.start_or_resume_existing_calls += 1
+        return self.session
+
+    async def determine_resume_panel(self, **kwargs):  # noqa: ANN003
+        return BookingResumePanel(panel_key="contact_collection", booking_session=self.session)
+
+    def list_services(self, *, clinic_id: str):
+        return []
+
+    def list_doctors(self, *, clinic_id: str, branch_id: str | None = None):
+        return []
+
+    async def list_slots_for_session(self, **kwargs):  # noqa: ANN003
+        return []
+
+    async def select_slot(self, **kwargs):  # noqa: ANN003
+        return OrchestrationSuccess(kind="success", entity=self.session)
+
+
+class _RecommendationRepoStub:
+    async def find_patient_id_by_telegram_user(self, *, clinic_id: str, telegram_user_id: int) -> str:
+        return "pat_1"
+
+
+class _RecommendationServiceStub:
+    def __init__(self) -> None:
+        self.list_calls = 0
+
+    async def list_for_patient(self, *, patient_id: str):
+        self.list_calls += 1
+        return []
+
+
+class _CareServiceStub:
+    def __init__(self) -> None:
+        self.list_categories_calls = 0
+
+    async def list_catalog_categories(self, *, clinic_id: str):
+        self.list_categories_calls += 1
+        return []
+
+
+def _reference() -> ClinicReferenceService:
+    repo = InMemoryClinicReferenceRepository()
+    repo.upsert_clinic(Clinic(clinic_id="clinic_main", code="MAIN", display_name="Main", timezone="UTC", default_locale="en"))
+    repo.upsert_branch(Branch(branch_id="branch_1", clinic_id="clinic_main", display_name="Main Branch", address_text="-", timezone="UTC"))
+    return ClinicReferenceService(repo)
+
+
+def _handler(router, name: str, *, kind: str = "message"):
+    handlers = router.message.handlers if kind == "message" else router.callback_query.handlers
+    for h in handlers:
+        if h.callback.__name__ == name:
+            return h.callback
+    raise AssertionError(name)
+
+
+def _build_router(*, with_recommendations: bool, with_care: bool):
+    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+    runtime = CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=InMemoryRedis()))
+    codec = CardCallbackCodec(runtime=runtime)
+    booking_flow = _BookingFlowStub()
+    recommendation_service = _RecommendationServiceStub() if with_recommendations else None
+    care_service = _CareServiceStub() if with_care else None
+    router = make_router(
+        i18n=i18n,
+        booking_flow=booking_flow,
+        reference=_reference(),
+        reminder_actions=_ReminderActions(),
+        recommendation_service=recommendation_service,
+        care_commerce_service=care_service,
+        recommendation_repository=_RecommendationRepoStub(),
+        default_locale="en",
+        card_runtime=runtime,
+        card_callback_codec=codec,
+    )
+    return router, runtime, booking_flow, recommendation_service, care_service
+
+
+def test_start_renders_inline_home_panel_with_localized_actions() -> None:
+    router, _, _, _, _ = _build_router(with_recommendations=True, with_care=True)
+    msg = _Message(text="/start")
+
+    asyncio.run(_handler(router, "start")(msg))
+
+    text, keyboard = msg.answers[-1]
+    assert "Choose an action" in text
+    callbacks = [row[0].callback_data for row in keyboard.inline_keyboard]
+    assert callbacks == ["phome:book", "phome:my_booking", "phome:recommendations", "phome:care"]
+
+
+def test_book_and_home_book_callback_have_equivalent_entry_state() -> None:
+    router, runtime, booking_flow, _, _ = _build_router(with_recommendations=False, with_care=False)
+
+    asyncio.run(_handler(router, "book_entry")(_Message(text="/book", user_id=1001)))
+    state_after_command = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+
+    callback = _Callback(data="phome:book", user_id=1001)
+    asyncio.run(_handler(router, "patient_home_book", kind="callback")(callback))
+    state_after_callback = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+
+    assert booking_flow.start_or_resume_calls == 2
+    assert state_after_command["booking_session_id"] == "sess_1"
+    assert state_after_callback["booking_session_id"] == "sess_1"
+
+
+def test_my_booking_and_home_callback_have_equivalent_entry_state() -> None:
+    router, runtime, booking_flow, _, _ = _build_router(with_recommendations=False, with_care=False)
+
+    asyncio.run(_handler(router, "my_booking_entry")(_Message(text="/my_booking", user_id=1001)))
+    state_after_command = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+
+    callback = _Callback(data="phome:my_booking", user_id=1001)
+    asyncio.run(_handler(router, "patient_home_my_booking", kind="callback")(callback))
+    state_after_callback = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+
+    assert booking_flow.start_or_resume_existing_calls == 2
+    assert state_after_command["booking_mode"] == "existing_lookup_contact"
+    assert state_after_callback["booking_mode"] == "existing_lookup_contact"
+
+
+def test_recommendations_command_and_home_callback_share_entry_when_available() -> None:
+    router, _, _, recommendation_service, _ = _build_router(with_recommendations=True, with_care=False)
+
+    asyncio.run(_handler(router, "recommendations_list")(_Message(text="/recommendations", user_id=1001)))
+    callback = _Callback(data="phome:recommendations", user_id=1001)
+    asyncio.run(_handler(router, "patient_home_recommendations", kind="callback")(callback))
+
+    assert recommendation_service is not None
+    assert recommendation_service.list_calls == 2
+
+
+def test_care_command_and_home_callback_share_entry_when_available() -> None:
+    router, _, _, _, care_service = _build_router(with_recommendations=False, with_care=True)
+
+    asyncio.run(_handler(router, "care_catalog")(_Message(text="/care", user_id=1001)))
+    callback = _Callback(data="phome:care", user_id=1001)
+    asyncio.run(_handler(router, "patient_home_care", kind="callback")(callback))
+
+    assert care_service is not None
+    assert care_service.list_categories_calls == 2
+
+
+def test_home_hides_optional_actions_when_services_unavailable() -> None:
+    router, _, _, _, _ = _build_router(with_recommendations=False, with_care=False)
+    msg = _Message(text="/start")
+
+    asyncio.run(_handler(router, "start")(msg))
+
+    _, keyboard = msg.answers[-1]
+    callbacks = [row[0].callback_data for row in keyboard.inline_keyboard]
+    assert callbacks == ["phome:book", "phome:my_booking"]
+
+
+def test_stale_optional_callback_is_safe_when_service_unavailable() -> None:
+    router, _, _, _, _ = _build_router(with_recommendations=False, with_care=False)
+    callback = _Callback(data="phome:recommendations", user_id=1001)
+
+    asyncio.run(_handler(router, "patient_home_recommendations", kind="callback")(callback))
+
+    texts = [item[0] for item in callback.message.edits] + callback.answers
+    assert "This section is currently unavailable." in texts
