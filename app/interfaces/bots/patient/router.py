@@ -3317,7 +3317,11 @@ def make_router(
                     await callback.message.edit_reply_markup(reply_markup=None)
                 except Exception:
                     pass
-            await callback.answer(i18n.t("patient.reminder.cancel.aborted", _locale()), show_alert=True)
+            continued = await _handoff_reminder_cancel_abort_to_booking_panel(callback, reminder_id=reminder_id)
+            if not continued:
+                await callback.answer(i18n.t("patient.reminder.cancel.aborted", _locale()), show_alert=True)
+            else:
+                await callback.answer()
             return
         outcome = await reminder_actions.handle_action(
             reminder_id=reminder_id,
@@ -3337,6 +3341,49 @@ def make_router(
             await callback.answer(i18n.t("patient.reminder.action.stale", _locale()), show_alert=True)
             return
         await callback.answer(i18n.t("patient.reminder.action.invalid", _locale()), show_alert=True)
+
+    async def _handoff_reminder_cancel_abort_to_booking_panel(callback: CallbackQuery, *, reminder_id: str) -> bool:
+        if not callback.from_user:
+            return False
+        repository = getattr(reminder_actions, "repository", None)
+        get_reminder = getattr(repository, "get_reminder", None)
+        if get_reminder is None:
+            return False
+        reminder = await get_reminder(reminder_id=reminder_id)
+        booking_id = getattr(reminder, "booking_id", None) if reminder is not None else None
+        clinic_id = _primary_clinic_id()
+        if not clinic_id or not booking_id:
+            return False
+        started = await booking_flow.start_existing_booking_control_for_booking(
+            clinic_id=clinic_id,
+            telegram_user_id=callback.from_user.id,
+            booking_id=booking_id,
+        )
+        booking = started.booking
+        session = started.booking_session
+        if started.kind != "ready" or booking is None or session is None:
+            return False
+        flow = await _load_flow_state(callback.from_user.id)
+        flow.booking_session_id = session.booking_session_id
+        flow.booking_mode = "existing_booking_control"
+        flow.reschedule_booking_id = ""
+        await _save_flow_state(callback.from_user.id, flow)
+        locale = _locale()
+        header = i18n.t("patient.reminder.cancel.aborted", locale)
+        booking_text = _render_patient_booking_panel(booking=booking, session_state_token=session.booking_session_id, locale=locale)
+        keyboard = await _build_patient_booking_controls_keyboard(
+            booking=booking,
+            session_state_token=session.booking_session_id,
+            locale=locale,
+        )
+        await _send_fresh_booking_panel_from_callback(
+            callback=callback,
+            actor_id=callback.from_user.id,
+            session_id=session.booking_session_id,
+            text=f"{header}\n\n{booking_text}",
+            keyboard=keyboard,
+        )
+        return True
 
     @router.callback_query(F.data.startswith("mybk:waitlist:"))
     async def join_waitlist(callback: CallbackQuery) -> None:

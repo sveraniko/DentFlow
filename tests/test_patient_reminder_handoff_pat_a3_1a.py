@@ -10,6 +10,7 @@ import pytest
 from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
 from app.common.i18n import I18nService
 from app.domain.booking import Booking
+from app.domain.communication import ReminderJob
 from app.domain.clinic_reference.models import Branch, Clinic, Doctor, Service
 from app.interfaces.bots.patient.router import make_router
 from app.interfaces.cards import BookingRuntimeSnapshot, CardCallbackCodec, CardRuntimeCoordinator, CardRuntimeStateStore, PanelFamily
@@ -57,6 +58,7 @@ class _ReminderActions:
         self._outcome_reason = outcome_reason
         self._booking_id = booking_id
         self.calls: list[dict[str, object | None]] = []
+        self.repository = _ReminderRepository(booking_id=booking_id)
 
     async def handle_action(self, **kwargs):  # noqa: ANN003
         self.calls.append(kwargs)
@@ -128,6 +130,34 @@ class _BookingFlowStub:
             reminder_summary=None,
             reschedule_summary=None,
         )
+
+
+class _ReminderRepository:
+    def __init__(self, *, booking_id: str | None) -> None:
+        now = datetime(2026, 4, 22, 10, 0, tzinfo=timezone.utc)
+        self._reminder = ReminderJob(
+            reminder_id="rem_1",
+            clinic_id="clinic_main",
+            patient_id="pat_1",
+            booking_id=booking_id,
+            care_order_id=None,
+            recommendation_id=None,
+            reminder_type="booking_confirmation",
+            channel="telegram",
+            status="sent",
+            scheduled_for=now,
+            payload_key="booking.confirmation",
+            locale_at_send_time="en",
+            planning_group="g1",
+            supersedes_reminder_id=None,
+            created_at=now,
+            updated_at=now,
+        )
+
+    async def get_reminder(self, *, reminder_id: str) -> ReminderJob | None:
+        if reminder_id != "rem_1":
+            return None
+        return self._reminder
 
 
 def _reference() -> ClinicReferenceService:
@@ -273,10 +303,15 @@ def test_reminder_cancel_abort_does_not_mutate_booking() -> None:
 
     assert reminder_actions.calls == []
     assert callback.message.reply_markup_cleared == 1
-    assert callback.message.answers == []
-    assert callback.answered[-1] == ("Cancellation aborted.", True)
+    sent_text, sent_keyboard = callback.message.answers[-1]
+    assert "Cancellation aborted." in sent_text
+    assert "Consultation" in sent_text
+    assert sent_keyboard is not None
+    assert callback.answered[-1] == ("", False)
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "existing_booking_control"
     active = asyncio.run(runtime.resolve_active_panel(actor_id=1001, panel_family=PanelFamily.BOOKING_DETAIL))
-    assert active is None
+    assert active is not None
 
 
 def test_accepted_handoff_without_booking_context_uses_safe_fallback() -> None:
