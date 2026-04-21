@@ -954,3 +954,50 @@ def test_start_existing_booking_control_for_booking_creates_fresh_bound_session(
     assert started.booking_session is not None
     assert started.booking_session.route_type == "existing_booking_control"
     assert started.booking_session.resolved_patient_id == "pat_owner"
+
+
+def test_start_patient_reschedule_session_creates_prefilled_reschedule_session() -> None:
+    flow, repo, _ = _build_flow(finder_rows=[])
+    now = datetime(2026, 4, 16, 11, 0, tzinfo=timezone.utc)
+    repo.bookings["b_resch"] = Booking(
+        booking_id="b_resch",
+        clinic_id="clinic_main",
+        branch_id="branch_1",
+        patient_id="pat_owner",
+        doctor_id="doctor_1",
+        service_id="service_consult",
+        slot_id="slot_1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=now + timedelta(days=1),
+        scheduled_end_at=now + timedelta(days=1, minutes=30),
+        status="reschedule_requested",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=None,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    started = asyncio.run(
+        flow.start_patient_reschedule_session(
+            clinic_id="clinic_main",
+            telegram_user_id=8112,
+            booking_id="b_resch",
+        )
+    )
+
+    assert started.kind == "ready"
+    assert started.booking_session is not None
+    assert started.booking_session.route_type == "reschedule_booking_control"
+    assert started.booking_session.branch_id == "branch_1"
+    assert started.booking_session.resolved_patient_id == "pat_owner"
+    assert started.booking_session.service_id == "service_consult"
+    assert started.booking_session.doctor_preference_type == "specific"
+    assert started.booking_session.doctor_id == "doctor_1"
