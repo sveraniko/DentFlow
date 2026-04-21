@@ -44,6 +44,8 @@ from app.interfaces.cards import (
     SourceRef,
 )
 
+_TERMINAL_RECOMMENDATION_STATUSES = {"accepted", "declined", "withdrawn", "expired"}
+
 
 @dataclass(slots=True)
 class _CareViewState:
@@ -1970,23 +1972,155 @@ def make_router(
             )
             return
         rows = await recommendation_service.list_for_patient(patient_id=patient_id)
+        await _render_recommendations_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id="patient_home",
+            rows=rows,
+        )
+
+    def _recommendation_type_label(*, recommendation_type: str, locale: str) -> str:
+        key = f"patient.recommendations.type.{recommendation_type}"
+        translated = i18n.t(key, locale)
+        if translated != key:
+            return translated
+        return recommendation_type.replace("_", " ").strip().title() or i18n.t("patient.booking.review.value.missing", locale)
+
+    def _recommendation_status_label(*, status: str, locale: str) -> str:
+        key = f"patient.recommendations.status.{status}"
+        translated = i18n.t(key, locale)
+        if translated != key:
+            return translated
+        return status.replace("_", " ").strip().title() or i18n.t("patient.booking.review.value.missing", locale)
+
+    def _pick_latest_recommendation(rows: list[Any]) -> tuple[Any, list[Any]]:
+        if not rows:
+            return None, []
+        latest = next((row for row in rows if row.status not in _TERMINAL_RECOMMENDATION_STATUSES), rows[0])
+        history = [row for row in rows if row.recommendation_id != latest.recommendation_id]
+        return latest, history
+
+    async def _render_recommendation_detail_panel(
+        *,
+        message: Message | CallbackQuery,
+        actor_id: int,
+        recommendation: Any,
+        session_id: str = "patient_home",
+    ) -> None:
+        locale = _locale()
+        type_label = _recommendation_type_label(recommendation_type=recommendation.recommendation_type, locale=locale)
+        status_label = _recommendation_status_label(status=recommendation.status, locale=locale)
+        text = i18n.t("patient.recommendations.detail.panel", locale).format(
+            title=recommendation.title or i18n.t("patient.booking.review.value.missing", locale),
+            recommendation_type=type_label,
+            status=status_label,
+            body=(recommendation.body_text or i18n.t("patient.booking.review.value.missing", locale)),
+        )
+        keyboard_rows: list[list[InlineKeyboardButton]] = []
+        keyboard_rows.append(
+            [
+                InlineKeyboardButton(
+                    text=i18n.t("patient.recommendations.action.ack.button", locale),
+                    callback_data=f"prec:act:ack:{recommendation.recommendation_id}",
+                ),
+                InlineKeyboardButton(
+                    text=i18n.t("patient.recommendations.action.accept.button", locale),
+                    callback_data=f"prec:act:accept:{recommendation.recommendation_id}",
+                ),
+                InlineKeyboardButton(
+                    text=i18n.t("patient.recommendations.action.decline.button", locale),
+                    callback_data=f"prec:act:decline:{recommendation.recommendation_id}",
+                ),
+            ]
+        )
+        if care_commerce_service is not None:
+            keyboard_rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.recommendations.action.products.button", locale),
+                        callback_data=f"prec:products:{recommendation.recommendation_id}",
+                    )
+                ]
+            )
+        keyboard_rows.append(
+            [InlineKeyboardButton(text=i18n.t("common.back", locale), callback_data="phome:recommendations")]
+        )
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id=session_id,
+            text=text,
+            keyboard=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
+        )
+
+    async def _render_recommendations_panel(
+        *,
+        actor_id: int,
+        message: Message | CallbackQuery,
+        session_id: str,
+        rows: list[Any],
+    ) -> None:
+        locale = _locale()
         if not rows:
             await _send_or_edit_panel(
                 actor_id=actor_id,
                 message=message,
-                session_id="patient_home",
-                text=i18n.t("patient.recommendations.empty", _locale()),
+                session_id=session_id,
+                text=i18n.t("patient.recommendations.empty", locale),
             )
             return
-        lines = [i18n.t("patient.recommendations.title", _locale())]
-        for row in rows[:8]:
-            lines.append(f"• {row.title} [{row.recommendation_type}] ({row.status})")
-            lines.append(f"  /recommendation_open {row.recommendation_id}")
+        latest, history = _pick_latest_recommendation(rows)
+        if latest is None:
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id=session_id,
+                text=i18n.t("patient.recommendations.empty", locale),
+            )
+            return
+        lines = [
+            i18n.t("patient.recommendations.title", locale),
+            "",
+            i18n.t("patient.recommendations.latest.label", locale),
+            f"• {latest.title}",
+            i18n.t("patient.recommendations.summary.line", locale).format(
+                recommendation_type=_recommendation_type_label(recommendation_type=latest.recommendation_type, locale=locale),
+                status=_recommendation_status_label(status=latest.status, locale=locale),
+            ),
+        ]
+        if history:
+            lines.extend(["", i18n.t("patient.recommendations.history.label", locale)])
+            for index, row in enumerate(history[:5], start=1):
+                lines.append(
+                    i18n.t("patient.recommendations.history.item", locale).format(
+                        index=index,
+                        title=row.title,
+                        status=_recommendation_status_label(status=row.status, locale=locale),
+                    )
+                )
+        keyboard_rows: list[list[InlineKeyboardButton]] = [
+            [
+                InlineKeyboardButton(
+                    text=i18n.t("patient.recommendations.open_latest.button", locale),
+                    callback_data=f"prec:open:{latest.recommendation_id}",
+                )
+            ]
+        ]
+        for index, row in enumerate(history[:5], start=1):
+            keyboard_rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.recommendations.open_history.button", locale).format(index=index),
+                        callback_data=f"prec:open:{row.recommendation_id}",
+                    )
+                ]
+            )
         await _send_or_edit_panel(
             actor_id=actor_id,
             message=message,
-            session_id="patient_home",
+            session_id=session_id,
             text="\n".join(lines),
+            keyboard=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
         )
 
     async def _resume_active_reschedule_context(
@@ -2139,14 +2273,15 @@ def make_router(
             return
         if recommendation.status == "issued":
             recommendation = await recommendation_service.mark_viewed(recommendation_id=recommendation.recommendation_id)
-        text = i18n.t("patient.recommendations.detail", _locale()).format(
-            title=recommendation.title if recommendation else "-",
-            body=(recommendation.body_text if recommendation else "-"),
-            recommendation_type=(recommendation.recommendation_type if recommendation else "-"),
-            status=(recommendation.status if recommendation else "-"),
-            recommendation_id=parts[1].strip(),
+        if recommendation is None:
+            await message.answer(i18n.t("patient.recommendations.not_found", _locale()))
+            return
+        await _render_recommendation_detail_panel(
+            message=message,
+            actor_id=message.from_user.id,
+            recommendation=recommendation,
+            session_id="patient_home",
         )
-        await message.answer(text)
 
     @router.message(Command("recommendation_action"))
     async def recommendations_action(message: Message) -> None:
@@ -2176,7 +2311,16 @@ def make_router(
         except ValueError:
             await message.answer(i18n.t("patient.recommendations.action.invalid_state", _locale()))
             return
-        await message.answer(i18n.t("patient.recommendations.action.ok", _locale()).format(status=(updated.status if updated else recommendation.status)))
+        resolved = updated or recommendation
+        if resolved is None:
+            await message.answer(i18n.t("patient.recommendations.not_found", _locale()))
+            return
+        await _render_recommendation_detail_panel(
+            message=message,
+            actor_id=message.from_user.id,
+            recommendation=resolved,
+            session_id="patient_home",
+        )
 
     @router.message(Command("recommendation_products"))
     async def recommendation_products(message: Message) -> None:
@@ -2374,6 +2518,122 @@ def make_router(
         if not callback.from_user:
             return
         await _enter_recommendations_list(callback, actor_id=callback.from_user.id)
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("prec:open:"))
+    async def recommendation_open_callback(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data or recommendation_service is None:
+            return
+        recommendation_id = callback.data.split(":", 2)[2]
+        patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
+        recommendation = await recommendation_service.get(recommendation_id)
+        if not patient_id or recommendation is None or recommendation.patient_id != patient_id:
+            await callback.answer(i18n.t("patient.recommendations.not_found", _locale()), show_alert=True)
+            return
+        if recommendation.status == "issued":
+            recommendation = await recommendation_service.mark_viewed(recommendation_id=recommendation.recommendation_id)
+        if recommendation is None:
+            await callback.answer(i18n.t("patient.recommendations.not_found", _locale()), show_alert=True)
+            return
+        await _render_recommendation_detail_panel(
+            message=callback,
+            actor_id=callback.from_user.id,
+            recommendation=recommendation,
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("prec:act:"))
+    async def recommendation_action_callback(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data or recommendation_service is None:
+            return
+        parts = callback.data.split(":", 3)
+        if len(parts) != 4:
+            await callback.answer(i18n.t("patient.recommendations.action.invalid_state", _locale()), show_alert=True)
+            return
+        action, recommendation_id = parts[2], parts[3]
+        patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
+        recommendation = await recommendation_service.get(recommendation_id)
+        if not patient_id or recommendation is None or recommendation.patient_id != patient_id:
+            await callback.answer(i18n.t("patient.recommendations.not_found", _locale()), show_alert=True)
+            return
+        try:
+            if action == "ack":
+                updated = await recommendation_service.acknowledge(recommendation_id=recommendation_id)
+            elif action == "accept":
+                updated = await recommendation_service.accept(recommendation_id=recommendation_id)
+            elif action == "decline":
+                updated = await recommendation_service.decline(recommendation_id=recommendation_id)
+            else:
+                await callback.answer(i18n.t("patient.recommendations.action.invalid_state", _locale()), show_alert=True)
+                return
+        except ValueError:
+            await callback.answer(i18n.t("patient.recommendations.action.invalid_state", _locale()), show_alert=True)
+            return
+        resolved = updated or recommendation
+        if resolved is None:
+            await callback.answer(i18n.t("patient.recommendations.not_found", _locale()), show_alert=True)
+            return
+        await _render_recommendation_detail_panel(
+            message=callback,
+            actor_id=callback.from_user.id,
+            recommendation=resolved,
+        )
+        await callback.answer(i18n.t("patient.recommendations.action.ok", _locale()).format(status=_recommendation_status_label(status=resolved.status, locale=_locale())))
+
+    @router.callback_query(F.data.startswith("prec:products:"))
+    async def recommendation_products_callback(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data or recommendation_service is None or care_commerce_service is None:
+            return
+        recommendation_id = callback.data.split(":", 2)[2]
+        patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
+        if not patient_id:
+            await callback.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()), show_alert=True)
+            return
+        recommendation = await recommendation_service.get(recommendation_id)
+        if recommendation is None or recommendation.patient_id != patient_id:
+            await callback.answer(i18n.t("patient.recommendations.not_found", _locale()), show_alert=True)
+            return
+        resolution = await care_commerce_service.resolve_recommendation_target_result(
+            clinic_id=_primary_clinic_id() or recommendation.clinic_id,
+            recommendation_id=recommendation.recommendation_id,
+            recommendation_type=recommendation.recommendation_type,
+            locale=_locale(),
+        )
+        if resolution.status == "manual_target_invalid":
+            state = await _care_state(callback.from_user.id)
+            state.recommendation_id = recommendation.recommendation_id
+            state.recommendation_type = recommendation.recommendation_type
+            state.recommendation_reason = recommendation.rationale_text or recommendation.body_text
+            flow = await _load_flow_state(callback.from_user.id)
+            flow.care = state
+            await _save_flow_state(callback.from_user.id, flow)
+            await callback.answer(
+                i18n.t("patient.care.products.manual_target_invalid", _locale()).format(
+                    recommendation_id=recommendation.recommendation_id
+                ),
+                show_alert=True,
+            )
+            return
+        resolved = resolution.products
+        if not resolved:
+            await callback.answer(i18n.t("patient.care.products.empty", _locale()), show_alert=True)
+            return
+        state = await _care_state(callback.from_user.id)
+        state.recommendation_id = recommendation.recommendation_id
+        state.recommendation_type = recommendation.recommendation_type
+        state.recommendation_reason = recommendation.rationale_text or recommendation.body_text
+        state.recommendation_products = [item.care_product_id for item in resolved]
+        state.recommendation_page = 0
+        state.recommendation_source_ref = f"care.recommendation.{recommendation.recommendation_id}"
+        flow = await _load_flow_state(callback.from_user.id)
+        flow.care = state
+        await _save_flow_state(callback.from_user.id, flow)
+        await _render_recommendation_picker(
+            callback,
+            actor_id=callback.from_user.id,
+            clinic_id=_primary_clinic_id() or recommendation.clinic_id,
+            recommendation_id=recommendation.recommendation_id,
+        )
         await callback.answer()
 
     @router.callback_query(F.data == "phome:care")

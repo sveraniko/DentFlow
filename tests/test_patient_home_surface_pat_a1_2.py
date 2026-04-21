@@ -141,10 +141,70 @@ class _RecommendationRepoStub:
 class _RecommendationServiceStub:
     def __init__(self) -> None:
         self.list_calls = 0
+        now = datetime(2026, 4, 22, 11, 0, tzinfo=timezone.utc)
+        self.rows = [
+            SimpleNamespace(
+                recommendation_id="rec_terminal",
+                patient_id="pat_1",
+                recommendation_type="aftercare",
+                status="accepted",
+                title="Older accepted recommendation",
+                body_text="Old body",
+                rationale_text=None,
+                clinic_id="clinic_main",
+                booking_id=None,
+                created_at=now,
+            ),
+            SimpleNamespace(
+                recommendation_id="rec_latest",
+                patient_id="pat_1",
+                recommendation_type="follow_up",
+                status="issued",
+                title="Latest follow-up recommendation",
+                body_text="Latest body",
+                rationale_text=None,
+                clinic_id="clinic_main",
+                booking_id=None,
+                created_at=now,
+            ),
+        ]
+        self.mark_viewed_calls: list[str] = []
+        self.actions: list[tuple[str, str]] = []
 
     async def list_for_patient(self, *, patient_id: str):
         self.list_calls += 1
-        return []
+        return self.rows
+
+    async def get(self, recommendation_id: str):
+        return next((row for row in self.rows if row.recommendation_id == recommendation_id), None)
+
+    async def mark_viewed(self, *, recommendation_id: str):
+        self.mark_viewed_calls.append(recommendation_id)
+        row = await self.get(recommendation_id)
+        if row is not None:
+            row.status = "viewed"
+        return row
+
+    async def acknowledge(self, *, recommendation_id: str):
+        self.actions.append(("ack", recommendation_id))
+        row = await self.get(recommendation_id)
+        if row is not None:
+            row.status = "acknowledged"
+        return row
+
+    async def accept(self, *, recommendation_id: str):
+        self.actions.append(("accept", recommendation_id))
+        row = await self.get(recommendation_id)
+        if row is not None:
+            row.status = "accepted"
+        return row
+
+    async def decline(self, *, recommendation_id: str):
+        self.actions.append(("decline", recommendation_id))
+        row = await self.get(recommendation_id)
+        if row is not None:
+            row.status = "declined"
+        return row
 
 
 class _CareServiceStub:
@@ -282,6 +342,46 @@ def test_recommendations_command_and_home_callback_share_entry_when_available() 
 
     assert recommendation_service is not None
     assert recommendation_service.list_calls == 2
+
+
+def test_recommendations_panel_surfaces_latest_first_without_raw_ids() -> None:
+    router, _, _, recommendation_service, _ = _build_router(with_recommendations=True, with_care=False)
+    message = _Message(text="/recommendations", user_id=1001)
+
+    asyncio.run(_handler(router, "recommendations_list")(message))
+
+    assert recommendation_service is not None
+    text, keyboard = message.answers[-1]
+    assert "Latest recommendation" in text
+    assert "Latest follow-up recommendation" in text
+    assert "History" in text
+    assert "/recommendation_open" not in text
+    buttons = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+    assert buttons[0] == "prec:open:rec_latest"
+
+
+def test_recommendation_open_callback_marks_issued_as_viewed_and_renders_detail() -> None:
+    router, _, _, recommendation_service, _ = _build_router(with_recommendations=True, with_care=False)
+    message = _Message(text="/recommendations", user_id=1001)
+    asyncio.run(_handler(router, "recommendations_list")(message))
+    callback = _Callback(data="prec:open:rec_latest", user_id=1001, message_id=501)
+
+    asyncio.run(_handler(router, "recommendation_open_callback", kind="callback")(callback))
+
+    assert recommendation_service is not None
+    assert recommendation_service.mark_viewed_calls == ["rec_latest"]
+
+
+def test_recommendation_action_callback_updates_lifecycle_and_re_renders_detail() -> None:
+    router, _, _, recommendation_service, _ = _build_router(with_recommendations=True, with_care=False)
+    message = _Message(text="/recommendations", user_id=1001)
+    asyncio.run(_handler(router, "recommendations_list")(message))
+    callback = _Callback(data="prec:act:accept:rec_latest", user_id=1001, message_id=501)
+
+    asyncio.run(_handler(router, "recommendation_action_callback", kind="callback")(callback))
+
+    assert recommendation_service is not None
+    assert ("accept", "rec_latest") in recommendation_service.actions
 
 
 def test_care_command_and_home_callback_share_entry_when_available() -> None:
