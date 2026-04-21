@@ -90,11 +90,18 @@ class _BookingFlowStub:
             updated_at=now,
         )
         self.start_kind = start_kind
+        self.reschedule_start_kind = "ready"
 
     async def start_existing_booking_control_for_booking(self, **kwargs):  # noqa: ANN003
         if self.start_kind != "ready":
             return SimpleNamespace(kind=self.start_kind, booking=None, booking_session=None)
         session = SimpleNamespace(booking_session_id="sess_rem_1")
+        return SimpleNamespace(kind="ready", booking=self.booking, booking_session=session)
+
+    async def start_patient_reschedule_session(self, **kwargs):  # noqa: ANN003
+        if self.reschedule_start_kind != "ready":
+            return SimpleNamespace(kind=self.reschedule_start_kind, booking=None, booking_session=None)
+        session = SimpleNamespace(booking_session_id="sess_rsch_1")
         return SimpleNamespace(kind="ready", booking=self.booking, booking_session=session)
 
     def build_booking_snapshot(self, **kwargs):  # noqa: ANN003
@@ -183,16 +190,26 @@ def test_accepted_reminder_actions_handoff_to_canonical_booking_panel(
     assert callback.message.reply_markup_cleared == 1
     sent_text, sent_keyboard = callback.message.answers[-1]
     assert expected_header in sent_text
-    assert "Consultation" in sent_text
-    assert "Main Branch" in sent_text
-    assert sent_keyboard is not None
-
-    rendered_labels = [button.text for row in sent_keyboard.inline_keyboard for button in row]
-    assert ("Confirm" in rendered_labels) is expect_confirm_button
+    if action == "reschedule":
+        assert "Reschedule mode started." in sent_text
+        assert "select a new time" in sent_text.lower()
+        assert sent_keyboard is not None
+        rendered_labels = [button.text for row in sent_keyboard.inline_keyboard for button in row]
+        assert rendered_labels == ["Select new time"]
+    else:
+        assert "Consultation" in sent_text
+        assert "Main Branch" in sent_text
+        assert sent_keyboard is not None
+        rendered_labels = [button.text for row in sent_keyboard.inline_keyboard for button in row]
+        assert ("Confirm" in rendered_labels) is expect_confirm_button
 
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
-    assert state["booking_session_id"] == "sess_rem_1"
-    assert state["booking_mode"] == "existing_booking_control"
+    if action == "reschedule":
+        assert state["booking_session_id"] == "sess_rsch_1"
+        assert state["booking_mode"] == "reschedule_booking_control"
+    else:
+        assert state["booking_session_id"] == "sess_rem_1"
+        assert state["booking_mode"] == "existing_booking_control"
     active = asyncio.run(runtime.resolve_active_panel(actor_id=1001, panel_family=PanelFamily.BOOKING_DETAIL))
     assert active is not None
 

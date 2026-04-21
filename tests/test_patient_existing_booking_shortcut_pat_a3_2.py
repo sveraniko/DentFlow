@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+from app.application.booking.orchestration_outcomes import OrchestrationSuccess
 from app.application.booking.telegram_flow import BookingResumePanel
 from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
 from app.common.i18n import I18nService
@@ -17,7 +18,11 @@ from app.interfaces.cards.runtime_state import InMemoryRedis
 
 
 class _Bot:
+    def __init__(self) -> None:
+        self.edits: list[dict] = []
+
     async def edit_message_text(self, **kwargs):  # noqa: ANN003
+        self.edits.append(kwargs)
         return None
 
 
@@ -132,6 +137,7 @@ class _BookingFlowStub:
         self.resolve_known_patient_calls = 0
         self.resolve_known_patient_kind = "exact_match"
         self.raise_on_resolve_known_patient = False
+        self.request_reschedule_calls = 0
 
     async def start_or_resume_existing_booking_session(self, **kwargs):  # noqa: ANN003
         self.start_or_resume_existing_calls += 1
@@ -152,6 +158,10 @@ class _BookingFlowStub:
 
     async def start_existing_booking_control_for_booking(self, **kwargs):  # noqa: ANN003
         session = SimpleNamespace(booking_session_id="sess_rem_1")
+        return SimpleNamespace(kind="ready", booking=self.booking, booking_session=session)
+
+    async def start_patient_reschedule_session(self, **kwargs):  # noqa: ANN003
+        session = SimpleNamespace(booking_session_id="sess_rsch_1")
         return SimpleNamespace(kind="ready", booking=self.booking, booking_session=session)
 
     def build_booking_snapshot(self, **kwargs):  # noqa: ANN003
@@ -184,6 +194,10 @@ class _BookingFlowStub:
 
     async def resolve_patient_from_contact(self, **kwargs):  # noqa: ANN003
         raise AssertionError("contact must not be parsed while in existing_booking_control mode")
+
+    async def request_reschedule(self, **kwargs):  # noqa: ANN003
+        self.request_reschedule_calls += 1
+        return OrchestrationSuccess(kind="success", entity=self.booking)
 
 
 class _RepoUnique:
@@ -320,6 +334,28 @@ def test_lookup_unavailable_or_invalid_outcome_falls_back_to_contact_prompt() ->
     asyncio.run(_handler(router_legacy_invalid, "my_booking_entry")(message_legacy))
     assert booking_flow_legacy.resolve_known_patient_calls == 0
     assert booking_flow_legacy.start_or_resume_existing_calls == 1
+
+
+def test_my_booking_reschedule_moves_to_reschedule_start_panel() -> None:
+    router, runtime, booking_flow, _ = _build_router(recommendation_repository=_RepoUnique())
+    asyncio.run(_handler(router, "my_booking_entry")(_Message(text="/my_booking", user_id=1001)))
+    active = asyncio.run(runtime.resolve_active_panel(actor_id=1001, panel_family=PanelFamily.BOOKING_DETAIL))
+    assert active is not None
+    callback = _Callback(data="mybk:reschedule:sess_known:b1", user_id=1001, message_id=active.message_id)
+
+    asyncio.run(_handler(router, "request_reschedule", kind="callback")(callback))
+
+    assert booking_flow.request_reschedule_calls == 1
+    assert callback.bot.edits
+    text = callback.bot.edits[-1]["text"]
+    keyboard = callback.bot.edits[-1]["reply_markup"]
+    assert "Reschedule mode started." in text
+    assert keyboard is not None
+    labels = [button.text for row in keyboard.inline_keyboard for button in row]
+    assert labels == ["Select new time"]
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_session_id"] == "sess_rsch_1"
+    assert state["booking_mode"] == "reschedule_booking_control"
 
 
 def test_contact_input_outside_contact_prompt_mode_is_ignored() -> None:

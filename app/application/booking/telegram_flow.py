@@ -29,6 +29,7 @@ ACTIVE_SESSION_STATUSES: tuple[str, ...] = (
 )
 NEW_BOOKING_ROUTE_TYPES: frozenset[str] = frozenset({"service_first"})
 EXISTING_BOOKING_CONTROL_ROUTE_TYPES: frozenset[str] = frozenset({"existing_booking_control"})
+RESCHEDULE_BOOKING_CONTROL_ROUTE_TYPES: frozenset[str] = frozenset({"reschedule_booking_control"})
 LIVE_EXISTING_BOOKING_STATUSES: frozenset[str] = frozenset({"pending_confirmation", "confirmed", "reschedule_requested", "checked_in", "in_service"})
 
 
@@ -168,6 +169,43 @@ class BookingPatientFlowService:
         if not isinstance(attached, OrchestrationSuccess):
             return ExistingBookingControlStartResult(kind="session_attach_failed", booking=booking)
         return ExistingBookingControlStartResult(kind="ready", booking_session=attached.entity, booking=booking)
+
+    async def start_patient_reschedule_session(
+        self,
+        *,
+        clinic_id: str,
+        telegram_user_id: int,
+        booking_id: str,
+    ) -> ExistingBookingControlStartResult:
+        booking = await self.reads.get_booking(booking_id)
+        if booking is None:
+            return ExistingBookingControlStartResult(kind="booking_missing")
+        if booking.clinic_id != clinic_id:
+            return ExistingBookingControlStartResult(kind="clinic_mismatch", booking=booking)
+        if not booking.doctor_id:
+            return ExistingBookingControlStartResult(kind="session_prefill_failed", booking=booking)
+        started = await self.orchestration.start_booking_session(
+            clinic_id=clinic_id,
+            telegram_user_id=telegram_user_id,
+            route_type="reschedule_booking_control",
+            branch_id=booking.branch_id,
+        )
+        session = started.entity
+        attached = await self.orchestration.attach_resolved_patient_to_session(
+            booking_session_id=session.booking_session_id,
+            patient_id=booking.patient_id,
+        )
+        if not isinstance(attached, OrchestrationSuccess):
+            return ExistingBookingControlStartResult(kind="session_attach_failed", booking=booking)
+        prefilled = await self.orchestration.update_session_context(
+            booking_session_id=attached.entity.booking_session_id,
+            service_id=booking.service_id,
+            doctor_preference_type="specific",
+            doctor_id=booking.doctor_id,
+        )
+        if not isinstance(prefilled, OrchestrationSuccess):
+            return ExistingBookingControlStartResult(kind="session_prefill_failed", booking=booking)
+        return ExistingBookingControlStartResult(kind="ready", booking_session=prefilled.entity, booking=booking)
 
     async def determine_resume_panel(self, *, booking_session_id: str) -> BookingResumePanel | None:
         session = await self.reads.get_booking_session(booking_session_id)
