@@ -39,12 +39,12 @@ class _CallbackMessage:
 
 
 class _Callback:
-    def __init__(self, data: str, *, user_id: int = 1001) -> None:
+    def __init__(self, data: str, *, user_id: int = 1001, message_id: int = 777) -> None:
         self.data = data
         self.bot = _Bot()
         self.chat = SimpleNamespace(id=9001)
         self.from_user = SimpleNamespace(id=user_id)
-        self.message = _CallbackMessage()
+        self.message = _CallbackMessage(message_id=message_id)
         self.answered: list[tuple[str, bool]] = []
 
     async def answer(self, text: str = "", show_alert: bool = False, reply_markup=None) -> None:  # noqa: ARG002
@@ -226,12 +226,14 @@ def test_reminder_cancel_first_tap_shows_confirmation_and_does_not_mutate() -> N
     asyncio.run(_handler(router, "reminder_action_callback")(callback))
 
     assert reminder_actions.calls == []
-    assert callback.message.reply_markup_cleared == 0
+    assert callback.message.reply_markup_cleared == 1
     sent_text, sent_keyboard = callback.message.answers[-1]
     assert sent_text == "Cancel this booking?"
     assert sent_keyboard is not None
     rendered = [button.text for row in sent_keyboard.inline_keyboard for button in row]
     assert rendered == ["Yes", "No"]
+    callback_data = [button.callback_data for row in sent_keyboard.inline_keyboard for button in row]
+    assert callback_data == ["remc:confirm:rem_1:777", "remc:abort:rem_1:777"]
     active = asyncio.run(runtime.resolve_active_panel(actor_id=1001, panel_family=PanelFamily.BOOKING_DETAIL))
     assert active is None
 
@@ -242,7 +244,7 @@ def test_reminder_cancel_confirm_cancels_and_handoffs_to_canonical_panel() -> No
         reminder_actions=reminder_actions,
         booking_flow=_BookingFlowStub(status="canceled"),
     )
-    callback = _Callback("remc:confirm:rem_1", user_id=1001)
+    callback = _Callback("remc:confirm:rem_1:777", user_id=1001, message_id=991)
 
     asyncio.run(_handler(router, "reminder_cancel_confirm_callback")(callback))
 
@@ -265,7 +267,7 @@ def test_reminder_cancel_abort_does_not_mutate_booking() -> None:
         reminder_actions=reminder_actions,
         booking_flow=_BookingFlowStub(status="confirmed"),
     )
-    callback = _Callback("remc:abort:rem_1", user_id=1001)
+    callback = _Callback("remc:abort:rem_1:777", user_id=1001, message_id=991)
 
     asyncio.run(_handler(router, "reminder_cancel_confirm_callback")(callback))
 
@@ -339,6 +341,43 @@ def test_invalid_reminder_callback_is_bounded_and_does_not_handoff() -> None:
     assert callback.message.reply_markup_cleared == 0
     assert callback.message.answers == []
     assert callback.answered[-1] == ("This reminder action is invalid.", True)
+    active = asyncio.run(runtime.resolve_active_panel(actor_id=1001, panel_family=PanelFamily.BOOKING_DETAIL))
+    assert active is None
+
+
+
+def test_reminder_cancel_confirm_with_malformed_payload_is_safe() -> None:
+    reminder_actions = _ReminderActions(outcome_kind="accepted", outcome_reason="booking_canceled", booking_id="b1")
+    router, runtime = _build_router(
+        reminder_actions=reminder_actions,
+        booking_flow=_BookingFlowStub(status="confirmed"),
+    )
+    callback = _Callback("remc:confirm:rem_1", user_id=1001, message_id=991)
+
+    asyncio.run(_handler(router, "reminder_cancel_confirm_callback")(callback))
+
+    assert reminder_actions.calls == []
+    assert callback.message.reply_markup_cleared == 0
+    assert callback.message.answers == []
+    assert callback.answered[-1] == ("This reminder action is invalid.", True)
+    active = asyncio.run(runtime.resolve_active_panel(actor_id=1001, panel_family=PanelFamily.BOOKING_DETAIL))
+    assert active is None
+
+
+def test_reminder_cancel_confirm_stale_outcome_is_safe() -> None:
+    reminder_actions = _ReminderActions(outcome_kind="stale", outcome_reason="reminder_acknowledged", booking_id="b1")
+    router, runtime = _build_router(
+        reminder_actions=reminder_actions,
+        booking_flow=_BookingFlowStub(status="confirmed"),
+    )
+    callback = _Callback("remc:confirm:rem_1:777", user_id=1001, message_id=991)
+
+    asyncio.run(_handler(router, "reminder_cancel_confirm_callback")(callback))
+
+    assert reminder_actions.calls == [{"reminder_id": "rem_1", "action": "cancel", "provider_message_id": "777"}]
+    assert callback.message.reply_markup_cleared == 0
+    assert callback.message.answers == []
+    assert callback.answered[-1] == ("This reminder action is no longer active.", True)
     active = asyncio.run(runtime.resolve_active_panel(actor_id=1001, panel_family=PanelFamily.BOOKING_DETAIL))
     assert active is None
 

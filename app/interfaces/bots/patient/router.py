@@ -3250,40 +3250,67 @@ def make_router(
             return
         await callback.answer(i18n.t("patient.reminder.action.invalid", _locale()), show_alert=True)
 
+    def _encode_reminder_cancel_callback(*, action: str, reminder_id: str, provider_message_id: str) -> str:
+        return f"remc:{action}:{reminder_id}:{provider_message_id}"
+
+    def _parse_reminder_cancel_callback_payload(data: str) -> tuple[str, str, str] | None:
+        callback_parts = data.split(":", 3)
+        if len(callback_parts) != 4:
+            return None
+        _, action, reminder_id, provider_message_id = callback_parts
+        if action not in {"confirm", "abort"}:
+            return None
+        if not reminder_id or not provider_message_id or not provider_message_id.isdigit():
+            return None
+        return action, reminder_id, provider_message_id
+
     async def _show_reminder_cancel_confirm_prompt(callback: CallbackQuery, *, reminder_id: str) -> None:
+        if callback.message is None:
+            await callback.answer(i18n.t("patient.reminder.cancel.confirm", _locale()), show_alert=True)
+            return
+        original_message_id = str(callback.message.message_id)
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
                         text=i18n.t("common.yes", _locale()),
-                        callback_data=f"remc:confirm:{reminder_id}",
+                        callback_data=_encode_reminder_cancel_callback(
+                            action="confirm",
+                            reminder_id=reminder_id,
+                            provider_message_id=original_message_id,
+                        ),
                     )
                 ],
                 [
                     InlineKeyboardButton(
                         text=i18n.t("common.no", _locale()),
-                        callback_data=f"remc:abort:{reminder_id}",
+                        callback_data=_encode_reminder_cancel_callback(
+                            action="abort",
+                            reminder_id=reminder_id,
+                            provider_message_id=original_message_id,
+                        ),
                     )
                 ],
             ]
         )
-        if callback.message:
-            await callback.message.answer(
-                i18n.t("patient.reminder.cancel.confirm", _locale()),
-                reply_markup=keyboard,
-            )
-            return
-        await callback.answer(i18n.t("patient.reminder.cancel.confirm", _locale()), show_alert=True)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await callback.message.answer(
+            i18n.t("patient.reminder.cancel.confirm", _locale()),
+            reply_markup=keyboard,
+        )
 
     @router.callback_query(F.data.startswith("remc:"))
     async def reminder_cancel_confirm_callback(callback: CallbackQuery) -> None:
         if not callback.from_user or not callback.data:
             return
-        callback_parts = callback.data.split(":", 2)
-        if len(callback_parts) != 3:
+        payload = _parse_reminder_cancel_callback_payload(callback.data)
+        if payload is None:
             await callback.answer(i18n.t("patient.reminder.action.invalid", _locale()), show_alert=True)
             return
-        _, action, reminder_id = callback_parts
+        action, reminder_id, original_provider_message_id = payload
         if action == "abort":
             if callback.message:
                 try:
@@ -3292,14 +3319,10 @@ def make_router(
                     pass
             await callback.answer(i18n.t("patient.reminder.cancel.aborted", _locale()), show_alert=True)
             return
-        if action != "confirm":
-            await callback.answer(i18n.t("patient.reminder.action.invalid", _locale()), show_alert=True)
-            return
-        message_id = str(callback.message.message_id) if callback.message else None
         outcome = await reminder_actions.handle_action(
             reminder_id=reminder_id,
             action="cancel",
-            provider_message_id=message_id,
+            provider_message_id=original_provider_message_id,
         )
         if outcome.kind == "accepted":
             if callback.message:
