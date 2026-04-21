@@ -113,9 +113,10 @@ class _BookingFlowStub:
         self.start_patient_reschedule_calls = 0
         self.start_existing_booking_calls = 0
         self.start_or_resume_session_calls = 0
+        self.start_or_resume_existing_booking_calls = 0
         self.allowed_route_type_checks: list[frozenset[str] | None] = []
         self.reschedule_validation_ok = True
-        self.selected_slot_id = "slot_new_1"
+        self.selected_slot_id: str | None = None
         self.complete_patient_reschedule_calls = 0
         self.complete_patient_reschedule_outcome: object | None = None
 
@@ -140,6 +141,10 @@ class _BookingFlowStub:
     async def start_or_resume_session(self, **kwargs):  # noqa: ANN003
         self.start_or_resume_session_calls += 1
         return SimpleNamespace(booking_session_id="sess_new_booking_1")
+
+    async def start_or_resume_existing_booking_session(self, **kwargs):  # noqa: ANN003
+        self.start_or_resume_existing_booking_calls += 1
+        return SimpleNamespace(booking_session_id="sess_existing_lookup_1")
 
     async def determine_resume_panel(self, **kwargs):  # noqa: ANN003
         return SimpleNamespace(panel_key="service_selection", booking_session=SimpleNamespace(clinic_id="clinic_main", branch_id="branch_1"))
@@ -352,6 +357,80 @@ def test_active_reschedule_session_resume_from_book_returns_to_reschedule_panel(
     assert "Reschedule mode started." in message.answers[-1][0]
 
 
+def test_active_reschedule_with_selected_slot_resumes_to_review_from_book() -> None:
+    router, runtime, flow = _build_router()
+    flow.selected_slot_id = "slot_new_1"
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_rsch_1", "booking_mode": "reschedule_booking_control", "reschedule_booking_id": "b1"},
+        )
+    )
+    message = _Message("/book", user_id=1001)
+
+    asyncio.run(_handler(router, "book_entry", kind="message")(message))
+
+    assert "Review your reschedule before confirming:" in message.answers[-1][0]
+
+
+def test_my_booking_respects_active_reschedule_context_and_does_not_collapse() -> None:
+    router, runtime, flow = _build_router()
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_rsch_1", "booking_mode": "reschedule_booking_control", "reschedule_booking_id": "b1"},
+        )
+    )
+    message = _Message("/my_booking", user_id=1001)
+
+    asyncio.run(_handler(router, "my_booking_entry", kind="message")(message))
+
+    assert flow.start_or_resume_session_calls == 0
+    assert "Reschedule mode started." in message.answers[-1][0]
+
+
+def test_phome_my_booking_has_parity_with_my_booking_for_active_reschedule() -> None:
+    router, runtime, flow = _build_router()
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_rsch_1", "booking_mode": "reschedule_booking_control", "reschedule_booking_id": "b1"},
+        )
+    )
+    callback = _Callback("phome:my_booking", user_id=1001)
+
+    asyncio.run(_handler(router, "patient_home_my_booking")(callback))
+
+    assert flow.start_or_resume_session_calls == 0
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "reschedule_booking_control"
+    assert state["booking_session_id"] == "sess_rsch_1"
+
+
+def test_stale_reschedule_context_from_my_booking_is_bounded_and_normalized() -> None:
+    router, runtime, flow = _build_router()
+    flow.reschedule_validation_ok = False
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_rsch_1", "booking_mode": "reschedule_booking_control", "reschedule_booking_id": "b1"},
+        )
+    )
+    message = _Message("/my_booking", user_id=1001)
+
+    asyncio.run(_handler(router, "my_booking_entry", kind="message")(message))
+
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] != "reschedule_booking_control"
+    assert state["reschedule_booking_id"] == ""
+    assert flow.start_or_resume_existing_booking_calls == 1
+    assert "cannot open reschedule right now" in message.answers[0][0]
+
+
 def test_stale_reschedule_start_callback_is_safely_rejected() -> None:
     router, runtime, flow = _build_router()
     flow.reschedule_validation_ok = False
@@ -444,6 +523,32 @@ def test_reschedule_confirm_happy_path_handoffs_to_canonical_booking_panel() -> 
     assert "Your booking was rescheduled successfully." in text
 
 
+def test_reminder_and_my_booking_reschedule_paths_reach_same_completed_semantics() -> None:
+    router, runtime, flow = _build_router(reminder_actions=_ReminderActions(outcome_kind="accepted", outcome_reason="reschedule_requested", booking_id="b1"))
+    reminder_callback = _Callback("rem:reschedule:rem_1", user_id=1001)
+    asyncio.run(_handler(router, "reminder_action_callback")(reminder_callback))
+    reminder_state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert reminder_state["booking_mode"] == "reschedule_booking_control"
+    assert reminder_state["reschedule_booking_id"] == "b1"
+    asyncio.run(_handler(router, "reschedule_confirm")(_Callback("rsch:confirm:sess_rsch_1", user_id=1001)))
+    reminder_done_state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert reminder_done_state["booking_mode"] == "existing_booking_control"
+    assert reminder_done_state["reschedule_booking_id"] == ""
+
+    router2, runtime2, flow2 = _build_router()
+    asyncio.run(runtime2.bind_actor_session_state(scope="patient_flow", actor_id=1001, payload={"booking_session_id": "sess_existing_1", "booking_mode": "existing_booking_control"}))
+    asyncio.run(_handler(router2, "request_reschedule")(_Callback("mybk:reschedule:sess_existing_1:b1", user_id=1001)))
+    my_state = asyncio.run(runtime2.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert my_state["booking_mode"] == "reschedule_booking_control"
+    assert my_state["reschedule_booking_id"] == "b1"
+    asyncio.run(_handler(router2, "reschedule_confirm")(_Callback("rsch:confirm:sess_rsch_1", user_id=1001)))
+    my_done_state = asyncio.run(runtime2.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert my_done_state["booking_mode"] == "existing_booking_control"
+    assert my_done_state["reschedule_booking_id"] == ""
+    assert flow.complete_patient_reschedule_calls >= 1
+    assert flow2.complete_patient_reschedule_calls >= 1
+
+
 def test_reschedule_confirm_slot_unavailable_is_bounded_and_returns_to_slot_selection() -> None:
     flow = _BookingFlowStub()
     flow.complete_patient_reschedule_outcome = SlotUnavailableOutcome(kind="slot_unavailable", reason="selected slot is unavailable")
@@ -467,6 +572,6 @@ def test_reschedule_confirm_slot_unavailable_is_bounded_and_returns_to_slot_sele
     assert "Select a new time for your current booking." in _last_callback_text(callback)
 
 
-def test_pat_a4_1_no_migration_directories_present() -> None:
+def test_pat_a4_2c_no_migration_directories_present() -> None:
     assert not Path("migrations").exists()
     assert not Path("alembic").exists()
