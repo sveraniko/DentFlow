@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
 from app.common.i18n import I18nService
 from app.domain.booking import Booking
@@ -43,20 +45,24 @@ class _Callback:
         self.chat = SimpleNamespace(id=9001)
         self.from_user = SimpleNamespace(id=user_id)
         self.message = _CallbackMessage()
-        self.answered = 0
+        self.answered: list[tuple[str, bool]] = []
 
     async def answer(self, text: str = "", show_alert: bool = False, reply_markup=None) -> None:  # noqa: ARG002
-        self.answered += 1
-        return None
+        self.answered.append((text, show_alert))
 
 
 class _ReminderActions:
+    def __init__(self, *, outcome_kind: str, outcome_reason: str, booking_id: str | None = "b1") -> None:
+        self._outcome_kind = outcome_kind
+        self._outcome_reason = outcome_reason
+        self._booking_id = booking_id
+
     async def handle_action(self, **kwargs):  # noqa: ANN003
-        return SimpleNamespace(kind="accepted", reason="booking_confirmed", booking_id="b1")
+        return SimpleNamespace(kind=self._outcome_kind, reason=self._outcome_reason, booking_id=self._booking_id)
 
 
 class _BookingFlowStub:
-    def __init__(self) -> None:
+    def __init__(self, *, status: str = "confirmed", start_kind: str = "ready") -> None:
         now = datetime(2026, 4, 22, 10, 0, tzinfo=timezone.utc)
         self.booking = Booking(
             booking_id="b1",
@@ -70,7 +76,7 @@ class _BookingFlowStub:
             source_channel="telegram",
             scheduled_start_at=now,
             scheduled_end_at=now,
-            status="confirmed",
+            status=status,
             reason_for_visit_short=None,
             patient_note=None,
             confirmation_required=True,
@@ -83,8 +89,11 @@ class _BookingFlowStub:
             created_at=now,
             updated_at=now,
         )
+        self.start_kind = start_kind
 
     async def start_existing_booking_control_for_booking(self, **kwargs):  # noqa: ANN003
+        if self.start_kind != "ready":
+            return SimpleNamespace(kind=self.start_kind, booking=None, booking_session=None)
         session = SimpleNamespace(booking_session_id="sess_rem_1")
         return SimpleNamespace(kind="ready", booking=self.booking, booking_session=session)
 
@@ -99,7 +108,7 @@ class _BookingFlowStub:
             doctor_label="Dr One",
             service_label="Consultation",
             branch_label="Main Branch",
-            status="confirmed",
+            status=self.booking.status,
             source_channel="telegram",
             patient_contact=None,
             chart_summary_entry=None,
@@ -128,15 +137,15 @@ def _handler(router, name: str):
     raise AssertionError(name)
 
 
-def test_accepted_reminder_action_hands_off_to_booking_panel() -> None:
+def _build_router(*, reminder_actions, booking_flow):
     i18n = I18nService(locales_path=Path("locales"), default_locale="en")
     runtime = CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=InMemoryRedis()))
     codec = CardCallbackCodec(runtime=runtime)
     router = make_router(
         i18n=i18n,
-        booking_flow=_BookingFlowStub(),
+        booking_flow=booking_flow,
         reference=_reference(),
-        reminder_actions=_ReminderActions(),
+        reminder_actions=reminder_actions,
         recommendation_service=None,
         care_commerce_service=None,
         recommendation_repository=None,
@@ -144,19 +153,115 @@ def test_accepted_reminder_action_hands_off_to_booking_panel() -> None:
         card_runtime=runtime,
         card_callback_codec=codec,
     )
+    return router, runtime
 
-    callback = _Callback("rem:confirm:rem_1", user_id=1001)
+
+@pytest.mark.parametrize(
+    ("action", "reason", "status", "expected_header", "expect_confirm_button"),
+    [
+        ("confirm", "booking_confirmed", "confirmed", "Booking confirmed.", False),
+        ("reschedule", "reschedule_requested", "reschedule_requested", "Reschedule request received.", False),
+        ("cancel", "booking_canceled", "canceled", "Booking canceled.", False),
+        ("ack", "acknowledged", "pending_confirmation", "Got it, thanks.", True),
+    ],
+)
+def test_accepted_reminder_actions_handoff_to_canonical_booking_panel(
+    action: str,
+    reason: str,
+    status: str,
+    expected_header: str,
+    expect_confirm_button: bool,
+) -> None:
+    router, runtime = _build_router(
+        reminder_actions=_ReminderActions(outcome_kind="accepted", outcome_reason=reason, booking_id="b1"),
+        booking_flow=_BookingFlowStub(status=status),
+    )
+    callback = _Callback(f"rem:{action}:rem_1", user_id=1001)
+
     asyncio.run(_handler(router, "reminder_action_callback")(callback))
 
     assert callback.message.reply_markup_cleared == 1
-    assert callback.message.answers
     sent_text, sent_keyboard = callback.message.answers[-1]
-    assert "Booking confirmed." in sent_text
+    assert expected_header in sent_text
     assert "Consultation" in sent_text
     assert "Main Branch" in sent_text
     assert sent_keyboard is not None
+
+    rendered_labels = [button.text for row in sent_keyboard.inline_keyboard for button in row]
+    assert ("Confirm" in rendered_labels) is expect_confirm_button
 
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
     assert state["booking_session_id"] == "sess_rem_1"
     active = asyncio.run(runtime.resolve_active_panel(actor_id=1001, panel_family=PanelFamily.BOOKING_DETAIL))
     assert active is not None
+
+
+def test_accepted_handoff_without_booking_context_uses_safe_fallback() -> None:
+    router, runtime = _build_router(
+        reminder_actions=_ReminderActions(outcome_kind="accepted", outcome_reason="booking_confirmed", booking_id=None),
+        booking_flow=_BookingFlowStub(),
+    )
+    callback = _Callback("rem:confirm:rem_1", user_id=1001)
+
+    asyncio.run(_handler(router, "reminder_action_callback")(callback))
+
+    sent_text, sent_keyboard = callback.message.answers[-1]
+    assert "Booking confirmed." in sent_text
+    assert "booking details are unavailable" in sent_text.lower()
+    assert sent_keyboard is None
+
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state in ({}, None)
+
+
+def test_accepted_handoff_when_session_bind_cannot_start_uses_safe_fallback() -> None:
+    router, _ = _build_router(
+        reminder_actions=_ReminderActions(outcome_kind="accepted", outcome_reason="booking_confirmed", booking_id="b1"),
+        booking_flow=_BookingFlowStub(start_kind="booking_missing"),
+    )
+    callback = _Callback("rem:confirm:rem_1", user_id=1001)
+
+    asyncio.run(_handler(router, "reminder_action_callback")(callback))
+
+    sent_text, sent_keyboard = callback.message.answers[-1]
+    assert "Booking confirmed." in sent_text
+    assert "booking details are unavailable" in sent_text.lower()
+    assert "booking_missing" not in sent_text
+    assert sent_keyboard is None
+
+
+def test_stale_reminder_callback_is_bounded_and_does_not_handoff() -> None:
+    router, runtime = _build_router(
+        reminder_actions=_ReminderActions(outcome_kind="stale", outcome_reason="reminder_acknowledged", booking_id="b1"),
+        booking_flow=_BookingFlowStub(),
+    )
+    callback = _Callback("rem:confirm:rem_1", user_id=1001)
+
+    asyncio.run(_handler(router, "reminder_action_callback")(callback))
+
+    assert callback.message.reply_markup_cleared == 0
+    assert callback.message.answers == []
+    assert callback.answered[-1] == ("This reminder action is no longer active.", True)
+    active = asyncio.run(runtime.resolve_active_panel(actor_id=1001, panel_family=PanelFamily.BOOKING_DETAIL))
+    assert active is None
+
+
+def test_invalid_reminder_callback_is_bounded_and_does_not_handoff() -> None:
+    router, runtime = _build_router(
+        reminder_actions=_ReminderActions(outcome_kind="invalid", outcome_reason="message_mismatch", booking_id="b1"),
+        booking_flow=_BookingFlowStub(),
+    )
+    callback = _Callback("rem:confirm:rem_1", user_id=1001)
+
+    asyncio.run(_handler(router, "reminder_action_callback")(callback))
+
+    assert callback.message.reply_markup_cleared == 0
+    assert callback.message.answers == []
+    assert callback.answered[-1] == ("This reminder action is invalid.", True)
+    active = asyncio.run(runtime.resolve_active_panel(actor_id=1001, panel_family=PanelFamily.BOOKING_DETAIL))
+    assert active is None
+
+
+def test_pat_a3_1_no_migration_directories_present() -> None:
+    assert not Path("migrations").exists()
+    assert not Path("alembic").exists()
