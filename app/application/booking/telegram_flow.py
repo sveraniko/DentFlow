@@ -33,6 +33,7 @@ EXISTING_BOOKING_CONTROL_ROUTE_TYPES: frozenset[str] = frozenset({"existing_book
 
 class BookingFlowReadRepository(Protocol):
     async def get_booking_session(self, booking_session_id: str) -> BookingSession | None: ...
+    async def get_availability_slot(self, slot_id: str) -> AvailabilitySlot | None: ...
     async def list_active_sessions_for_telegram_user(self, *, clinic_id: str, telegram_user_id: int) -> list[BookingSession]: ...
     async def list_open_slots(
         self,
@@ -323,6 +324,12 @@ class BookingPatientFlowService:
 
     async def finalize(self, *, booking_session_id: str):
         return await self.orchestration.finalize_booking_from_session(booking_session_id=booking_session_id)
+
+    async def get_booking_session(self, *, booking_session_id: str) -> BookingSession | None:
+        return await self.reads.get_booking_session(booking_session_id)
+
+    async def get_availability_slot(self, *, slot_id: str) -> AvailabilitySlot | None:
+        return await self.reads.get_availability_slot(slot_id)
 
     async def list_admin_escalations(self, *, clinic_id: str, limit: int = 10) -> list[AdminEscalation]:
         return await self.reads.list_open_admin_escalations(clinic_id=clinic_id, limit=limit)

@@ -184,6 +184,9 @@ class _Repo:
     async def get_booking(self, booking_id: str) -> Booking | None:
         return self.bookings.get(booking_id)
 
+    async def get_availability_slot(self, slot_id: str) -> AvailabilitySlot | None:
+        return self.slots.get(slot_id)
+
 
 class _Finder:
     def __init__(self, rows: list[dict]) -> None:

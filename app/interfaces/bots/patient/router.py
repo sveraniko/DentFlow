@@ -1576,6 +1576,93 @@ def make_router(
             keyboard=InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
+    async def _render_review_finalize_panel(message: Message | CallbackQuery, *, actor_id: int, session_id: str) -> None:
+        locale = _locale()
+        session = await booking_flow.get_booking_session(booking_session_id=session_id)
+        if session is None:
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id=session_id,
+                text=i18n.t("patient.booking.review.unavailable", locale),
+            )
+            return
+
+        service_label = i18n.t("patient.booking.review.value.missing", locale)
+        if session.service_id:
+            service = reference.get_service(session.clinic_id, session.service_id)
+            service_label = service.code if service else session.service_id
+
+        doctor_label = i18n.t("patient.booking.review.value.any_doctor", locale)
+        if session.doctor_preference_type == "specific":
+            if session.doctor_id:
+                doctor = reference.get_doctor(session.clinic_id, session.doctor_id)
+                doctor_label = doctor.display_name if doctor else session.doctor_id
+            else:
+                doctor_label = i18n.t("patient.booking.review.value.missing", locale)
+
+        branch_label = i18n.t("patient.booking.review.value.missing", locale)
+        if session.branch_id:
+            branch = reference.get_branch(session.clinic_id, session.branch_id)
+            branch_label = branch.display_name if branch else session.branch_id
+
+        datetime_label = i18n.t("patient.booking.review.value.missing", locale)
+        if session.selected_slot_id:
+            slot = await booking_flow.get_availability_slot(slot_id=session.selected_slot_id)
+            if slot is not None:
+                datetime_label = slot.start_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+        phone_label = session.contact_phone_snapshot or i18n.t("patient.booking.review.value.missing", locale)
+        text = i18n.t("patient.booking.review.panel", locale).format(
+            service=service_label,
+            doctor=doctor_label,
+            datetime=datetime_label,
+            branch=branch_label,
+            phone=phone_label,
+        )
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.booking.review.confirm_cta", locale),
+                        callback_data=f"book:confirm:{session_id}",
+                    )
+                ]
+            ]
+        )
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id=session_id,
+            text=text,
+            keyboard=keyboard,
+        )
+
+    async def _render_finalize_outcome(message: Message | CallbackQuery, *, actor_id: int, session_id: str, finalized) -> None:
+        locale = _locale()
+        if isinstance(finalized, OrchestrationSuccess):
+            booking = finalized.entity
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id=session_id,
+                text=i18n.t("patient.booking.success", locale).format(
+                    doctor=booking.doctor_id,
+                    service=booking.service_id,
+                    datetime=booking.scheduled_start_at.strftime("%Y-%m-%d %H:%M UTC"),
+                    branch=booking.branch_id or "-",
+                    status=booking.status,
+                ),
+            )
+            return
+        key = {
+            "invalid_state": "patient.booking.finalize.invalid_state",
+            "slot_unavailable": "patient.booking.finalize.slot_unavailable",
+            "conflict": "patient.booking.finalize.conflict",
+            "escalated": "patient.booking.escalated",
+        }.get(finalized.kind, "patient.booking.finalize.invalid_state")
+        await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=session_id, text=i18n.t(key, locale))
+
     @router.message(CommandStart())
     async def start(message: Message) -> None:
         await message.answer(i18n.t("role.patient.home", _locale()))
@@ -2529,6 +2616,30 @@ def make_router(
             reply_keyboard=contact_keyboard,
         )
 
+    @router.callback_query(F.data.startswith("book:confirm:"))
+    async def confirm_new_booking(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        locale = _locale()
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            return
+        _, _, callback_session_id = callback.data.split(":", 2)
+        if not await booking_flow.validate_active_session_callback(
+            clinic_id=clinic_id,
+            telegram_user_id=callback.from_user.id,
+            callback_session_id=callback_session_id,
+        ):
+            await callback.answer(i18n.t("patient.booking.callback.stale", locale), show_alert=True)
+            return
+        finalized = await booking_flow.finalize(booking_session_id=callback_session_id)
+        await _render_finalize_outcome(
+            callback,
+            actor_id=callback.from_user.id,
+            session_id=callback_session_id,
+            finalized=finalized,
+        )
+
     @router.callback_query(F.data.startswith("mybk:reschedule:"))
     async def request_reschedule(callback: CallbackQuery) -> None:
         if not callback.from_user:
@@ -2723,29 +2834,7 @@ def make_router(
                 text=i18n.t("patient.booking.review.invalid", locale),
             )
             return
-        finalized = await booking_flow.finalize(booking_session_id=session_id)
-        if isinstance(finalized, OrchestrationSuccess):
-            booking = finalized.entity
-            await _send_or_edit_panel(
-                actor_id=actor_id,
-                message=message,
-                session_id=session_id,
-                text=i18n.t("patient.booking.success", locale).format(
-                    doctor=booking.doctor_id,
-                    service=booking.service_id,
-                    datetime=booking.scheduled_start_at.strftime("%Y-%m-%d %H:%M UTC"),
-                    branch=booking.branch_id or "-",
-                    status=booking.status,
-                ),
-            )
-            return
-        key = {
-            "invalid_state": "patient.booking.finalize.invalid_state",
-            "slot_unavailable": "patient.booking.finalize.slot_unavailable",
-            "conflict": "patient.booking.finalize.conflict",
-            "escalated": "patient.booking.escalated",
-        }.get(finalized.kind, "patient.booking.finalize.invalid_state")
-        await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=session_id, text=i18n.t(key, locale))
+        await _render_review_finalize_panel(message, actor_id=actor_id, session_id=session_id)
 
     async def _render_resume_panel(message: Message | CallbackQuery, *, actor_id: int, session_id: str, clinic_id: str) -> None:
         resume = await booking_flow.determine_resume_panel(booking_session_id=session_id)
@@ -2785,7 +2874,7 @@ def make_router(
             )
             return
         if resume.panel_key == "review_finalize":
-            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=session_id, text=i18n.t("patient.booking.resume.review", _locale()))
+            await _render_review_finalize_panel(message, actor_id=actor_id, session_id=session_id)
             return
         await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=session_id, text=i18n.t("patient.booking.resume.terminal", _locale()))
 
