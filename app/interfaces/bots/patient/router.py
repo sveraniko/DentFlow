@@ -12,7 +12,11 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from app.application.communication import ReminderActionService
 from app.application.care_commerce import CareCommerceService
 from app.application.booking.orchestration_outcomes import ConflictOutcome, InvalidStateOutcome, OrchestrationSuccess, SlotUnavailableOutcome
-from app.application.booking.telegram_flow import BookingControlResolutionResult, BookingPatientFlowService
+from app.application.booking.telegram_flow import (
+    BookingControlResolutionResult,
+    BookingPatientFlowService,
+    RESCHEDULE_BOOKING_CONTROL_ROUTE_TYPES,
+)
 from app.application.clinic_reference import ClinicReferenceService
 from app.common.i18n import I18nService
 from app.application.recommendation import RecommendationService
@@ -1796,12 +1800,30 @@ def make_router(
                 text=i18n.t("patient.booking.unavailable", _locale()),
             )
             return
+        flow = await _load_flow_state(actor_id)
+        if flow.booking_mode == "reschedule_booking_control" and flow.booking_session_id:
+            is_active_reschedule = await booking_flow.validate_active_session_callback(
+                clinic_id=clinic_id,
+                telegram_user_id=actor_id,
+                callback_session_id=flow.booking_session_id,
+                allowed_route_types=RESCHEDULE_BOOKING_CONTROL_ROUTE_TYPES,
+            )
+            if is_active_reschedule:
+                await _render_reschedule_start_panel(
+                    message,
+                    actor_id=actor_id,
+                    session_id=flow.booking_session_id,
+                )
+                return
+            flow.booking_mode = "new_booking_contact"
+            await _save_flow_state(actor_id, flow)
         session = await booking_flow.start_or_resume_session(
             clinic_id=clinic_id,
             telegram_user_id=actor_id,
         )
         flow = await _load_flow_state(actor_id)
         flow.booking_session_id = session.booking_session_id
+        flow.booking_mode = "new_booking_contact"
         await _save_flow_state(actor_id, flow)
         await _render_resume_panel(message, actor_id=actor_id, session_id=session.booking_session_id, clinic_id=clinic_id)
 
@@ -2928,9 +2950,21 @@ def make_router(
     async def reschedule_start_continue(callback: CallbackQuery) -> None:
         if not callback.from_user or not callback.data:
             return
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            await callback.answer(i18n.t("patient.booking.unavailable", _locale()), show_alert=True)
+            return
         _, _, callback_session_id = callback.data.split(":", 2)
         flow = await _load_flow_state(callback.from_user.id)
         if flow.booking_mode != "reschedule_booking_control" or flow.booking_session_id != callback_session_id:
+            await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
+            return
+        if not await booking_flow.validate_active_session_callback(
+            clinic_id=clinic_id,
+            telegram_user_id=callback.from_user.id,
+            callback_session_id=callback_session_id,
+            allowed_route_types=RESCHEDULE_BOOKING_CONTROL_ROUTE_TYPES,
+        ):
             await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
             return
         await _send_or_edit_panel(
@@ -3093,6 +3127,12 @@ def make_router(
         if mode == "existing_booking_control":
             return
         if mode == "reschedule_booking_control":
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id=session_id,
+                text=i18n.t("patient.booking.reschedule.start.contact_ignored", locale),
+            )
             return
         await booking_flow.set_contact_phone(booking_session_id=session_id, phone=phone)
         display_name = (message.from_user.full_name or "").strip() or i18n.t("patient.booking.contact.default_name", locale)
@@ -3123,7 +3163,23 @@ def make_router(
     async def _render_resume_panel(message: Message | CallbackQuery, *, actor_id: int, session_id: str, clinic_id: str) -> None:
         flow = await _load_flow_state(actor_id)
         if flow.booking_mode == "reschedule_booking_control":
-            await _render_reschedule_start_panel(message, actor_id=actor_id, session_id=session_id)
+            reschedule_session_id = flow.booking_session_id
+            if reschedule_session_id and await booking_flow.validate_active_session_callback(
+                clinic_id=clinic_id,
+                telegram_user_id=actor_id,
+                callback_session_id=reschedule_session_id,
+                allowed_route_types=RESCHEDULE_BOOKING_CONTROL_ROUTE_TYPES,
+            ):
+                await _render_reschedule_start_panel(message, actor_id=actor_id, session_id=reschedule_session_id)
+                return
+            flow.booking_mode = "new_booking_contact"
+            await _save_flow_state(actor_id, flow)
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id=session_id,
+                text=i18n.t("patient.booking.reschedule.start.unavailable", _locale()),
+            )
             return
         resume = await booking_flow.determine_resume_panel(booking_session_id=session_id)
         if resume is None:

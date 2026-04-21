@@ -60,6 +60,7 @@
   "patient.booking.reschedule.start.cta": "Select new time",
   "patient.booking.reschedule.start.placeholder": "Reschedule slot selection is coming next. Please use this button again soon.",
   "patient.booking.reschedule.start.unavailable": "We accepted your request, but cannot open reschedule right now. Please try again shortly.",
+  "patient.booking.reschedule.start.contact_ignored": "Reschedule mode is active. Please use “Select new time” to continue.",
   "patient.booking.waitlist.created": "Done. We noted your earlier-slot request and the clinic will contact you if one opens.",
   "patient.booking.cancel.confirm": "Are you sure you want to cancel this booking?",
   "patient.booking.cancel.aborted": "Cancellation aborted.",

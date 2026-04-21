@@ -1,0 +1,292 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
+
+from app.application.booking.orchestration_outcomes import OrchestrationSuccess
+from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
+from app.common.i18n import I18nService
+from app.domain.booking import Booking
+from app.domain.clinic_reference.models import Branch, Clinic, Doctor, Service
+from app.interfaces.bots.patient.router import make_router
+from app.interfaces.cards import CardCallbackCodec, CardRuntimeCoordinator, CardRuntimeStateStore
+from app.interfaces.cards.runtime_state import InMemoryRedis
+
+
+class _Bot:
+    def __init__(self) -> None:
+        self.edits: list[dict] = []
+
+    async def edit_message_text(self, **kwargs):  # noqa: ANN003
+        self.edits.append(kwargs)
+        return None
+
+
+class _Message:
+    def __init__(self, text: str, user_id: int = 1001) -> None:
+        self.text = text
+        self.bot = _Bot()
+        self.chat = SimpleNamespace(id=9001)
+        self.from_user = SimpleNamespace(id=user_id, full_name="Pat One")
+        self.answers: list[tuple[str, object | None]] = []
+
+    async def answer(self, text: str, reply_markup=None):
+        self.answers.append((text, reply_markup))
+        return SimpleNamespace(chat=self.chat, message_id=800 + len(self.answers))
+
+
+class _CallbackMessage:
+    def __init__(self, message_id: int = 701) -> None:
+        self.chat = SimpleNamespace(id=9001)
+        self.message_id = message_id
+        self.answers: list[tuple[str, object | None]] = []
+
+    async def edit_text(self, text: str, reply_markup=None):
+        self.answers.append((text, reply_markup))
+
+    async def edit_reply_markup(self, reply_markup=None):
+        return None
+
+    async def answer(self, text: str, reply_markup=None):
+        self.answers.append((text, reply_markup))
+        return SimpleNamespace(chat=self.chat, message_id=900 + len(self.answers))
+
+
+class _Callback:
+    def __init__(self, data: str, *, user_id: int = 1001, message_id: int = 701) -> None:
+        self.data = data
+        self.bot = _Bot()
+        self.chat = SimpleNamespace(id=9001)
+        self.from_user = SimpleNamespace(id=user_id)
+        self.message = _CallbackMessage(message_id=message_id)
+        self.answered: list[tuple[str, bool]] = []
+
+    async def answer(self, text: str = "", show_alert: bool = False, reply_markup=None) -> None:  # noqa: ARG002
+        self.answered.append((text, show_alert))
+        return SimpleNamespace(chat=self.chat, message_id=self.message.message_id)
+
+
+class _ReminderActions:
+    def __init__(self, *, outcome_kind: str = "accepted", outcome_reason: str = "booking_confirmed", booking_id: str = "b1") -> None:
+        self.outcome_kind = outcome_kind
+        self.outcome_reason = outcome_reason
+        self.booking_id = booking_id
+
+    async def handle_action(self, **kwargs):  # noqa: ANN003
+        return SimpleNamespace(kind=self.outcome_kind, reason=self.outcome_reason, booking_id=self.booking_id)
+
+
+class _BookingFlowStub:
+    def __init__(self) -> None:
+        now = datetime(2026, 4, 22, 10, 0, tzinfo=timezone.utc)
+        self.booking = Booking(
+            booking_id="b1",
+            clinic_id="clinic_main",
+            branch_id="branch_1",
+            patient_id="pat_1",
+            doctor_id="doctor_1",
+            service_id="service_consult",
+            slot_id="slot_1",
+            booking_mode="patient_bot",
+            source_channel="telegram",
+            scheduled_start_at=now,
+            scheduled_end_at=now,
+            status="confirmed",
+            reason_for_visit_short=None,
+            patient_note=None,
+            confirmation_required=True,
+            confirmed_at=None,
+            canceled_at=None,
+            checked_in_at=None,
+            in_service_at=None,
+            completed_at=None,
+            no_show_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        self.request_reschedule_calls = 0
+        self.start_patient_reschedule_calls = 0
+        self.start_existing_booking_calls = 0
+        self.start_or_resume_session_calls = 0
+        self.allowed_route_type_checks: list[frozenset[str] | None] = []
+        self.reschedule_validation_ok = True
+
+    async def request_reschedule(self, **kwargs):  # noqa: ANN003
+        self.request_reschedule_calls += 1
+        return OrchestrationSuccess(kind="success", entity=self.booking)
+
+    async def start_patient_reschedule_session(self, **kwargs):  # noqa: ANN003
+        self.start_patient_reschedule_calls += 1
+        session = SimpleNamespace(booking_session_id="sess_rsch_1")
+        return SimpleNamespace(kind="ready", booking=self.booking, booking_session=session)
+
+    async def start_existing_booking_control_for_booking(self, **kwargs):  # noqa: ANN003
+        self.start_existing_booking_calls += 1
+        session = SimpleNamespace(booking_session_id="sess_existing_1")
+        return SimpleNamespace(kind="ready", booking=self.booking, booking_session=session)
+
+    async def validate_active_session_callback(self, **kwargs):  # noqa: ANN003
+        self.allowed_route_type_checks.append(kwargs.get("allowed_route_types"))
+        return self.reschedule_validation_ok
+
+    async def start_or_resume_session(self, **kwargs):  # noqa: ANN003
+        self.start_or_resume_session_calls += 1
+        return SimpleNamespace(booking_session_id="sess_new_booking_1")
+
+    async def determine_resume_panel(self, **kwargs):  # noqa: ANN003
+        return SimpleNamespace(panel_key="service_selection", booking_session=SimpleNamespace(clinic_id="clinic_main", branch_id="branch_1"))
+
+    async def list_services(self, **kwargs):  # noqa: ANN003
+        return []
+
+    def build_booking_snapshot(self, **kwargs):  # noqa: ANN003
+        from app.interfaces.cards import BookingRuntimeSnapshot
+
+        token = kwargs.get("state_token", "sess_existing_1")
+        return BookingRuntimeSnapshot(
+            booking_id="b1",
+            state_token=token,
+            role_variant="patient",
+            scheduled_start_at=self.booking.scheduled_start_at,
+            timezone_name="UTC",
+            patient_label="You",
+            doctor_label="Dr One",
+            service_label="Consultation",
+            branch_label="Main Branch",
+            status=self.booking.status,
+            source_channel="telegram",
+            patient_contact=None,
+            chart_summary_entry=None,
+            recommendation_summary=None,
+            care_order_summary=None,
+            next_step_note_key="booking.next_step.confirmed",
+            compact_flags=(),
+            reminder_summary=None,
+            reschedule_summary=None,
+        )
+
+
+class _RepoNone:
+    async def find_patient_ids_by_telegram_user(self, *, clinic_id: str, telegram_user_id: int) -> list[str]:
+        return []
+
+
+def _reference() -> ClinicReferenceService:
+    repo = InMemoryClinicReferenceRepository()
+    repo.upsert_clinic(Clinic(clinic_id="clinic_main", code="MAIN", display_name="Main", timezone="UTC", default_locale="en"))
+    repo.upsert_branch(Branch(branch_id="branch_1", clinic_id="clinic_main", display_name="Main Branch", address_text="-", timezone="UTC"))
+    repo.upsert_service(Service(service_id="service_consult", clinic_id="clinic_main", code="CONSULT", title_key="service.consult", duration_minutes=30))
+    repo.upsert_doctor(Doctor(doctor_id="doctor_1", clinic_id="clinic_main", display_name="Dr One", specialty_code="dent", branch_id="branch_1"))
+    return ClinicReferenceService(repo)
+
+
+def _handler(router, name: str, *, kind: str = "callback"):
+    handlers = router.callback_query.handlers if kind == "callback" else router.message.handlers
+    for h in handlers:
+        if h.callback.__name__ == name:
+            return h.callback
+    raise AssertionError(name)
+
+
+def _build_router(*, reminder_actions: _ReminderActions | None = None, booking_flow: _BookingFlowStub | None = None):
+    runtime = CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=InMemoryRedis()))
+    codec = CardCallbackCodec(runtime=runtime)
+    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+    flow = booking_flow or _BookingFlowStub()
+    reminders = reminder_actions or _ReminderActions()
+    router = make_router(
+        i18n=i18n,
+        booking_flow=flow,
+        reference=_reference(),
+        reminder_actions=reminders,
+        recommendation_service=None,
+        care_commerce_service=None,
+        recommendation_repository=_RepoNone(),
+        default_locale="en",
+        card_runtime=runtime,
+        card_callback_codec=codec,
+    )
+    return router, runtime, flow
+
+
+def test_my_booking_reschedule_lands_in_canonical_reschedule_start_panel() -> None:
+    router, runtime, flow = _build_router()
+    asyncio.run(runtime.bind_actor_session_state(scope="patient_flow", actor_id=1001, payload={"booking_session_id": "sess_existing_1", "booking_mode": "existing_booking_control"}))
+    callback = _Callback("mybk:reschedule:sess_existing_1:b1", user_id=1001)
+
+    asyncio.run(_handler(router, "request_reschedule")(callback))
+
+    assert flow.request_reschedule_calls == 1
+    assert flow.start_patient_reschedule_calls == 1
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "reschedule_booking_control"
+    assert state["booking_session_id"] == "sess_rsch_1"
+
+
+def test_reminder_reschedule_accepted_lands_in_same_canonical_reschedule_start_panel() -> None:
+    router, runtime, flow = _build_router(reminder_actions=_ReminderActions(outcome_kind="accepted", outcome_reason="reschedule_requested", booking_id="b1"))
+    callback = _Callback("rem:reschedule:rem_1", user_id=1001)
+
+    asyncio.run(_handler(router, "reminder_action_callback")(callback))
+
+    assert flow.start_patient_reschedule_calls == 1
+    sent_text, sent_keyboard = callback.message.answers[-1]
+    assert "Reschedule mode started." in sent_text
+    assert sent_keyboard is not None
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "reschedule_booking_control"
+    assert state["booking_session_id"] == "sess_rsch_1"
+
+
+def test_non_reschedule_reminder_actions_keep_existing_handoff_behavior() -> None:
+    router, runtime, flow = _build_router(reminder_actions=_ReminderActions(outcome_kind="accepted", outcome_reason="booking_confirmed", booking_id="b1"))
+    callback = _Callback("rem:confirm:rem_1", user_id=1001)
+
+    asyncio.run(_handler(router, "reminder_action_callback")(callback))
+
+    assert flow.start_existing_booking_calls == 1
+    assert flow.start_patient_reschedule_calls == 0
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "existing_booking_control"
+    assert state["booking_session_id"] == "sess_existing_1"
+
+
+def test_active_reschedule_session_resume_from_book_returns_to_reschedule_panel() -> None:
+    router, runtime, flow = _build_router()
+    asyncio.run(runtime.bind_actor_session_state(scope="patient_flow", actor_id=1001, payload={"booking_session_id": "sess_rsch_1", "booking_mode": "reschedule_booking_control"}))
+    message = _Message("/book", user_id=1001)
+
+    asyncio.run(_handler(router, "book_entry", kind="message")(message))
+
+    assert flow.start_or_resume_session_calls == 0
+    assert message.answers
+    assert "Reschedule mode started." in message.answers[-1][0]
+
+
+def test_stale_reschedule_start_callback_is_safely_rejected() -> None:
+    router, runtime, flow = _build_router()
+    flow.reschedule_validation_ok = False
+    asyncio.run(runtime.bind_actor_session_state(scope="patient_flow", actor_id=1001, payload={"booking_session_id": "sess_rsch_1", "booking_mode": "reschedule_booking_control"}))
+    callback = _Callback("rsch:start:sess_rsch_1", user_id=1001)
+
+    asyncio.run(_handler(router, "reschedule_start_continue")(callback))
+
+    assert callback.answered[-1] == ("This button is no longer active. Please use /book to continue.", True)
+
+
+def test_contact_input_in_reschedule_mode_is_bounded_and_not_interpreted() -> None:
+    router, runtime, _ = _build_router()
+    asyncio.run(runtime.bind_actor_session_state(scope="patient_flow", actor_id=1001, payload={"booking_session_id": "sess_rsch_1", "booking_mode": "reschedule_booking_control"}))
+    contact = _Message("+15550000000", user_id=1001)
+
+    asyncio.run(_handler(router, "on_contact_text", kind="message")(contact))
+
+    assert contact.answers
+    assert "Reschedule mode is active" in contact.answers[-1][0]
+
+
+def test_pat_a4_1_no_migration_directories_present() -> None:
+    assert not Path("migrations").exists()
+    assert not Path("alembic").exists()
