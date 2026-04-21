@@ -1816,16 +1816,10 @@ def make_router(
             )
             return
 
-        patient_id = await _resolve_patient_id_for_user(actor_id)
-        if patient_id:
-            direct_result = await booking_flow.resolve_existing_booking_for_known_patient(
-                clinic_id=clinic_id,
-                telegram_user_id=actor_id,
-                patient_id=patient_id,
-            )
-            if direct_result.kind in {"exact_match", "no_match"}:
-                await _show_existing_booking_result(message, actor_id=actor_id, result=direct_result)
-                return
+        direct_result = await _try_resolve_existing_booking_shortcut(clinic_id=clinic_id, actor_id=actor_id)
+        if direct_result is not None:
+            await _show_existing_booking_result(message, actor_id=actor_id, result=direct_result)
+            return
 
         session = await booking_flow.start_or_resume_existing_booking_session(clinic_id=clinic_id, telegram_user_id=actor_id)
         flow = await _load_flow_state(actor_id)
@@ -1927,14 +1921,48 @@ def make_router(
             return None
         list_finder = getattr(recommendation_repository, "find_patient_ids_by_telegram_user", None)
         if callable(list_finder):
-            rows = await list_finder(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
-            if len(rows) != 1:
+            try:
+                rows = await list_finder(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
+            except Exception:
                 return None
-            return rows[0]
+            if not isinstance(rows, (list, tuple)):
+                return None
+            trusted = tuple(str(row).strip() for row in rows if isinstance(row, str) and row.strip())
+            if len(trusted) != 1:
+                return None
+            return trusted[0]
         finder = getattr(recommendation_repository, "find_patient_id_by_telegram_user", None)
         if not callable(finder):
             return None
-        return await finder(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
+        try:
+            patient_id = await finder(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
+        except Exception:
+            return None
+        if not isinstance(patient_id, str):
+            return None
+        trusted = patient_id.strip()
+        return trusted or None
+
+    async def _try_resolve_existing_booking_shortcut(
+        *,
+        clinic_id: str,
+        actor_id: int,
+    ) -> BookingControlResolutionResult | None:
+        patient_id = await _resolve_patient_id_for_user(actor_id)
+        if not patient_id:
+            return None
+        try:
+            direct_result = await booking_flow.resolve_existing_booking_for_known_patient(
+                clinic_id=clinic_id,
+                telegram_user_id=actor_id,
+                patient_id=patient_id,
+            )
+        except Exception:
+            return None
+        kind = getattr(direct_result, "kind", None)
+        if kind not in {"exact_match", "no_match"}:
+            return None
+        return direct_result
 
     @router.message(Command("recommendations"))
     async def recommendations_list(message: Message) -> None:
