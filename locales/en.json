@@ -31,6 +31,8 @@
   "patient.reminder.action.accepted": "Thanks, recorded.",
   "patient.reminder.action.stale": "This reminder action is no longer active.",
   "patient.reminder.action.invalid": "This reminder action is invalid.",
+  "patient.reminder.cancel.confirm": "Cancel this booking?",
+  "patient.reminder.cancel.aborted": "Cancellation aborted.",
   "patient.booking.doctor.prompt": "Choose doctor preference.",
   "patient.booking.doctor.any": "Any available doctor",
   "patient.booking.slot.prompt": "Choose one of the nearest available slots.",

@@ -56,8 +56,10 @@ class _ReminderActions:
         self._outcome_kind = outcome_kind
         self._outcome_reason = outcome_reason
         self._booking_id = booking_id
+        self.calls: list[dict[str, object | None]] = []
 
     async def handle_action(self, **kwargs):  # noqa: ANN003
+        self.calls.append(kwargs)
         return SimpleNamespace(kind=self._outcome_kind, reason=self._outcome_reason, booking_id=self._booking_id)
 
 
@@ -168,7 +170,6 @@ def _build_router(*, reminder_actions, booking_flow):
     [
         ("confirm", "booking_confirmed", "confirmed", "Booking confirmed.", False),
         ("reschedule", "reschedule_requested", "reschedule_requested", "Reschedule request received.", False),
-        ("cancel", "booking_canceled", "canceled", "Booking canceled.", False),
         ("ack", "acknowledged", "pending_confirmation", "Got it, thanks.", True),
     ],
 )
@@ -212,6 +213,68 @@ def test_accepted_reminder_actions_handoff_to_canonical_booking_panel(
         assert state["booking_mode"] == "existing_booking_control"
     active = asyncio.run(runtime.resolve_active_panel(actor_id=1001, panel_family=PanelFamily.BOOKING_DETAIL))
     assert active is not None
+
+
+def test_reminder_cancel_first_tap_shows_confirmation_and_does_not_mutate() -> None:
+    reminder_actions = _ReminderActions(outcome_kind="accepted", outcome_reason="booking_canceled", booking_id="b1")
+    router, runtime = _build_router(
+        reminder_actions=reminder_actions,
+        booking_flow=_BookingFlowStub(status="confirmed"),
+    )
+    callback = _Callback("rem:cancel:rem_1", user_id=1001)
+
+    asyncio.run(_handler(router, "reminder_action_callback")(callback))
+
+    assert reminder_actions.calls == []
+    assert callback.message.reply_markup_cleared == 0
+    sent_text, sent_keyboard = callback.message.answers[-1]
+    assert sent_text == "Cancel this booking?"
+    assert sent_keyboard is not None
+    rendered = [button.text for row in sent_keyboard.inline_keyboard for button in row]
+    assert rendered == ["Yes", "No"]
+    active = asyncio.run(runtime.resolve_active_panel(actor_id=1001, panel_family=PanelFamily.BOOKING_DETAIL))
+    assert active is None
+
+
+def test_reminder_cancel_confirm_cancels_and_handoffs_to_canonical_panel() -> None:
+    reminder_actions = _ReminderActions(outcome_kind="accepted", outcome_reason="booking_canceled", booking_id="b1")
+    router, runtime = _build_router(
+        reminder_actions=reminder_actions,
+        booking_flow=_BookingFlowStub(status="canceled"),
+    )
+    callback = _Callback("remc:confirm:rem_1", user_id=1001)
+
+    asyncio.run(_handler(router, "reminder_cancel_confirm_callback")(callback))
+
+    assert len(reminder_actions.calls) == 1
+    assert reminder_actions.calls[0] == {"reminder_id": "rem_1", "action": "cancel", "provider_message_id": "777"}
+    assert callback.message.reply_markup_cleared == 1
+    sent_text, sent_keyboard = callback.message.answers[-1]
+    assert "Booking canceled." in sent_text
+    assert "Consultation" in sent_text
+    assert sent_keyboard is not None
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "existing_booking_control"
+    active = asyncio.run(runtime.resolve_active_panel(actor_id=1001, panel_family=PanelFamily.BOOKING_DETAIL))
+    assert active is not None
+
+
+def test_reminder_cancel_abort_does_not_mutate_booking() -> None:
+    reminder_actions = _ReminderActions(outcome_kind="accepted", outcome_reason="booking_canceled", booking_id="b1")
+    router, runtime = _build_router(
+        reminder_actions=reminder_actions,
+        booking_flow=_BookingFlowStub(status="confirmed"),
+    )
+    callback = _Callback("remc:abort:rem_1", user_id=1001)
+
+    asyncio.run(_handler(router, "reminder_cancel_confirm_callback")(callback))
+
+    assert reminder_actions.calls == []
+    assert callback.message.reply_markup_cleared == 1
+    assert callback.message.answers == []
+    assert callback.answered[-1] == ("Cancellation aborted.", True)
+    active = asyncio.run(runtime.resolve_active_panel(actor_id=1001, panel_family=PanelFamily.BOOKING_DETAIL))
+    assert active is None
 
 
 def test_accepted_handoff_without_booking_context_uses_safe_fallback() -> None:
