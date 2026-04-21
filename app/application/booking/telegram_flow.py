@@ -581,7 +581,7 @@ class BookingPatientFlowService:
     def _service_label(self, service: Service | None, fallback: str) -> str:
         if service is None:
             return fallback
-        return f"{service.code} ({service.title_key})"
+        return service.code or fallback
 
     def _branch_by_id(self, clinic_id: str) -> dict[str, Branch]:
         return {row.branch_id: row for row in self.reference.list_branches(clinic_id)}

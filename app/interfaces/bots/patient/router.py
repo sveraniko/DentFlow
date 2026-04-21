@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
@@ -244,6 +245,29 @@ def _parse_gallery_index(page_or_index: str, *, total: int) -> int:
     return min(max(parsed, 0), total - 1)
 
 
+def _resolve_service_label(
+    *,
+    service_title_key: str | None,
+    service_code: str | None,
+    fallback_id: str | None,
+    locale: str,
+    fallback_locale: str,
+    i18n: I18nService,
+) -> str:
+    if service_title_key:
+        localized = i18n.t(service_title_key, locale)
+        if localized and localized != service_title_key:
+            return localized
+        fallback_localized = i18n.t(service_title_key, fallback_locale)
+        if fallback_localized and fallback_localized != service_title_key:
+            return fallback_localized
+    if service_code:
+        return service_code
+    if fallback_id:
+        return fallback_id
+    return i18n.t("patient.booking.review.value.missing", locale)
+
+
 def make_router(
     i18n: I18nService,
     booking_flow: BookingPatientFlowService,
@@ -273,6 +297,29 @@ def make_router(
     def _primary_clinic_id() -> str | None:
         clinics = list(reference.repository.clinics.values())
         return clinics[0].clinic_id if clinics else None
+
+    def _fallback_locale_for_clinic(clinic_id: str | None) -> str:
+        if clinic_id:
+            clinic = reference.get_clinic(clinic_id)
+            if clinic and clinic.default_locale:
+                return clinic.default_locale
+        return _locale()
+
+    def _resolve_booking_timezone_name(*, clinic_id: str, branch_id: str | None) -> str:
+        if branch_id:
+            branch = reference.get_branch(clinic_id, branch_id)
+            if branch and branch.timezone:
+                return branch.timezone
+        clinic = reference.get_clinic(clinic_id)
+        if clinic and clinic.timezone:
+            return clinic.timezone
+        return "UTC"
+
+    def _zone_or_utc(timezone_name: str) -> ZoneInfo:
+        try:
+            return ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError:
+            return ZoneInfo("UTC")
 
     async def _load_flow_state(actor_id: int) -> _PatientFlowState:
         payload = await card_runtime.resolve_actor_session_state(scope=_SESSION_SCOPE, actor_id=actor_id)
@@ -1588,10 +1635,18 @@ def make_router(
             )
             return
 
+        fallback_locale = _fallback_locale_for_clinic(session.clinic_id)
         service_label = i18n.t("patient.booking.review.value.missing", locale)
         if session.service_id:
             service = reference.get_service(session.clinic_id, session.service_id)
-            service_label = service.code if service else session.service_id
+            service_label = _resolve_service_label(
+                service_title_key=(service.title_key if service is not None else None),
+                service_code=(service.code if service is not None else None),
+                fallback_id=session.service_id,
+                locale=locale,
+                fallback_locale=fallback_locale,
+                i18n=i18n,
+            )
 
         doctor_label = i18n.t("patient.booking.review.value.any_doctor", locale)
         if session.doctor_preference_type == "specific":
@@ -1610,7 +1665,8 @@ def make_router(
         if session.selected_slot_id:
             slot = await booking_flow.get_availability_slot(slot_id=session.selected_slot_id)
             if slot is not None:
-                datetime_label = slot.start_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+                timezone_name = _resolve_booking_timezone_name(clinic_id=session.clinic_id, branch_id=slot.branch_id or session.branch_id)
+                datetime_label = slot.start_at.astimezone(_zone_or_utc(timezone_name)).strftime("%Y-%m-%d %H:%M %Z")
 
         phone_label = session.contact_phone_snapshot or i18n.t("patient.booking.review.value.missing", locale)
         text = i18n.t("patient.booking.review.panel", locale).format(
@@ -1642,16 +1698,27 @@ def make_router(
         locale = _locale()
         if isinstance(finalized, OrchestrationSuccess):
             booking = finalized.entity
+            card = booking_flow.build_booking_card(booking=booking)
+            clinic_fallback_locale = _fallback_locale_for_clinic(booking.clinic_id)
+            service = reference.get_service(booking.clinic_id, booking.service_id)
+            service_label = _resolve_service_label(
+                service_title_key=(service.title_key if service is not None else None),
+                service_code=(service.code if service is not None else None),
+                fallback_id=booking.service_id,
+                locale=locale,
+                fallback_locale=clinic_fallback_locale,
+                i18n=i18n,
+            )
             await _send_or_edit_panel(
                 actor_id=actor_id,
                 message=message,
                 session_id=session_id,
                 text=i18n.t("patient.booking.success", locale).format(
-                    doctor=booking.doctor_id,
-                    service=booking.service_id,
-                    datetime=booking.scheduled_start_at.strftime("%Y-%m-%d %H:%M UTC"),
-                    branch=booking.branch_id or "-",
-                    status=booking.status,
+                    doctor=card.doctor_label,
+                    service=service_label,
+                    datetime=card.datetime_label,
+                    branch=card.branch_label,
+                    status=i18n.t(card.status_label, locale),
                 ),
             )
             return

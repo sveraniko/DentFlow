@@ -5,9 +5,10 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 from app.application.booking.orchestration_outcomes import InvalidStateOutcome, OrchestrationSuccess
-from app.application.booking.telegram_flow import BookingResumePanel, PatientResolutionFlowResult
+from app.application.booking.telegram_flow import BookingCardView, BookingResumePanel, PatientResolutionFlowResult
 from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
 from app.common.i18n import I18nService
 from app.domain.booking import AvailabilitySlot, Booking, BookingSession
@@ -18,7 +19,11 @@ from app.interfaces.cards.runtime_state import InMemoryRedis
 
 
 class _Bot:
+    def __init__(self) -> None:
+        self.edits: list[dict] = []
+
     async def edit_message_text(self, **kwargs):  # noqa: ANN003
+        self.edits.append(kwargs)
         return None
 
 
@@ -179,13 +184,24 @@ class _BookingFlowStub:
     async def get_availability_slot(self, *, slot_id: str):
         return self.slot if slot_id == self.slot.slot_id else None
 
+    def build_booking_card(self, *, booking: Booking) -> BookingCardView:
+        return BookingCardView(
+            booking_id=booking.booking_id,
+            doctor_label="Dr One",
+            service_label="CONSULT",
+            datetime_label=booking.scheduled_start_at.astimezone(ZoneInfo("Europe/Berlin")).strftime("%Y-%m-%d %H:%M %Z"),
+            branch_label="Main Branch",
+            status_label=f"booking.status.{booking.status}",
+            next_step_key="patient.booking.card.next.pending_confirmation",
+        )
+
 
 
 def _reference() -> ClinicReferenceService:
     repo = InMemoryClinicReferenceRepository()
-    repo.upsert_clinic(Clinic(clinic_id="clinic_main", code="MAIN", display_name="Main", timezone="UTC", default_locale="en"))
-    repo.upsert_branch(Branch(branch_id="branch_1", clinic_id="clinic_main", display_name="Main Branch", address_text="-", timezone="UTC"))
-    repo.upsert_service(Service(service_id="service_consult", clinic_id="clinic_main", code="CONSULT", title_key="svc", duration_minutes=30))
+    repo.upsert_clinic(Clinic(clinic_id="clinic_main", code="MAIN", display_name="Main", timezone="Europe/Berlin", default_locale="en"))
+    repo.upsert_branch(Branch(branch_id="branch_1", clinic_id="clinic_main", display_name="Main Branch", address_text="-", timezone="Europe/Berlin"))
+    repo.upsert_service(Service(service_id="service_consult", clinic_id="clinic_main", code="CONSULT", title_key="service.cleaning", duration_minutes=30))
     repo.upsert_doctor(Doctor(doctor_id="doctor_1", clinic_id="clinic_main", display_name="Dr One", specialty_code="dent", branch_id="branch_1"))
     return ClinicReferenceService(repo)
 
@@ -234,6 +250,8 @@ def test_contact_submission_stops_at_review_ready_panel() -> None:
     assert booking_flow.finalize_calls == 0
     assert booking_flow.session.status == "review_ready"
     assert "Review your booking before confirming" in msg.answers[-1][0]
+    assert "Teeth cleaning" in msg.answers[-1][0]
+    assert "2026-04-22 12:00 CEST" in msg.answers[-1][0]
     assert msg.answers[-1][1].inline_keyboard[0][0].callback_data == "book:confirm:sess_1"
 
 
@@ -278,6 +296,16 @@ def test_explicit_confirm_callback_finalizes_booking() -> None:
 
     assert booking_flow.finalize_calls == 1
     assert callback.answers == []
+    assert callback.bot.edits
+    success_text = callback.bot.edits[-1]["text"]
+    assert "Doctor: Dr One" in success_text
+    assert "Service: Teeth cleaning" in success_text
+    assert "Time: 2026-04-22 12:00 CEST" in success_text
+    assert "Branch: Main Branch" in success_text
+    assert "Status: Pending confirmation" in success_text
+    assert "doctor_1" not in success_text
+    assert "service_consult" not in success_text
+    assert "branch_1" not in success_text
 
 
 def test_resume_review_ready_session_renders_review_panel() -> None:
