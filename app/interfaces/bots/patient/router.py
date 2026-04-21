@@ -268,6 +268,23 @@ def _resolve_service_label(
     return i18n.t("patient.booking.review.value.missing", locale)
 
 
+def _resolve_reference_label(*, display_name: str | None, fallback_id: str | None, locale: str, i18n: I18nService) -> str:
+    name = (display_name or "").strip()
+    if name:
+        return name
+    if fallback_id:
+        return fallback_id
+    return i18n.t("patient.booking.review.value.missing", locale)
+
+
+def _resolve_status_label(*, status: str, locale: str, i18n: I18nService) -> str:
+    key = f"booking.status.{status}"
+    translated = i18n.t(key, locale)
+    if translated and translated != key:
+        return translated
+    return status.replace("_", " ").strip().capitalize() or i18n.t("patient.booking.review.value.missing", locale)
+
+
 def make_router(
     i18n: I18nService,
     booking_flow: BookingPatientFlowService,
@@ -1650,16 +1667,21 @@ def make_router(
 
         doctor_label = i18n.t("patient.booking.review.value.any_doctor", locale)
         if session.doctor_preference_type == "specific":
-            if session.doctor_id:
-                doctor = reference.get_doctor(session.clinic_id, session.doctor_id)
-                doctor_label = doctor.display_name if doctor else session.doctor_id
-            else:
-                doctor_label = i18n.t("patient.booking.review.value.missing", locale)
+            doctor = reference.get_doctor(session.clinic_id, session.doctor_id or "") if session.doctor_id else None
+            doctor_label = _resolve_reference_label(
+                display_name=(doctor.display_name if doctor is not None else None),
+                fallback_id=session.doctor_id,
+                locale=locale,
+                i18n=i18n,
+            )
 
-        branch_label = i18n.t("patient.booking.review.value.missing", locale)
-        if session.branch_id:
-            branch = reference.get_branch(session.clinic_id, session.branch_id)
-            branch_label = branch.display_name if branch else session.branch_id
+        branch = reference.get_branch(session.clinic_id, session.branch_id or "") if session.branch_id else None
+        branch_label = _resolve_reference_label(
+            display_name=(branch.display_name if branch is not None else None),
+            fallback_id=session.branch_id,
+            locale=locale,
+            i18n=i18n,
+        )
 
         datetime_label = i18n.t("patient.booking.review.value.missing", locale)
         if session.selected_slot_id:
@@ -1709,16 +1731,30 @@ def make_router(
                 fallback_locale=clinic_fallback_locale,
                 i18n=i18n,
             )
+            doctor = reference.get_doctor(booking.clinic_id, booking.doctor_id or "") if booking.doctor_id else None
+            doctor_label = _resolve_reference_label(
+                display_name=(doctor.display_name if doctor is not None else None),
+                fallback_id=booking.doctor_id,
+                locale=locale,
+                i18n=i18n,
+            )
+            branch = reference.get_branch(booking.clinic_id, booking.branch_id or "") if booking.branch_id else None
+            branch_label = _resolve_reference_label(
+                display_name=(branch.display_name if branch is not None else None),
+                fallback_id=booking.branch_id,
+                locale=locale,
+                i18n=i18n,
+            )
             await _send_or_edit_panel(
                 actor_id=actor_id,
                 message=message,
                 session_id=session_id,
                 text=i18n.t("patient.booking.success", locale).format(
-                    doctor=card.doctor_label,
+                    doctor=doctor_label,
                     service=service_label,
                     datetime=card.datetime_label,
-                    branch=card.branch_label,
-                    status=i18n.t(card.status_label, locale),
+                    branch=branch_label,
+                    status=_resolve_status_label(status=booking.status, locale=locale, i18n=i18n),
                 ),
             )
             return
