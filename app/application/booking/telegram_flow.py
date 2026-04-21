@@ -500,6 +500,46 @@ class BookingPatientFlowService:
             return InvalidStateOutcome(kind="invalid_state", reason=validation.kind)
         return await self.orchestration.request_booking_reschedule(booking_id=booking_id, reason_code="patient_requested")
 
+    async def complete_patient_reschedule(
+        self,
+        *,
+        clinic_id: str,
+        telegram_user_id: int,
+        callback_session_id: str,
+        source_booking_id: str,
+    ):
+        session = await self.reads.get_booking_session(callback_session_id)
+        if session is None:
+            return InvalidStateOutcome(kind="invalid_state", reason="session_missing")
+        if session.clinic_id != clinic_id or session.telegram_user_id != telegram_user_id:
+            return InvalidStateOutcome(kind="invalid_state", reason="session_scope_mismatch")
+        if session.route_type not in RESCHEDULE_BOOKING_CONTROL_ROUTE_TYPES:
+            return InvalidStateOutcome(kind="invalid_state", reason="session_route_mismatch")
+        if not session.selected_slot_id or not session.selected_hold_id:
+            return InvalidStateOutcome(kind="invalid_state", reason="missing_selected_slot_or_hold")
+        if session.resolved_patient_id is None:
+            return InvalidStateOutcome(kind="invalid_state", reason="missing_resolved_patient")
+
+        source_booking = await self.reads.get_booking(source_booking_id)
+        if source_booking is None:
+            return InvalidStateOutcome(kind="invalid_state", reason="source_booking_missing")
+        if source_booking.clinic_id != clinic_id:
+            return InvalidStateOutcome(kind="invalid_state", reason="source_booking_clinic_mismatch")
+        if source_booking.patient_id != session.resolved_patient_id:
+            return InvalidStateOutcome(kind="invalid_state", reason="source_booking_patient_mismatch")
+        if source_booking.service_id != (session.service_id or ""):
+            return InvalidStateOutcome(kind="invalid_state", reason="source_booking_service_mismatch")
+        if source_booking.doctor_id != (session.doctor_id or ""):
+            return InvalidStateOutcome(kind="invalid_state", reason="source_booking_doctor_mismatch")
+        if source_booking.branch_id != (session.branch_id or ""):
+            return InvalidStateOutcome(kind="invalid_state", reason="source_booking_branch_mismatch")
+
+        return await self.orchestration.complete_booking_reschedule_from_session(
+            booking_id=source_booking_id,
+            booking_session_id=callback_session_id,
+            reason_code="patient_reschedule_completed",
+        )
+
     async def confirm_existing_booking(self, *, clinic_id: str, telegram_user_id: int, callback_session_id: str, booking_id: str):
         validation = await self.validate_existing_booking_control_action(
             clinic_id=clinic_id,
