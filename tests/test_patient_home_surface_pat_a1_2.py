@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -93,6 +94,8 @@ class _BookingFlowStub:
         )
         self.start_or_resume_calls = 0
         self.start_or_resume_existing_calls = 0
+        self.resolve_known_patient_calls = 0
+        self.known_patient_result_kind = "invalid_state"
 
     async def start_or_resume_session(self, **kwargs):  # noqa: ANN003
         self.start_or_resume_calls += 1
@@ -101,6 +104,18 @@ class _BookingFlowStub:
     async def start_or_resume_existing_booking_session(self, **kwargs):  # noqa: ANN003
         self.start_or_resume_existing_calls += 1
         return self.session
+
+    async def resolve_existing_booking_for_known_patient(self, **kwargs):  # noqa: ANN003
+        self.resolve_known_patient_calls += 1
+        result_session = BookingSession(
+            **{
+                **asdict(self.session),
+                "booking_session_id": "sess_known",
+                "route_type": "existing_booking_control",
+                "status": "in_progress",
+            }
+        )
+        return SimpleNamespace(kind=self.known_patient_result_kind, bookings=(), booking_session=result_session)
 
     async def determine_resume_panel(self, **kwargs):  # noqa: ANN003
         return BookingResumePanel(panel_key="contact_collection", booking_session=self.session)
@@ -156,7 +171,7 @@ def _handler(router, name: str, *, kind: str = "message"):
     raise AssertionError(name)
 
 
-def _build_router(*, with_recommendations: bool, with_care: bool):
+def _build_router(*, with_recommendations: bool, with_care: bool, recommendation_repository=None):
     i18n = I18nService(locales_path=Path("locales"), default_locale="en")
     runtime = CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=InMemoryRedis()))
     codec = CardCallbackCodec(runtime=runtime)
@@ -170,7 +185,7 @@ def _build_router(*, with_recommendations: bool, with_care: bool):
         reminder_actions=_ReminderActions(),
         recommendation_service=recommendation_service,
         care_commerce_service=care_service,
-        recommendation_repository=_RecommendationRepoStub(),
+        recommendation_repository=recommendation_repository if recommendation_repository is not None else _RecommendationRepoStub(),
         default_locale="en",
         card_runtime=runtime,
         card_callback_codec=codec,
@@ -218,6 +233,44 @@ def test_my_booking_and_home_callback_have_equivalent_entry_state() -> None:
     assert booking_flow.start_or_resume_existing_calls == 2
     assert state_after_command["booking_mode"] == "existing_lookup_contact"
     assert state_after_callback["booking_mode"] == "existing_lookup_contact"
+
+
+def test_my_booking_direct_shortcut_uses_trusted_patient_and_skips_contact_prompt() -> None:
+    router, runtime, booking_flow, _, _ = _build_router(
+        with_recommendations=False,
+        with_care=False,
+    )
+    booking_flow.known_patient_result_kind = "no_match"
+    message = _Message(text="/my_booking", user_id=1001)
+
+    asyncio.run(_handler(router, "my_booking_entry")(message))
+
+    assert booking_flow.resolve_known_patient_calls == 1
+    assert booking_flow.start_or_resume_existing_calls == 0
+    text, _ = message.answers[-1]
+    assert "upcoming booking for this contact" in text
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "existing_booking_control"
+
+
+def test_my_booking_without_trusted_identity_falls_back_to_contact_prompt() -> None:
+    class _NoTrustRecommendationRepo:
+        async def find_patient_ids_by_telegram_user(self, *, clinic_id: str, telegram_user_id: int) -> list[str]:
+            return []
+
+    router, _, booking_flow, _, _ = _build_router(
+        with_recommendations=False,
+        with_care=False,
+        recommendation_repository=_NoTrustRecommendationRepo(),
+    )
+    message = _Message(text="/my_booking", user_id=1001)
+
+    asyncio.run(_handler(router, "my_booking_entry")(message))
+
+    assert booking_flow.resolve_known_patient_calls == 0
+    assert booking_flow.start_or_resume_existing_calls == 1
+    text, _ = message.answers[-1]
+    assert "share the same phone" in text
 
 
 def test_recommendations_command_and_home_callback_share_entry_when_available() -> None:

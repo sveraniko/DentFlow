@@ -485,6 +485,50 @@ def test_existing_booking_controls_exact_match_no_match_and_ambiguous() -> None:
     assert len(repo_ambiguous.escalations) == 1
 
 
+def test_resolve_existing_booking_for_known_patient_uses_fresh_control_session() -> None:
+    flow, repo, _ = _build_flow(finder_rows=[])
+    now = datetime(2026, 4, 16, 11, 0, tzinfo=timezone.utc)
+    repo.bookings["b_known"] = Booking(
+        booking_id="b_known",
+        clinic_id="clinic_main",
+        branch_id="branch_1",
+        patient_id="pat_known",
+        doctor_id="doctor_1",
+        service_id="service_consult",
+        slot_id="slot_1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=now + timedelta(days=1),
+        scheduled_end_at=now + timedelta(days=1, minutes=30),
+        status="pending_confirmation",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=None,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    result = asyncio.run(
+        flow.resolve_existing_booking_for_known_patient(
+            clinic_id="clinic_main",
+            telegram_user_id=4104,
+            patient_id="pat_known",
+        )
+    )
+
+    assert result.kind == "exact_match"
+    assert result.booking_session is not None
+    assert result.booking_session.route_type == "existing_booking_control"
+    assert result.booking_session.resolved_patient_id == "pat_known"
+    assert result.bookings[0].booking_id == "b_known"
+
+
 def test_reschedule_cancel_waitlist_and_admin_open_details() -> None:
     flow, repo, _ = _build_flow(finder_rows=[])
     now = datetime(2026, 4, 16, 11, 0, tzinfo=timezone.utc)

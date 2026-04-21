@@ -29,6 +29,7 @@ ACTIVE_SESSION_STATUSES: tuple[str, ...] = (
 )
 NEW_BOOKING_ROUTE_TYPES: frozenset[str] = frozenset({"service_first"})
 EXISTING_BOOKING_CONTROL_ROUTE_TYPES: frozenset[str] = frozenset({"existing_booking_control"})
+LIVE_EXISTING_BOOKING_STATUSES: frozenset[str] = frozenset({"pending_confirmation", "confirmed", "reschedule_requested", "checked_in", "in_service"})
 
 
 class BookingFlowReadRepository(Protocol):
@@ -369,6 +370,26 @@ class BookingPatientFlowService:
             limit=limit,
         )
 
+    async def resolve_existing_booking_for_known_patient(
+        self,
+        *,
+        clinic_id: str,
+        telegram_user_id: int,
+        patient_id: str,
+    ) -> BookingControlResolutionResult:
+        session = await self.start_new_existing_booking_session(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
+        attached = await self.orchestration.attach_resolved_patient_to_session(
+            booking_session_id=session.booking_session_id,
+            patient_id=patient_id,
+        )
+        if not isinstance(attached, OrchestrationSuccess):
+            return BookingControlResolutionResult(kind="invalid_state", booking_session=session)
+        bookings = await self.reads.list_bookings_by_patient(patient_id=patient_id)
+        live = tuple(sorted([row for row in bookings if row.status in LIVE_EXISTING_BOOKING_STATUSES], key=lambda row: row.scheduled_start_at))
+        if not live:
+            return BookingControlResolutionResult(kind="no_match", booking_session=attached.entity)
+        return BookingControlResolutionResult(kind="exact_match", bookings=live, booking_session=attached.entity)
+
     async def resolve_existing_booking_by_contact(
         self,
         *,
@@ -395,12 +416,7 @@ class BookingPatientFlowService:
         if resolved_session is None or resolved_session.resolved_patient_id is None:
             return BookingControlResolutionResult(kind="invalid_state", booking_session=session)
         bookings = await self.reads.list_bookings_by_patient(patient_id=resolved_session.resolved_patient_id)
-        live = tuple(
-            sorted(
-                [row for row in bookings if row.status in {"pending_confirmation", "confirmed", "reschedule_requested", "checked_in", "in_service"}],
-                key=lambda row: row.scheduled_start_at,
-            )
-        )
+        live = tuple(sorted([row for row in bookings if row.status in LIVE_EXISTING_BOOKING_STATUSES], key=lambda row: row.scheduled_start_at))
         if not live:
             return BookingControlResolutionResult(kind="no_match", booking_session=resolved_session)
         return BookingControlResolutionResult(kind="exact_match", bookings=live, booking_session=resolved_session)
