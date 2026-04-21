@@ -2625,6 +2625,14 @@ def make_router(
         if not clinic_id:
             return
         _, _, callback_session_id = callback.data.split(":", 2)
+        callback_session = await booking_flow.get_booking_session(booking_session_id=callback_session_id)
+        if callback_session is not None:
+            if callback_session.clinic_id != clinic_id or callback_session.telegram_user_id != callback.from_user.id:
+                await callback.answer(i18n.t("patient.booking.callback.stale", locale), show_alert=True)
+                return
+            if callback_session.status in {"admin_escalated", "completed", "canceled", "expired"}:
+                await callback.answer(i18n.t("patient.booking.finalize.invalid_state", locale), show_alert=True)
+                return
         if not await booking_flow.validate_active_session_callback(
             clinic_id=clinic_id,
             telegram_user_id=callback.from_user.id,
