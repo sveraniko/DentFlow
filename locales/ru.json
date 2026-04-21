@@ -60,6 +60,7 @@
   "patient.booking.reschedule.start.cta": "Выбрать новое время",
   "patient.booking.reschedule.start.placeholder": "Подбор нового слота будет добавлен следующим шагом. Нажмите кнопку чуть позже.",
   "patient.booking.reschedule.start.unavailable": "Запрос принят, но сейчас не удалось открыть перенос. Попробуйте чуть позже.",
+  "patient.booking.reschedule.start.contact_ignored": "Сейчас активен перенос записи. Нажмите «Выбрать новое время», чтобы продолжить.",
   "patient.booking.waitlist.created": "Готово. Мы зафиксировали запрос на более ранний слот; клиника свяжется, если он появится.",
   "patient.booking.cancel.confirm": "Подтвердите отмену записи.",
   "patient.booking.cancel.aborted": "Отмена отменена.",
