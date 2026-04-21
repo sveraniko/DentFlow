@@ -956,6 +956,51 @@ def test_start_existing_booking_control_for_booking_creates_fresh_bound_session(
     assert started.booking_session.resolved_patient_id == "pat_owner"
 
 
+def test_cancelled_booking_remains_accessible_in_existing_booking_continuity() -> None:
+    flow, repo, _ = _build_flow(finder_rows=[])
+    now = datetime(2026, 4, 16, 11, 0, tzinfo=timezone.utc)
+    repo.bookings["b_canceled_view"] = Booking(
+        booking_id="b_canceled_view",
+        clinic_id="clinic_main",
+        branch_id="branch_1",
+        patient_id="pat_owner",
+        doctor_id="doctor_1",
+        service_id="service_consult",
+        slot_id="slot_1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=now + timedelta(days=1),
+        scheduled_end_at=now + timedelta(days=1, minutes=30),
+        status="canceled",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=None,
+        canceled_at=now,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    started = asyncio.run(
+        flow.start_existing_booking_control_for_booking(
+            clinic_id="clinic_main",
+            telegram_user_id=8113,
+            booking_id="b_canceled_view",
+        )
+    )
+
+    assert started.kind == "ready"
+    assert started.booking is not None
+    assert started.booking.status == "canceled"
+    assert started.booking_session is not None
+    snapshot = flow.build_booking_snapshot(booking=started.booking, role_variant="patient")
+    assert snapshot.status == "canceled"
+
+
 def test_start_patient_reschedule_session_creates_prefilled_reschedule_session() -> None:
     flow, repo, _ = _build_flow(finder_rows=[])
     now = datetime(2026, 4, 16, 11, 0, tzinfo=timezone.utc)

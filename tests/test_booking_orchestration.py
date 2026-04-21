@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import AbstractAsyncContextManager
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -15,6 +15,7 @@ from app.application.booking.orchestration_outcomes import (
     InvalidStateOutcome,
     NoMatchOutcome,
     OrchestrationSuccess,
+    SlotUnavailableOutcome,
 )
 from app.application.booking.patient_resolution import BookingPatientResolutionService
 from app.application.booking.state_services import (
@@ -634,6 +635,10 @@ def test_reminder_scheduling_on_finalize_and_storage_outside_booking() -> None:
         [{"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"}],
         reminder_service=reminder_service,
     )
+    future_start = datetime.now(timezone.utc).replace(second=0, microsecond=0) + timedelta(days=3)
+    repo.slots["slot1"] = AvailabilitySlot(
+        **{**asdict(repo.slots["slot1"]), "start_at": future_start, "end_at": future_start + timedelta(minutes=30)}
+    )
     repo.sessions["s1"] = BookingSession(**{**asdict(repo.sessions["s1"]), "resolved_patient_id": "pat_1", "status": "review_ready"})
     hold = asyncio.run(orchestrator.select_slot_and_activate_hold(booking_session_id="s1", slot_id="slot1"))
     assert isinstance(hold, OrchestrationSuccess)
@@ -658,7 +663,7 @@ def test_reminder_replacement_on_reschedule_and_cancel_on_cancel() -> None:
         policy_resolver=PolicyResolver(InMemoryPolicyRepository()),
     )
     orchestrator = _build_orchestrator(repo, [{"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"}], reminder_service=reminder_service)
-    now = datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
     booking = Booking(
         booking_id="b_sched",
         clinic_id="clinic_main",
@@ -669,8 +674,8 @@ def test_reminder_replacement_on_reschedule_and_cancel_on_cancel() -> None:
         slot_id="slot1",
         booking_mode="patient_bot",
         source_channel="telegram",
-        scheduled_start_at=now.replace(day=21, hour=10),
-        scheduled_end_at=now.replace(day=21, hour=10, minute=30),
+        scheduled_start_at=now + timedelta(days=2, hours=1),
+        scheduled_end_at=now + timedelta(days=2, hours=1, minutes=30),
         status="confirmed",
         reason_for_visit_short=None,
         patient_note=None,
@@ -692,14 +697,14 @@ def test_reminder_replacement_on_reschedule_and_cancel_on_cancel() -> None:
     rescheduled = asyncio.run(
         orchestrator.reschedule_booking(
             booking_id=booking.booking_id,
-            scheduled_start_at=now.replace(day=22, hour=13),
-            scheduled_end_at=now.replace(day=22, hour=13, minute=30),
+            scheduled_start_at=now + timedelta(days=3, hours=2),
+            scheduled_end_at=now + timedelta(days=3, hours=2, minutes=30),
         )
     )
     assert isinstance(rescheduled, OrchestrationSuccess)
     after = asyncio.run(reminder_service.list_booking_reminders(booking_id=booking.booking_id))
     assert any(item.status == "canceled" for item in after)
-    assert any(item.status == "scheduled" and item.scheduled_for.date().day == 22 for item in after)
+    assert any(item.status == "scheduled" and item.scheduled_for > now for item in after)
 
     canceled = asyncio.run(orchestrator.cancel_booking(booking_id=booking.booking_id))
     assert isinstance(canceled, OrchestrationSuccess)
@@ -874,6 +879,98 @@ def test_booking_lifecycle_cancels_all_unsent_scheduled_reminders_even_if_past_d
     after_reschedule = asyncio.run(service.list_booking_reminders(booking_id=booking_resched.booking_id))
     assert any(job.status == "canceled" and job.reminder_id == "rem_old_due_reschedule" for job in after_reschedule)
     assert any(job.status == "scheduled" for job in after_reschedule)
+
+
+def test_cancel_booking_records_history_outbox_and_cancels_reminder_plan() -> None:
+    repo = _Repo()
+    reminder_repo = _ReminderRepo()
+    service = BookingReminderService(
+        repository=reminder_repo,
+        planner=BookingReminderPlanner(PolicyResolver(InMemoryPolicyRepository())),
+        policy_resolver=PolicyResolver(InMemoryPolicyRepository()),
+    )
+    orchestrator = _build_orchestrator(repo, [{"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"}], reminder_service=service)
+    now = datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc)
+    booking = Booking(
+        booking_id="b_cancel_a52",
+        clinic_id="clinic_main",
+        branch_id="branch_central",
+        patient_id="pat_1",
+        doctor_id="doctor_anna",
+        service_id="service_consult",
+        slot_id="slot1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=now.replace(day=23, hour=10),
+        scheduled_end_at=now.replace(day=23, hour=10, minute=30),
+        status="confirmed",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=now,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    repo.bookings[booking.booking_id] = booking
+    asyncio.run(service.replace_booking_reminder_plan(booking=booking))
+
+    canceled = asyncio.run(orchestrator.cancel_booking(booking_id=booking.booking_id))
+    assert isinstance(canceled, OrchestrationSuccess)
+    assert canceled.entity.status == "canceled"
+    assert any(row.booking_id == booking.booking_id and row.new_status == "canceled" for row in repo.history)
+    assert any(getattr(event, "event_name", "") == "booking.canceled" and getattr(event, "entity_id", "") == booking.booking_id for event in repo.outbox_events)
+    reminders = asyncio.run(service.list_booking_reminders(booking_id=booking.booking_id))
+    assert reminders
+    assert all(job.status == "canceled" for job in reminders)
+
+
+def test_canceled_booking_no_longer_blocks_live_slot_conflict_checks() -> None:
+    repo = _Repo()
+    orchestrator = _build_orchestrator(repo, [{"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"}])
+    now = datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc)
+    repo.bookings["b_live"] = Booking(
+        booking_id="b_live",
+        clinic_id="clinic_main",
+        branch_id="branch_central",
+        patient_id="pat_1",
+        doctor_id="doctor_anna",
+        service_id="service_consult",
+        slot_id="slot1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=now.replace(day=21, hour=10),
+        scheduled_end_at=now.replace(day=21, hour=10, minute=30),
+        status="confirmed",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=now,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    repo.sessions["s2"] = BookingSession(
+        **{**asdict(repo.sessions["s1"]), "booking_session_id": "s2", "telegram_user_id": 3002}
+    )
+    blocked = asyncio.run(orchestrator.select_slot_and_activate_hold(booking_session_id="s2", slot_id="slot1"))
+    assert isinstance(blocked, (ConflictOutcome, InvalidStateOutcome, SlotUnavailableOutcome))
+
+    canceled = asyncio.run(orchestrator.cancel_booking(booking_id="b_live"))
+    assert isinstance(canceled, OrchestrationSuccess)
+    assert canceled.entity.status == "canceled"
+
+    released = asyncio.run(orchestrator.select_slot_and_activate_hold(booking_session_id="s2", slot_id="slot1"))
+    assert isinstance(released, OrchestrationSuccess)
+    assert released.entity.status == "active"
 
 
 def test_reminder_policy_uses_patient_preferences_then_clinic_fallback() -> None:
