@@ -2000,6 +2000,35 @@ def make_router(
         history = [row for row in rows if row.recommendation_id != latest.recommendation_id]
         return latest, history
 
+    async def _has_recommendation_products_target(*, recommendation: Any) -> bool:
+        if care_commerce_service is None:
+            return False
+        try:
+            resolution = await care_commerce_service.resolve_recommendation_target_result(
+                clinic_id=_primary_clinic_id() or recommendation.clinic_id,
+                recommendation_id=recommendation.recommendation_id,
+                recommendation_type=recommendation.recommendation_type,
+                locale=_locale(),
+            )
+        except Exception:
+            return False
+        return bool(resolution.products)
+
+    def _parse_recommendation_callback_data(
+        *,
+        raw_data: str,
+        expected_prefix: str,
+        expected_parts: int,
+    ) -> list[str] | None:
+        parts = raw_data.split(":", expected_parts - 1)
+        if len(parts) != expected_parts:
+            return None
+        if ":".join(parts[:2]) != expected_prefix:
+            return None
+        if not all(part.strip() for part in parts[2:]):
+            return None
+        return parts
+
     async def _render_recommendation_detail_panel(
         *,
         message: Message | CallbackQuery,
@@ -2033,7 +2062,7 @@ def make_router(
                 ),
             ]
         )
-        if care_commerce_service is not None:
+        if await _has_recommendation_products_target(recommendation=recommendation):
             keyboard_rows.append(
                 [
                     InlineKeyboardButton(
@@ -2524,7 +2553,15 @@ def make_router(
     async def recommendation_open_callback(callback: CallbackQuery) -> None:
         if not callback.from_user or not callback.data or recommendation_service is None:
             return
-        recommendation_id = callback.data.split(":", 2)[2]
+        parts = _parse_recommendation_callback_data(
+            raw_data=callback.data,
+            expected_prefix="prec:open",
+            expected_parts=3,
+        )
+        if parts is None:
+            await callback.answer(i18n.t("patient.recommendations.action.unavailable", _locale()), show_alert=True)
+            return
+        recommendation_id = parts[2]
         patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
         recommendation = await recommendation_service.get(recommendation_id)
         if not patient_id or recommendation is None or recommendation.patient_id != patient_id:
@@ -2546,9 +2583,13 @@ def make_router(
     async def recommendation_action_callback(callback: CallbackQuery) -> None:
         if not callback.from_user or not callback.data or recommendation_service is None:
             return
-        parts = callback.data.split(":", 3)
-        if len(parts) != 4:
-            await callback.answer(i18n.t("patient.recommendations.action.invalid_state", _locale()), show_alert=True)
+        parts = _parse_recommendation_callback_data(
+            raw_data=callback.data,
+            expected_prefix="prec:act",
+            expected_parts=4,
+        )
+        if parts is None:
+            await callback.answer(i18n.t("patient.recommendations.action.unavailable", _locale()), show_alert=True)
             return
         action, recommendation_id = parts[2], parts[3]
         patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
@@ -2564,9 +2605,14 @@ def make_router(
             elif action == "decline":
                 updated = await recommendation_service.decline(recommendation_id=recommendation_id)
             else:
-                await callback.answer(i18n.t("patient.recommendations.action.invalid_state", _locale()), show_alert=True)
+                await callback.answer(i18n.t("patient.recommendations.action.unavailable", _locale()), show_alert=True)
                 return
         except ValueError:
+            await _render_recommendation_detail_panel(
+                message=callback,
+                actor_id=callback.from_user.id,
+                recommendation=recommendation,
+            )
             await callback.answer(i18n.t("patient.recommendations.action.invalid_state", _locale()), show_alert=True)
             return
         resolved = updated or recommendation
@@ -2584,7 +2630,15 @@ def make_router(
     async def recommendation_products_callback(callback: CallbackQuery) -> None:
         if not callback.from_user or not callback.data or recommendation_service is None or care_commerce_service is None:
             return
-        recommendation_id = callback.data.split(":", 2)[2]
+        parts = _parse_recommendation_callback_data(
+            raw_data=callback.data,
+            expected_prefix="prec:products",
+            expected_parts=3,
+        )
+        if parts is None:
+            await callback.answer(i18n.t("patient.recommendations.action.unavailable", _locale()), show_alert=True)
+            return
+        recommendation_id = parts[2]
         patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
         if not patient_id:
             await callback.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()), show_alert=True)

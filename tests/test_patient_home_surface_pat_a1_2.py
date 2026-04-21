@@ -18,7 +18,11 @@ from app.interfaces.cards.runtime_state import InMemoryRedis
 
 
 class _Bot:
+    def __init__(self) -> None:
+        self.edits: list[dict[str, object]] = []
+
     async def edit_message_text(self, **kwargs):  # noqa: ANN003
+        self.edits.append(kwargs)
         return None
 
 
@@ -134,8 +138,11 @@ class _BookingFlowStub:
 
 
 class _RecommendationRepoStub:
+    def __init__(self, mapping: dict[int, str] | None = None) -> None:
+        self.mapping = mapping or {1001: "pat_1"}
+
     async def find_patient_id_by_telegram_user(self, *, clinic_id: str, telegram_user_id: int) -> str:
-        return "pat_1"
+        return self.mapping.get(telegram_user_id, "pat_1")
 
 
 class _RecommendationServiceStub:
@@ -210,10 +217,18 @@ class _RecommendationServiceStub:
 class _CareServiceStub:
     def __init__(self) -> None:
         self.list_categories_calls = 0
+        self.resolution_by_recommendation_id: dict[str, list[str]] = {"rec_latest": ["prod_1"]}
 
     async def list_catalog_categories(self, *, clinic_id: str):
         self.list_categories_calls += 1
         return []
+
+    async def resolve_recommendation_target_result(self, *, recommendation_id: str, **kwargs):  # noqa: ANN003
+        product_ids = self.resolution_by_recommendation_id.get(recommendation_id, [])
+        return SimpleNamespace(
+            status="direct_links_resolved" if product_ids else "no_targets",
+            products=[SimpleNamespace(care_product_id=item) for item in product_ids],
+        )
 
 
 def _reference() -> ClinicReferenceService:
@@ -382,6 +397,81 @@ def test_recommendation_action_callback_updates_lifecycle_and_re_renders_detail(
 
     assert recommendation_service is not None
     assert ("accept", "rec_latest") in recommendation_service.actions
+    assert recommendation_service.rows[1].status == "accepted"
+
+
+def test_recommendation_actions_keep_continuity_for_ack_accept_decline() -> None:
+    router, _, _, recommendation_service, _ = _build_router(with_recommendations=True, with_care=False)
+    assert recommendation_service is not None
+
+    for action, expected_status in (("ack", "Acknowledged"), ("accept", "Accepted"), ("decline", "Declined")):
+        recommendation_service.rows[1].status = "viewed"
+        callback = _Callback(data=f"prec:act:{action}:rec_latest", user_id=1001, message_id=501)
+        asyncio.run(_handler(router, "recommendation_action_callback", kind="callback")(callback))
+        assert callback.answers
+        assert f"Current status: {expected_status}" in callback.answers[-1]
+
+
+def test_recommendation_callback_rejects_malformed_payload_safely() -> None:
+    router, _, _, _, _ = _build_router(with_recommendations=True, with_care=False)
+    callback = _Callback(data="prec:act:accept:", user_id=1001, message_id=501)
+
+    asyncio.run(_handler(router, "recommendation_action_callback", kind="callback")(callback))
+
+    assert callback.answers
+    assert "no longer available" in callback.answers[-1]
+
+
+def test_recommendation_open_and_actions_reject_other_patient_recommendation() -> None:
+    repo = _RecommendationRepoStub(mapping={1001: "pat_other"})
+    router, _, _, _, _ = _build_router(with_recommendations=True, with_care=False, recommendation_repository=repo)
+    open_callback = _Callback(data="prec:open:rec_latest", user_id=1001, message_id=501)
+    action_callback = _Callback(data="prec:act:ack:rec_latest", user_id=1001, message_id=502)
+
+    asyncio.run(_handler(router, "recommendation_open_callback", kind="callback")(open_callback))
+    asyncio.run(_handler(router, "recommendation_action_callback", kind="callback")(action_callback))
+
+    assert "Recommendation not found." in open_callback.answers[-1]
+    assert "Recommendation not found." in action_callback.answers[-1]
+
+
+def test_recommendation_detail_shows_products_cta_only_when_targets_resolvable() -> None:
+    router, _, _, recommendation_service, care_service = _build_router(with_recommendations=True, with_care=True)
+    assert recommendation_service is not None
+    assert care_service is not None
+    message = _Message(text="/recommendation_open rec_latest", user_id=1001)
+
+    asyncio.run(_handler(router, "recommendations_open")(message))
+    with_target_buttons = [button.text for row in message.answers[-1][1].inline_keyboard for button in row]
+    assert "Open recommended products" in with_target_buttons
+
+    care_service.resolution_by_recommendation_id["rec_latest"] = []
+    message_no_target = _Message(text="/recommendation_open rec_latest", user_id=1001)
+    asyncio.run(_handler(router, "recommendations_open")(message_no_target))
+    assert message_no_target.bot.edits
+    reply_markup = message_no_target.bot.edits[-1]["reply_markup"]
+    no_target_buttons = [button.text for row in reply_markup.inline_keyboard for button in row]
+    assert "Open recommended products" not in no_target_buttons
+
+
+def test_recommendation_products_callback_reuses_resolution_and_falls_back_safely() -> None:
+    router, _, _, _, care_service = _build_router(with_recommendations=True, with_care=True)
+    assert care_service is not None
+    care_service.resolution_by_recommendation_id["rec_latest"] = []
+    callback = _Callback(data="prec:products:rec_latest", user_id=1001, message_id=501)
+
+    asyncio.run(_handler(router, "recommendation_products_callback", kind="callback")(callback))
+
+    assert callback.answers
+    assert "No care products are linked to this recommendation yet." in callback.answers[-1]
+
+
+def test_pat_a7_1b_contains_no_new_migration_artifacts() -> None:
+    migrations_root = Path("migrations")
+    if not migrations_root.exists():
+        assert True
+        return
+    assert not any("pat_a7_1b" in path.name.lower() for path in migrations_root.rglob("*.py"))
 
 
 def test_care_command_and_home_callback_share_entry_when_available() -> None:
