@@ -398,6 +398,9 @@ class BookingPatientFlowService:
     async def get_availability_slot(self, *, slot_id: str) -> AvailabilitySlot | None:
         return await self.reads.get_availability_slot(slot_id)
 
+    async def get_booking(self, *, booking_id: str) -> Booking | None:
+        return await self.reads.get_booking(booking_id)
+
     async def list_admin_escalations(self, *, clinic_id: str, limit: int = 10) -> list[AdminEscalation]:
         return await self.reads.list_open_admin_escalations(clinic_id=clinic_id, limit=limit)
 

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from app.application.booking.orchestration_outcomes import OrchestrationSuccess
 from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
 from app.common.i18n import I18nService
+from app.domain.booking import AvailabilitySlot
 from app.domain.booking import Booking
 from app.domain.clinic_reference.models import Branch, Clinic, Doctor, Service
 from app.interfaces.bots.patient.router import make_router
@@ -112,6 +113,7 @@ class _BookingFlowStub:
         self.start_or_resume_session_calls = 0
         self.allowed_route_type_checks: list[frozenset[str] | None] = []
         self.reschedule_validation_ok = True
+        self.selected_slot_id = "slot_new_1"
 
     async def request_reschedule(self, **kwargs):  # noqa: ANN003
         self.request_reschedule_calls += 1
@@ -140,6 +142,58 @@ class _BookingFlowStub:
 
     async def list_services(self, **kwargs):  # noqa: ANN003
         return []
+
+    async def list_slots_for_session(self, **kwargs):  # noqa: ANN003
+        now = datetime(2026, 4, 22, 10, 0, tzinfo=timezone.utc)
+        return [
+            AvailabilitySlot(
+                slot_id="slot_new_1",
+                clinic_id="clinic_main",
+                doctor_id="doctor_1",
+                start_at=datetime(2026, 4, 24, 10, 0, tzinfo=timezone.utc),
+                end_at=datetime(2026, 4, 24, 10, 30, tzinfo=timezone.utc),
+                status="open",
+                visibility_policy="public",
+                updated_at=now,
+                branch_id="branch_1",
+                service_scope={"service_ids": ["service_consult"]},
+            )
+        ]
+
+    async def get_booking_session(self, **kwargs):  # noqa: ANN003
+        return SimpleNamespace(
+            booking_session_id="sess_rsch_1",
+            clinic_id="clinic_main",
+            telegram_user_id=1001,
+            route_type="reschedule_booking_control",
+            selected_slot_id=self.selected_slot_id,
+            resolved_patient_id="pat_1",
+            service_id="service_consult",
+            doctor_id="doctor_1",
+            branch_id="branch_1",
+        )
+
+    async def select_slot(self, **kwargs):  # noqa: ANN003
+        self.selected_slot_id = kwargs.get("slot_id")
+        return OrchestrationSuccess(kind="success", entity=SimpleNamespace())
+
+    async def get_booking(self, **kwargs):  # noqa: ANN003
+        return self.booking
+
+    async def get_availability_slot(self, **kwargs):  # noqa: ANN003
+        now = datetime(2026, 4, 22, 10, 0, tzinfo=timezone.utc)
+        return AvailabilitySlot(
+            slot_id="slot_new_1",
+            clinic_id="clinic_main",
+            doctor_id="doctor_1",
+            start_at=datetime(2026, 4, 24, 10, 0, tzinfo=timezone.utc),
+            end_at=datetime(2026, 4, 24, 10, 30, tzinfo=timezone.utc),
+            status="open",
+            visibility_policy="public",
+            updated_at=now,
+            branch_id="branch_1",
+            service_scope={"service_ids": ["service_consult"]},
+        )
 
     def build_booking_snapshot(self, **kwargs):  # noqa: ANN003
         from app.interfaces.cards import BookingRuntimeSnapshot
@@ -211,6 +265,16 @@ def _build_router(*, reminder_actions: _ReminderActions | None = None, booking_f
     return router, runtime, flow
 
 
+def _last_callback_text(callback: _Callback) -> str:
+    if callback.answered:
+        return callback.answered[-1][0]
+    if callback.message.answers:
+        return callback.message.answers[-1][0]
+    if callback.bot.edits:
+        return callback.bot.edits[-1]["text"]
+    return ""
+
+
 def test_my_booking_reschedule_lands_in_canonical_reschedule_start_panel() -> None:
     router, runtime, flow = _build_router()
     asyncio.run(runtime.bind_actor_session_state(scope="patient_flow", actor_id=1001, payload={"booking_session_id": "sess_existing_1", "booking_mode": "existing_booking_control"}))
@@ -223,6 +287,7 @@ def test_my_booking_reschedule_lands_in_canonical_reschedule_start_panel() -> No
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
     assert state["booking_mode"] == "reschedule_booking_control"
     assert state["booking_session_id"] == "sess_rsch_1"
+    assert state["reschedule_booking_id"] == "b1"
 
 
 def test_reminder_reschedule_accepted_lands_in_same_canonical_reschedule_start_panel() -> None:
@@ -238,6 +303,7 @@ def test_reminder_reschedule_accepted_lands_in_same_canonical_reschedule_start_p
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
     assert state["booking_mode"] == "reschedule_booking_control"
     assert state["booking_session_id"] == "sess_rsch_1"
+    assert state["reschedule_booking_id"] == "b1"
 
 
 def test_non_reschedule_reminder_actions_keep_existing_handoff_behavior() -> None:
@@ -274,6 +340,51 @@ def test_stale_reschedule_start_callback_is_safely_rejected() -> None:
     asyncio.run(_handler(router, "reschedule_start_continue")(callback))
 
     assert callback.answered[-1] == ("This button is no longer active. Please use /book to continue.", True)
+
+
+def test_reschedule_start_opens_real_slot_selection_panel() -> None:
+    router, runtime, _ = _build_router()
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={
+                "booking_session_id": "sess_rsch_1",
+                "booking_mode": "reschedule_booking_control",
+                "reschedule_booking_id": "b1",
+            },
+        )
+    )
+    callback = _Callback("rsch:start:sess_rsch_1", user_id=1001)
+
+    asyncio.run(_handler(router, "reschedule_start_continue")(callback))
+
+    text = _last_callback_text(callback)
+    assert "Select a new time for your current booking." in text
+
+
+def test_reschedule_slot_selection_skips_contact_and_renders_review_panel() -> None:
+    router, runtime, _ = _build_router()
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={
+                "booking_session_id": "sess_rsch_1",
+                "booking_mode": "reschedule_booking_control",
+                "reschedule_booking_id": "b1",
+            },
+        )
+    )
+    callback = _Callback("book:slot:sess_rsch_1:slot_new_1", user_id=1001)
+
+    asyncio.run(_handler(router, "select_slot")(callback))
+
+    text = _last_callback_text(callback)
+    assert "Review your reschedule before confirming:" in text
+    assert "Share your phone contact or type the number in chat." not in text
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "reschedule_booking_control"
 
 
 def test_contact_input_in_reschedule_mode_is_bounded_and_not_interpreted() -> None:

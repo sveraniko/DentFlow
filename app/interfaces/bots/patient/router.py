@@ -15,6 +15,7 @@ from app.application.booking.orchestration_outcomes import ConflictOutcome, Inva
 from app.application.booking.telegram_flow import (
     BookingControlResolutionResult,
     BookingPatientFlowService,
+    NEW_BOOKING_ROUTE_TYPES,
     RESCHEDULE_BOOKING_CONTROL_ROUTE_TYPES,
 )
 from app.application.clinic_reference import ClinicReferenceService
@@ -66,6 +67,7 @@ class _CareViewState:
 class _PatientFlowState:
     booking_session_id: str = ""
     booking_mode: str = "new_booking_contact"
+    reschedule_booking_id: str = ""
     care: _CareViewState | None = None
 
 
@@ -366,6 +368,7 @@ def make_router(
         return _PatientFlowState(
             booking_session_id=payload.get("booking_session_id", ""),
             booking_mode=payload.get("booking_mode", "new_booking_contact"),
+            reschedule_booking_id=payload.get("reschedule_booking_id", ""),
             care=care_state,
         )
 
@@ -377,6 +380,7 @@ def make_router(
             payload={
                 "booking_session_id": state.booking_session_id,
                 "booking_mode": state.booking_mode,
+                "reschedule_booking_id": state.reschedule_booking_id,
                 "care": {
                     "selected_category": care_state.selected_category,
                     "category_page": care_state.category_page,
@@ -1621,7 +1625,9 @@ def make_router(
             keyboard=InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
-    async def _render_slot_panel(message: Message | CallbackQuery, *, actor_id: int, session_id: str) -> None:
+    async def _render_slot_panel(
+        message: Message | CallbackQuery, *, actor_id: int, session_id: str, prompt_key: str = "patient.booking.slot.prompt"
+    ) -> None:
         locale = _locale()
         slots = await booking_flow.list_slots_for_session(booking_session_id=session_id)
         if not slots:
@@ -1640,8 +1646,99 @@ def make_router(
             actor_id=actor_id,
             message=message,
             session_id=session_id,
-            text=i18n.t("patient.booking.slot.prompt", locale),
+            text=i18n.t(prompt_key, locale),
             keyboard=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _render_reschedule_review_panel(message: Message | CallbackQuery, *, actor_id: int, session_id: str) -> None:
+        locale = _locale()
+        flow = await _load_flow_state(actor_id)
+        source_booking_id = flow.reschedule_booking_id
+        if not source_booking_id:
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id=session_id,
+                text=i18n.t("patient.booking.reschedule.start.unavailable", locale),
+            )
+            return
+        source_booking = await booking_flow.get_booking(booking_id=source_booking_id)
+        session = await booking_flow.get_booking_session(booking_session_id=session_id)
+        if source_booking is None or session is None or not session.selected_slot_id:
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id=session_id,
+                text=i18n.t("patient.booking.reschedule.start.unavailable", locale),
+            )
+            return
+        if (
+            source_booking.clinic_id != session.clinic_id
+            or source_booking.patient_id != (session.resolved_patient_id or "")
+            or source_booking.service_id != (session.service_id or "")
+            or source_booking.doctor_id != (session.doctor_id or "")
+            or source_booking.branch_id != (session.branch_id or "")
+        ):
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id=session_id,
+                text=i18n.t("patient.booking.reschedule.start.unavailable", locale),
+            )
+            return
+        fallback_locale = _fallback_locale_for_clinic(session.clinic_id)
+        service = reference.get_service(session.clinic_id, session.service_id or "") if session.service_id else None
+        service_label = _resolve_service_label(
+            service_title_key=(service.title_key if service is not None else None),
+            service_code=(service.code if service is not None else None),
+            fallback_id=session.service_id,
+            locale=locale,
+            fallback_locale=fallback_locale,
+            i18n=i18n,
+        )
+        doctor = reference.get_doctor(session.clinic_id, session.doctor_id or "") if session.doctor_id else None
+        doctor_label = _resolve_reference_label(
+            display_name=(doctor.display_name if doctor is not None else None),
+            fallback_id=session.doctor_id,
+            locale=locale,
+            i18n=i18n,
+        )
+        branch = reference.get_branch(session.clinic_id, session.branch_id or "") if session.branch_id else None
+        branch_label = _resolve_reference_label(
+            display_name=(branch.display_name if branch is not None else None),
+            fallback_id=session.branch_id,
+            locale=locale,
+            i18n=i18n,
+        )
+        timezone_name = _resolve_booking_timezone_name(clinic_id=session.clinic_id, branch_id=session.branch_id)
+        current_time = source_booking.scheduled_start_at.astimezone(_zone_or_utc(timezone_name)).strftime("%Y-%m-%d %H:%M %Z")
+        selected_slot = await booking_flow.get_availability_slot(slot_id=session.selected_slot_id)
+        new_time = i18n.t("patient.booking.review.value.missing", locale)
+        if selected_slot is not None:
+            new_time = selected_slot.start_at.astimezone(_zone_or_utc(timezone_name)).strftime("%Y-%m-%d %H:%M %Z")
+        text = i18n.t("patient.booking.reschedule.review.panel", locale).format(
+            current_time=current_time,
+            new_time=new_time,
+            service=service_label,
+            doctor=doctor_label,
+            branch=branch_label,
+        )
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.booking.reschedule.review.confirm_cta", locale),
+                        callback_data=f"rsch:confirm:{session_id}",
+                    )
+                ]
+            ]
+        )
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id=session_id,
+            text=text,
+            keyboard=keyboard,
         )
 
     async def _render_review_finalize_panel(message: Message | CallbackQuery, *, actor_id: int, session_id: str) -> None:
@@ -1816,6 +1913,7 @@ def make_router(
                 )
                 return
             flow.booking_mode = "new_booking_contact"
+            flow.reschedule_booking_id = ""
             await _save_flow_state(actor_id, flow)
         session = await booking_flow.start_or_resume_session(
             clinic_id=clinic_id,
@@ -1824,6 +1922,7 @@ def make_router(
         flow = await _load_flow_state(actor_id)
         flow.booking_session_id = session.booking_session_id
         flow.booking_mode = "new_booking_contact"
+        flow.reschedule_booking_id = ""
         await _save_flow_state(actor_id, flow)
         await _render_resume_panel(message, actor_id=actor_id, session_id=session.booking_session_id, clinic_id=clinic_id)
 
@@ -1847,6 +1946,7 @@ def make_router(
         flow = await _load_flow_state(actor_id)
         flow.booking_session_id = session.booking_session_id
         flow.booking_mode = "existing_lookup_contact"
+        flow.reschedule_booking_id = ""
         await _save_flow_state(actor_id, flow)
         await _send_or_edit_panel(
             actor_id=actor_id,
@@ -2867,16 +2967,42 @@ def make_router(
             await callback.answer(i18n.t("patient.booking.session.missing", locale), show_alert=True)
             return
         _, _, callback_session_id, slot_id = callback.data.split(":", 3)
-        if not await booking_flow.validate_active_session_callback(clinic_id=clinic_id, telegram_user_id=callback.from_user.id, callback_session_id=callback_session_id):
+        callback_session = await booking_flow.get_booking_session(booking_session_id=callback_session_id)
+        if callback_session is None or callback_session.clinic_id != clinic_id or callback_session.telegram_user_id != callback.from_user.id:
+            await callback.answer(i18n.t("patient.booking.callback.stale", locale), show_alert=True)
+            return
+        allowed_route_types = NEW_BOOKING_ROUTE_TYPES
+        slot_prompt_key = "patient.booking.slot.prompt"
+        if callback_session.route_type in RESCHEDULE_BOOKING_CONTROL_ROUTE_TYPES:
+            allowed_route_types = RESCHEDULE_BOOKING_CONTROL_ROUTE_TYPES
+            slot_prompt_key = "patient.booking.reschedule.slot.prompt"
+        if not await booking_flow.validate_active_session_callback(
+            clinic_id=clinic_id,
+            telegram_user_id=callback.from_user.id,
+            callback_session_id=callback_session_id,
+            allowed_route_types=allowed_route_types,
+        ):
             await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
             return
         selected = await booking_flow.select_slot(booking_session_id=callback_session_id, slot_id=slot_id)
         if isinstance(selected, (SlotUnavailableOutcome, ConflictOutcome)):
             await callback.answer(i18n.t("patient.booking.slot.unavailable", locale), show_alert=True)
-            await _render_slot_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
+            await _render_slot_panel(
+                callback,
+                actor_id=callback.from_user.id,
+                session_id=callback_session_id,
+                prompt_key=slot_prompt_key,
+            )
+            return
+        if callback_session.route_type in RESCHEDULE_BOOKING_CONTROL_ROUTE_TYPES:
+            flow = await _load_flow_state(callback.from_user.id)
+            flow.booking_mode = "reschedule_booking_control"
+            await _save_flow_state(callback.from_user.id, flow)
+            await _render_reschedule_review_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
             return
         flow = await _load_flow_state(callback.from_user.id)
         flow.booking_mode = "existing_booking_control"
+        flow.reschedule_booking_id = ""
         await _save_flow_state(callback.from_user.id, flow)
         contact_keyboard = ReplyKeyboardMarkup(
             keyboard=[[KeyboardButton(text=i18n.t("patient.booking.contact.share", locale), request_contact=True)]],
@@ -2967,12 +3093,35 @@ def make_router(
         ):
             await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
             return
-        await _send_or_edit_panel(
+        await _render_slot_panel(
+            callback,
             actor_id=callback.from_user.id,
-            message=callback,
             session_id=callback_session_id,
-            text=i18n.t("patient.booking.reschedule.start.placeholder", _locale()),
+            prompt_key="patient.booking.reschedule.slot.prompt",
         )
+
+    @router.callback_query(F.data.startswith("rsch:confirm:"))
+    async def reschedule_confirm_placeholder(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            await callback.answer(i18n.t("patient.booking.unavailable", _locale()), show_alert=True)
+            return
+        _, _, callback_session_id = callback.data.split(":", 2)
+        flow = await _load_flow_state(callback.from_user.id)
+        if flow.booking_mode != "reschedule_booking_control" or flow.booking_session_id != callback_session_id:
+            await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
+            return
+        if not await booking_flow.validate_active_session_callback(
+            clinic_id=clinic_id,
+            telegram_user_id=callback.from_user.id,
+            callback_session_id=callback_session_id,
+            allowed_route_types=RESCHEDULE_BOOKING_CONTROL_ROUTE_TYPES,
+        ):
+            await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
+            return
+        await callback.answer(i18n.t("patient.booking.reschedule.review.confirm.placeholder", _locale()), show_alert=True)
 
     @router.callback_query(F.data.startswith("rem:"))
     async def reminder_action_callback(callback: CallbackQuery) -> None:
@@ -3173,6 +3322,7 @@ def make_router(
                 await _render_reschedule_start_panel(message, actor_id=actor_id, session_id=reschedule_session_id)
                 return
             flow.booking_mode = "new_booking_contact"
+            flow.reschedule_booking_id = ""
             await _save_flow_state(actor_id, flow)
             await _send_or_edit_panel(
                 actor_id=actor_id,
@@ -3203,6 +3353,7 @@ def make_router(
         if resume.panel_key == "contact_collection":
             flow = await _load_flow_state(actor_id)
             flow.booking_mode = "new_booking_contact"
+            flow.reschedule_booking_id = ""
             await _save_flow_state(actor_id, flow)
             contact_keyboard = ReplyKeyboardMarkup(
                 keyboard=[[KeyboardButton(text=i18n.t("patient.booking.contact.share", _locale()), request_contact=True)]],
@@ -3426,6 +3577,7 @@ def make_router(
         flow = await _load_flow_state(actor_id)
         flow.booking_session_id = started.booking_session.booking_session_id
         flow.booking_mode = "reschedule_booking_control"
+        flow.reschedule_booking_id = booking_id
         await _save_flow_state(actor_id, flow)
         await _render_reschedule_start_panel(
             message,
@@ -3487,6 +3639,7 @@ def make_router(
         flow = await _load_flow_state(callback.from_user.id)
         flow.booking_session_id = session.booking_session_id
         flow.booking_mode = "existing_booking_control"
+        flow.reschedule_booking_id = ""
         await _save_flow_state(callback.from_user.id, flow)
         booking_text = _render_patient_booking_panel(booking=booking, session_state_token=session.booking_session_id, locale=locale)
         keyboard = await _build_patient_booking_controls_keyboard(
@@ -3510,6 +3663,7 @@ def make_router(
             flow = await _load_flow_state(actor_id)
             flow.booking_session_id = effective_session_id
             flow.booking_mode = "existing_booking_control"
+            flow.reschedule_booking_id = ""
             await _save_flow_state(actor_id, flow)
         if result.kind == "ambiguous_escalated":
             await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=effective_session_id, text=i18n.t("patient.booking.escalated", locale))
