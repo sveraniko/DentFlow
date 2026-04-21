@@ -1815,6 +1815,18 @@ def make_router(
                 text=i18n.t("patient.booking.unavailable", _locale()),
             )
             return
+
+        patient_id = await _resolve_patient_id_for_user(actor_id)
+        if patient_id:
+            direct_result = await booking_flow.resolve_existing_booking_for_known_patient(
+                clinic_id=clinic_id,
+                telegram_user_id=actor_id,
+                patient_id=patient_id,
+            )
+            if direct_result.kind in {"exact_match", "no_match"}:
+                await _show_existing_booking_result(message, actor_id=actor_id, result=direct_result)
+                return
+
         session = await booking_flow.start_or_resume_existing_booking_session(clinic_id=clinic_id, telegram_user_id=actor_id)
         flow = await _load_flow_state(actor_id)
         flow.booking_session_id = session.booking_session_id
@@ -2812,7 +2824,7 @@ def make_router(
             await _render_slot_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
             return
         flow = await _load_flow_state(callback.from_user.id)
-        flow.booking_mode = "new_booking_contact"
+        flow.booking_mode = "existing_booking_control"
         await _save_flow_state(callback.from_user.id, flow)
         contact_keyboard = ReplyKeyboardMarkup(
             keyboard=[[KeyboardButton(text=i18n.t("patient.booking.contact.share", locale), request_contact=True)]],
@@ -3030,6 +3042,8 @@ def make_router(
             result = await booking_flow.resolve_existing_booking_by_contact(clinic_id=clinic_id, telegram_user_id=actor_id, phone=phone)
             await _show_existing_booking_result(message, actor_id=actor_id, result=result)
             return
+        if mode == "existing_booking_control":
+            return
         await booking_flow.set_contact_phone(booking_session_id=session_id, phone=phone)
         display_name = (message.from_user.full_name or "").strip() or i18n.t("patient.booking.contact.default_name", locale)
         resolution = await booking_flow.resolve_patient_from_contact(
@@ -3245,7 +3259,7 @@ def make_router(
             return
         flow = await _load_flow_state(callback.from_user.id)
         flow.booking_session_id = session.booking_session_id
-        flow.booking_mode = "new_booking_contact"
+        flow.booking_mode = "existing_booking_control"
         await _save_flow_state(callback.from_user.id, flow)
         booking_text = _render_patient_booking_panel(booking=booking, session_state_token=session.booking_session_id, locale=locale)
         keyboard = await _build_patient_booking_controls_keyboard(
@@ -3268,6 +3282,7 @@ def make_router(
         if effective_session_id:
             flow = await _load_flow_state(actor_id)
             flow.booking_session_id = effective_session_id
+            flow.booking_mode = "existing_booking_control"
             await _save_flow_state(actor_id, flow)
         if result.kind == "ambiguous_escalated":
             await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=effective_session_id, text=i18n.t("patient.booking.escalated", locale))

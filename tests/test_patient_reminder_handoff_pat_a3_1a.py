@@ -192,6 +192,7 @@ def test_accepted_reminder_actions_handoff_to_canonical_booking_panel(
 
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
     assert state["booking_session_id"] == "sess_rem_1"
+    assert state["booking_mode"] == "existing_booking_control"
     active = asyncio.run(runtime.resolve_active_panel(actor_id=1001, panel_family=PanelFamily.BOOKING_DETAIL))
     assert active is not None
 
