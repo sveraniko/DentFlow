@@ -137,6 +137,15 @@ Where enabled, a reminder may ask the patient to choose one action:
 
 This produces useful operational signal and reinforces commitment.
 
+### Reminder acknowledgement (`ack`) pattern
+For reminder types that expose `ack` (for example pre-visit / day-of / recall reminders), `ack` is a one-tap non-destructive acknowledgement meaning “received/understood.”
+
+`ack` is not equivalent to attendance confirmation:
+- `confirm` is a confirmation-required action and may mutate booking lifecycle state according to policy.
+- `ack` records reminder acknowledgement only and does not mutate booking status.
+
+After accepted `ack`, patient flow returns to canonical booking continuity. By default, `ack` does not introduce additional future-reminder suppression logic.
+
 ---
 
 ## 9. Reschedule behavior

@@ -184,9 +184,9 @@ Each scenario in this document contains:
 - **Actor / persona:** Booked patient.
 - **Preconditions:** Reminder has been sent.
 - **Entry point:** reminder callback.
-- **Main flow:** patient taps `ack`, `confirm`, `reschedule`, or `cancel` according to reminder policy.
+- **Main flow:** patient taps reminder CTA according to reminder policy. `ack` means “received/understood” reminder acknowledgement and is intentionally distinct from attendance confirmation (`confirm`).
 - **Outbound messages / notifications:** reminder-action acceptance/stale/invalid feedback.
-- **State / object transitions:** reminder acknowledgement record updates; downstream booking handling continues.
+- **State / object transitions:** `ack` updates reminder acknowledgement record only (non-destructive) and does **not** mutate booking status; accepted `ack` hands off to canonical booking continuity. `ack` currently adds no special future-reminder suppression policy beyond normal reminder planning.
 - **Current implementation status:** **Implemented**.
 - **Evidence:** `app/interfaces/bots/patient/router.py` (`reminder_action_callback`); `booking_docs/10_booking_flow_dental.md`; `booking_docs/50_booking_telegram_ui_contract.md`.
 - **Known gaps / comments:** detailed reminder debugging stays with admin/issues and owner analytics, not patient UX.

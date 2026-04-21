@@ -105,6 +105,14 @@ Action-required booking reminders should support compact CTA buttons such as:
 
 These actions should feed reminder acknowledgement and booking follow-up logic without inventing hidden statuses.
 
+Reminder acknowledgement (`ack`) is a separate contract:
+- available on acknowledgement-style reminder surfaces (for example pre-visit, day-of, recall reminders), not as a substitute for confirmation-required reminders;
+- one-tap by design;
+- non-destructive (records reminder acknowledgement only);
+- not equivalent to attendance confirmation;
+- accepted `ack` must hand off to canonical booking continuity panel;
+- no extra future-reminder suppression policy is implied by default.
+
 ---
 
 ## 9. Analytics hooks
