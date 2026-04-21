@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 from app.application.booking.orchestration_outcomes import OrchestrationSuccess
+from app.application.booking.orchestration_outcomes import SlotUnavailableOutcome
 from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
 from app.common.i18n import I18nService
 from app.domain.booking import AvailabilitySlot
@@ -114,6 +116,8 @@ class _BookingFlowStub:
         self.allowed_route_type_checks: list[frozenset[str] | None] = []
         self.reschedule_validation_ok = True
         self.selected_slot_id = "slot_new_1"
+        self.complete_patient_reschedule_calls = 0
+        self.complete_patient_reschedule_outcome: object | None = None
 
     async def request_reschedule(self, **kwargs):  # noqa: ANN003
         self.request_reschedule_calls += 1
@@ -179,6 +183,23 @@ class _BookingFlowStub:
 
     async def get_booking(self, **kwargs):  # noqa: ANN003
         return self.booking
+
+    async def complete_patient_reschedule(self, **kwargs):  # noqa: ANN003
+        self.complete_patient_reschedule_calls += 1
+        if self.complete_patient_reschedule_outcome is not None:
+            return self.complete_patient_reschedule_outcome
+        now = datetime(2026, 4, 24, 10, 0, tzinfo=timezone.utc)
+        self.booking = Booking(
+            **{
+                **asdict(self.booking),
+                "slot_id": "slot_new_1",
+                "scheduled_start_at": now,
+                "scheduled_end_at": datetime(2026, 4, 24, 10, 30, tzinfo=timezone.utc),
+                "status": "confirmed",
+                "updated_at": now,
+            }
+        )
+        return OrchestrationSuccess(kind="success", entity=self.booking)
 
     async def get_availability_slot(self, **kwargs):  # noqa: ANN003
         now = datetime(2026, 4, 22, 10, 0, tzinfo=timezone.utc)
@@ -396,6 +417,54 @@ def test_contact_input_in_reschedule_mode_is_bounded_and_not_interpreted() -> No
 
     assert contact.answers
     assert "Reschedule mode is active" in contact.answers[-1][0]
+
+
+def test_reschedule_confirm_happy_path_handoffs_to_canonical_booking_panel() -> None:
+    router, runtime, flow = _build_router()
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={
+                "booking_session_id": "sess_rsch_1",
+                "booking_mode": "reschedule_booking_control",
+                "reschedule_booking_id": "b1",
+            },
+        )
+    )
+    callback = _Callback("rsch:confirm:sess_rsch_1", user_id=1001)
+
+    asyncio.run(_handler(router, "reschedule_confirm")(callback))
+
+    assert flow.complete_patient_reschedule_calls == 1
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "existing_booking_control"
+    assert state["reschedule_booking_id"] == ""
+    text = _last_callback_text(callback)
+    assert "Your booking was rescheduled successfully." in text
+
+
+def test_reschedule_confirm_slot_unavailable_is_bounded_and_returns_to_slot_selection() -> None:
+    flow = _BookingFlowStub()
+    flow.complete_patient_reschedule_outcome = SlotUnavailableOutcome(kind="slot_unavailable", reason="selected slot is unavailable")
+    router, runtime, _ = _build_router(booking_flow=flow)
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={
+                "booking_session_id": "sess_rsch_1",
+                "booking_mode": "reschedule_booking_control",
+                "reschedule_booking_id": "b1",
+            },
+        )
+    )
+    callback = _Callback("rsch:confirm:sess_rsch_1", user_id=1001)
+
+    asyncio.run(_handler(router, "reschedule_confirm")(callback))
+
+    assert ("This time is no longer available. Please choose another slot.", True) in callback.answered
+    assert "Select a new time for your current booking." in _last_callback_text(callback)
 
 
 def test_pat_a4_1_no_migration_directories_present() -> None:

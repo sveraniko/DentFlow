@@ -505,5 +505,9 @@
   "patient.reminder.action.outcome.reschedule_requested": "Reschedule request received.",
   "patient.reminder.action.outcome.booking_canceled": "Booking canceled.",
   "patient.reminder.action.outcome.acknowledged": "Got it, thanks.",
-  "patient.reminder.action.handoff.unavailable": "We saved your response, but booking details are unavailable right now."
+  "patient.reminder.action.handoff.unavailable": "We saved your response, but booking details are unavailable right now.",
+  "patient.booking.reschedule.complete.success": "Your booking was rescheduled successfully.",
+  "patient.booking.reschedule.complete.slot_unavailable": "This time is no longer available. Please choose another slot.",
+  "patient.booking.reschedule.complete.conflict": "This slot was just taken. Please choose another time.",
+  "patient.booking.reschedule.complete.unavailable": "We could not complete this reschedule right now. Please try another slot."
 }

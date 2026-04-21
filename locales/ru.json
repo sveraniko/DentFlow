@@ -505,5 +505,9 @@
   "patient.reminder.action.outcome.reschedule_requested": "Запрос на перенос принят.",
   "patient.reminder.action.outcome.booking_canceled": "Запись отменена.",
   "patient.reminder.action.outcome.acknowledged": "Принято, спасибо.",
-  "patient.reminder.action.handoff.unavailable": "Ответ сохранён, но детали записи сейчас недоступны."
+  "patient.reminder.action.handoff.unavailable": "Ответ сохранён, но детали записи сейчас недоступны.",
+  "patient.booking.reschedule.complete.success": "Ваша запись успешно перенесена.",
+  "patient.booking.reschedule.complete.slot_unavailable": "Это время уже недоступно. Выберите другой слот.",
+  "patient.booking.reschedule.complete.conflict": "Этот слот только что заняли. Выберите другое время.",
+  "patient.booking.reschedule.complete.unavailable": "Сейчас не удалось завершить перенос. Выберите другой слот."
 }

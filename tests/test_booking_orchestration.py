@@ -707,6 +707,96 @@ def test_reminder_replacement_on_reschedule_and_cancel_on_cancel() -> None:
     assert not any(item.status == "scheduled" for item in done)
 
 
+def test_complete_booking_reschedule_from_session_is_atomic_and_consumes_selected_hold() -> None:
+    repo = _Repo()
+    reminder_repo = _ReminderRepo()
+    reminder_service = BookingReminderService(
+        repository=reminder_repo,
+        planner=BookingReminderPlanner(PolicyResolver(InMemoryPolicyRepository())),
+        policy_resolver=PolicyResolver(InMemoryPolicyRepository()),
+    )
+    orchestrator = _build_orchestrator(repo, [{"patient_id": "pat_1", "clinic_id": "clinic_main", "display_name": "One"}], reminder_service=reminder_service)
+    now = datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc)
+    repo.slots["slot2"] = AvailabilitySlot(
+        slot_id="slot2",
+        clinic_id="clinic_main",
+        branch_id="branch_central",
+        doctor_id="doctor_anna",
+        start_at=datetime(2026, 4, 22, 13, 0, tzinfo=timezone.utc),
+        end_at=datetime(2026, 4, 22, 13, 30, tzinfo=timezone.utc),
+        status="open",
+        visibility_policy="public",
+        service_scope=None,
+        source_ref=None,
+        updated_at=now,
+    )
+    booking = Booking(
+        booking_id="b_res_1",
+        clinic_id="clinic_main",
+        branch_id="branch_central",
+        patient_id="pat_1",
+        doctor_id="doctor_anna",
+        service_id="service_consult",
+        slot_id="slot1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=datetime(2026, 4, 21, 10, 0, tzinfo=timezone.utc),
+        scheduled_end_at=datetime(2026, 4, 21, 10, 30, tzinfo=timezone.utc),
+        status="reschedule_requested",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=None,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    repo.bookings[booking.booking_id] = booking
+    repo.sessions["s1"] = BookingSession(
+        **{
+            **asdict(repo.sessions["s1"]),
+            "route_type": "reschedule_booking_control",
+            "resolved_patient_id": "pat_1",
+            "doctor_preference_type": "specific",
+            "doctor_id": "doctor_anna",
+            "service_id": "service_consult",
+            "selected_slot_id": "slot2",
+            "selected_hold_id": "hold_reschedule_1",
+        }
+    )
+    repo.holds["hold_reschedule_1"] = SlotHold(
+        slot_hold_id="hold_reschedule_1",
+        clinic_id="clinic_main",
+        slot_id="slot2",
+        booking_session_id="s1",
+        telegram_user_id=3001,
+        status="active",
+        expires_at=datetime(2026, 4, 20, 9, 30, tzinfo=timezone.utc),
+        created_at=now,
+    )
+    asyncio.run(reminder_service.replace_booking_reminder_plan(booking=booking))
+
+    result = asyncio.run(
+        orchestrator.complete_booking_reschedule_from_session(
+            booking_id="b_res_1",
+            booking_session_id="s1",
+        )
+    )
+
+    assert isinstance(result, OrchestrationSuccess)
+    assert result.entity.slot_id == "slot2"
+    assert result.entity.scheduled_start_at == repo.slots["slot2"].start_at
+    assert result.entity.scheduled_end_at == repo.slots["slot2"].end_at
+    assert result.entity.status == "confirmed"
+    assert repo.holds["hold_reschedule_1"].status == "consumed"
+    assert any(row.booking_id == "b_res_1" and row.new_status == "confirmed" for row in repo.history)
+    assert any(getattr(event, "event_name", "") == "booking.rescheduled" for event in repo.outbox_events)
+
+
 def test_booking_lifecycle_cancels_all_unsent_scheduled_reminders_even_if_past_due() -> None:
     repo = _Repo()
     reminder_repo = _ReminderRepo()

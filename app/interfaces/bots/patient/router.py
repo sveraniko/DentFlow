@@ -3101,7 +3101,7 @@ def make_router(
         )
 
     @router.callback_query(F.data.startswith("rsch:confirm:"))
-    async def reschedule_confirm_placeholder(callback: CallbackQuery) -> None:
+    async def reschedule_confirm(callback: CallbackQuery) -> None:
         if not callback.from_user or not callback.data:
             return
         clinic_id = _primary_clinic_id()
@@ -3121,7 +3121,66 @@ def make_router(
         ):
             await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
             return
-        await callback.answer(i18n.t("patient.booking.reschedule.review.confirm.placeholder", _locale()), show_alert=True)
+        if not flow.reschedule_booking_id:
+            await callback.answer(i18n.t("patient.booking.reschedule.complete.unavailable", _locale()), show_alert=True)
+            return
+        completed = await booking_flow.complete_patient_reschedule(
+            clinic_id=clinic_id,
+            telegram_user_id=callback.from_user.id,
+            callback_session_id=callback_session_id,
+            source_booking_id=flow.reschedule_booking_id,
+        )
+        if isinstance(completed, SlotUnavailableOutcome):
+            await callback.answer(i18n.t("patient.booking.reschedule.complete.slot_unavailable", _locale()), show_alert=True)
+            await _render_slot_panel(
+                callback,
+                actor_id=callback.from_user.id,
+                session_id=callback_session_id,
+                prompt_key="patient.booking.reschedule.slot.prompt",
+            )
+            return
+        if isinstance(completed, ConflictOutcome):
+            await callback.answer(i18n.t("patient.booking.reschedule.complete.conflict", _locale()), show_alert=True)
+            await _render_slot_panel(
+                callback,
+                actor_id=callback.from_user.id,
+                session_id=callback_session_id,
+                prompt_key="patient.booking.reschedule.slot.prompt",
+            )
+            return
+        if not isinstance(completed, OrchestrationSuccess):
+            await callback.answer(i18n.t("patient.booking.reschedule.complete.unavailable", _locale()), show_alert=True)
+            await _render_reschedule_review_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
+            return
+        locale = _locale()
+        started = await booking_flow.start_existing_booking_control_for_booking(
+            clinic_id=clinic_id,
+            telegram_user_id=callback.from_user.id,
+            booking_id=completed.entity.booking_id,
+        )
+        booking = started.booking
+        session = started.booking_session
+        if started.kind != "ready" or booking is None or session is None:
+            await callback.answer(i18n.t("patient.booking.reschedule.complete.unavailable", locale), show_alert=True)
+            return
+        flow.booking_session_id = session.booking_session_id
+        flow.booking_mode = "existing_booking_control"
+        flow.reschedule_booking_id = ""
+        await _save_flow_state(callback.from_user.id, flow)
+        header = i18n.t("patient.booking.reschedule.complete.success", locale)
+        text = _render_patient_booking_panel(booking=booking, session_state_token=session.booking_session_id, locale=locale)
+        keyboard = await _build_patient_booking_controls_keyboard(
+            booking=booking,
+            session_state_token=session.booking_session_id,
+            locale=locale,
+        )
+        await _send_or_edit_panel(
+            actor_id=callback.from_user.id,
+            message=callback,
+            session_id=session.booking_session_id,
+            text=f"{header}\n\n{text}",
+            keyboard=keyboard,
+        )
 
     @router.callback_query(F.data.startswith("rem:"))
     async def reminder_action_callback(callback: CallbackQuery) -> None:

@@ -730,6 +730,98 @@ class BookingOrchestrationService:
             )
             return OrchestrationSuccess(kind="success", entity=updated_booking)
 
+    async def complete_booking_reschedule_from_session(
+        self,
+        *,
+        booking_id: str,
+        booking_session_id: str,
+        reason_code: str | None = "booking_rescheduled",
+    ) -> BookingOutcome:
+        now = datetime.now(timezone.utc)
+        async with self.repository.transaction() as tx:
+            session = await tx.get_booking_session_for_update(booking_session_id)
+            if session is None:
+                return InvalidStateOutcome(kind="invalid_state", reason="booking session not found")
+            if session.route_type != "reschedule_booking_control":
+                return InvalidStateOutcome(kind="invalid_state", reason="session route type is not reschedule")
+            if not session.selected_slot_id or not session.selected_hold_id:
+                return InvalidStateOutcome(kind="invalid_state", reason="session requires selected slot and hold")
+            if session.resolved_patient_id is None:
+                return InvalidStateOutcome(kind="invalid_state", reason="session requires resolved patient")
+
+            booking = await tx.get_booking_for_update(booking_id)
+            if booking is None:
+                return InvalidStateOutcome(kind="invalid_state", reason="booking not found")
+            if booking.status not in {"reschedule_requested"}:
+                return InvalidStateOutcome(kind="invalid_state", reason="booking status is not eligible for reschedule completion")
+            if booking.clinic_id != session.clinic_id:
+                return InvalidStateOutcome(kind="invalid_state", reason="booking and session clinic mismatch")
+            if booking.patient_id != session.resolved_patient_id:
+                return InvalidStateOutcome(kind="invalid_state", reason="booking and session patient mismatch")
+
+            hold = await tx.get_slot_hold_for_update(session.selected_hold_id)
+            if hold is None or hold.booking_session_id != booking_session_id:
+                return InvalidStateOutcome(kind="invalid_state", reason="selected hold is missing for this session")
+            if hold.status != "active":
+                return InvalidStateOutcome(kind="invalid_state", reason="selected hold is not active")
+            if hold.slot_id != session.selected_slot_id:
+                return InvalidStateOutcome(kind="invalid_state", reason="selected hold does not match selected slot")
+
+            slot = await tx.get_availability_slot_for_update(session.selected_slot_id)
+            if slot is None or slot.status != "open":
+                return SlotUnavailableOutcome(kind="slot_unavailable", reason="selected slot is unavailable")
+            if await tx.list_live_bookings_for_slot_for_update(slot_id=slot.slot_id):
+                return ConflictOutcome(kind="conflict", reason="selected slot already has live booking")
+
+            payload = asdict(booking)
+            payload["slot_id"] = slot.slot_id
+            payload["scheduled_start_at"] = slot.start_at
+            payload["scheduled_end_at"] = slot.end_at
+            payload["doctor_id"] = slot.doctor_id
+            payload["branch_id"] = slot.branch_id
+            payload["updated_at"] = now
+            if payload["status"] == "reschedule_requested":
+                payload["status"] = "confirmed"
+                payload["confirmed_at"] = now
+            updated_booking = Booking(**payload)
+            await tx.upsert_booking(updated_booking)
+            await tx.append_booking_status_history(
+                BookingStatusHistory(
+                    booking_status_history_id=f"bsh_{uuid4().hex}",
+                    booking_id=updated_booking.booking_id,
+                    old_status=booking.status,
+                    new_status=updated_booking.status,
+                    reason_code=reason_code,
+                    actor_type="system",
+                    actor_id=None,
+                    occurred_at=now,
+                )
+            )
+            await tx.append_outbox_event(
+                build_event(
+                    event_name="booking.rescheduled",
+                    producer_context="booking.orchestration",
+                    clinic_id=updated_booking.clinic_id,
+                    entity_type="booking",
+                    entity_id=updated_booking.booking_id,
+                    occurred_at=now,
+                    payload={
+                        "status": updated_booking.status,
+                        "slot_id": updated_booking.slot_id,
+                        "scheduled_start_at": updated_booking.scheduled_start_at.isoformat(),
+                        "scheduled_end_at": updated_booking.scheduled_end_at.isoformat(),
+                    },
+                )
+            )
+            await self.slot_hold_state_service.transition_hold_in_transaction(tx=tx, current=hold, to_status="consumed")
+            await self._replace_reminder_plan_for_booking_in_transaction(
+                tx=tx,
+                booking=updated_booking,
+                reason_code="booking_rescheduled",
+                now=now,
+            )
+            return OrchestrationSuccess(kind="success", entity=updated_booking)
+
     async def complete_booking(self, *, booking_id: str, reason_code: str | None = None) -> BookingOutcome:
         return await self._transition_booking_and_cancel_reminders(booking_id=booking_id, to_status="completed", reason_code=reason_code or "booking_completed")
 
