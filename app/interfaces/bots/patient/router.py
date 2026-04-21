@@ -2904,7 +2904,8 @@ def make_router(
                     await callback.message.edit_reply_markup(reply_markup=None)
                 except Exception:
                     pass
-            await callback.answer(i18n.t("patient.reminder.action.accepted", _locale()), show_alert=False)
+            await _handoff_reminder_action_to_booking_panel(callback, outcome=outcome)
+            await callback.answer()
             return
         if outcome.kind == "stale":
             await callback.answer(i18n.t("patient.reminder.action.stale", _locale()), show_alert=True)
@@ -3114,25 +3115,8 @@ def make_router(
         )
         return CardShellRenderer.to_panel(shell).text
 
-    async def _show_existing_booking_result(message: Message, *, actor_id: int, result: BookingControlResolutionResult) -> None:
-        locale = _locale()
-        current_session_id = (await _load_flow_state(actor_id)).booking_session_id
-        effective_session_id = result.booking_session.booking_session_id if result.booking_session else current_session_id
-        if effective_session_id:
-            flow = await _load_flow_state(actor_id)
-            flow.booking_session_id = effective_session_id
-            await _save_flow_state(actor_id, flow)
-        if result.kind == "ambiguous_escalated":
-            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=effective_session_id, text=i18n.t("patient.booking.escalated", locale))
-            return
-        if result.kind == "no_match":
-            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=effective_session_id, text=i18n.t("patient.booking.my.no_match", locale))
-            return
-        if result.kind != "exact_match" or not result.bookings:
-            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=effective_session_id, text=i18n.t("patient.booking.finalize.invalid_state", locale))
-            return
-        booking = result.bookings[0]
-        keyboard = InlineKeyboardMarkup(
+    async def _build_patient_booking_controls_keyboard(*, booking, session_state_token: str, locale: str) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
             inline_keyboard=[
                 *(
                     [
@@ -3147,7 +3131,7 @@ def make_router(
                                     source_context=SourceContext.BOOKING_LIST,
                                     source_ref="mybk.confirm",
                                     page_or_index="confirm",
-                                    state_token=effective_session_id,
+                                    state_token=session_state_token,
                                 ),
                             )
                         ]
@@ -3166,7 +3150,7 @@ def make_router(
                             source_context=SourceContext.BOOKING_LIST,
                             source_ref="mybk.reschedule",
                             page_or_index="reschedule",
-                            state_token=effective_session_id,
+                            state_token=session_state_token,
                         ),
                     )
                 ],
@@ -3181,7 +3165,7 @@ def make_router(
                             source_context=SourceContext.BOOKING_LIST,
                             source_ref="mybk.waitlist",
                             page_or_index="waitlist",
-                            state_token=effective_session_id,
+                            state_token=session_state_token,
                         ),
                     )
                 ],
@@ -3196,12 +3180,106 @@ def make_router(
                             source_context=SourceContext.BOOKING_LIST,
                             source_ref="mybk.cancel_prompt",
                             page_or_index="cancel_prompt",
-                            state_token=effective_session_id,
+                            state_token=session_state_token,
                         ),
                     )
                 ],
             ],
         )
+
+    async def _send_fresh_booking_panel_from_callback(
+        *,
+        callback: CallbackQuery,
+        actor_id: int,
+        session_id: str,
+        text: str,
+        keyboard: InlineKeyboardMarkup | None = None,
+    ) -> None:
+        if callback.message is None:
+            return
+        sent = await callback.message.answer(text, reply_markup=keyboard)
+        await card_runtime.bind_panel(
+            actor_id=actor_id,
+            chat_id=sent.chat.id,
+            message_id=sent.message_id,
+            panel_family=PanelFamily.BOOKING_DETAIL,
+            profile=None,
+            entity_id=session_id or None,
+            source_context=SourceContext.BOOKING_LIST,
+            source_ref=session_id,
+            page_or_index=session_id,
+            state_token=session_id or f"actor:{actor_id}",
+        )
+
+    async def _handoff_reminder_action_to_booking_panel(callback: CallbackQuery, *, outcome) -> None:
+        if not callback.from_user:
+            return
+        locale = _locale()
+        header_key = f"patient.reminder.action.outcome.{outcome.reason}"
+        header = i18n.t(header_key, locale)
+        if header == header_key:
+            header = i18n.t("patient.reminder.action.accepted", locale)
+        clinic_id = _primary_clinic_id()
+        if not clinic_id or not outcome.booking_id:
+            await _send_fresh_booking_panel_from_callback(
+                callback=callback,
+                actor_id=callback.from_user.id,
+                session_id=f"reminder_outcome:{callback.from_user.id}",
+                text=f"{header}\n\n{i18n.t('patient.reminder.action.handoff.unavailable', locale)}",
+            )
+            return
+        started = await booking_flow.start_existing_booking_control_for_booking(
+            clinic_id=clinic_id,
+            telegram_user_id=callback.from_user.id,
+            booking_id=outcome.booking_id,
+        )
+        booking = started.booking
+        session = started.booking_session
+        if started.kind != "ready" or booking is None or session is None:
+            await _send_fresh_booking_panel_from_callback(
+                callback=callback,
+                actor_id=callback.from_user.id,
+                session_id=f"reminder_outcome:{callback.from_user.id}",
+                text=f"{header}\n\n{i18n.t('patient.reminder.action.handoff.unavailable', locale)}",
+            )
+            return
+        flow = await _load_flow_state(callback.from_user.id)
+        flow.booking_session_id = session.booking_session_id
+        flow.booking_mode = "new_booking_contact"
+        await _save_flow_state(callback.from_user.id, flow)
+        booking_text = _render_patient_booking_panel(booking=booking, session_state_token=session.booking_session_id, locale=locale)
+        keyboard = await _build_patient_booking_controls_keyboard(
+            booking=booking,
+            session_state_token=session.booking_session_id,
+            locale=locale,
+        )
+        await _send_fresh_booking_panel_from_callback(
+            callback=callback,
+            actor_id=callback.from_user.id,
+            session_id=session.booking_session_id,
+            text=f"{header}\n\n{booking_text}",
+            keyboard=keyboard,
+        )
+
+    async def _show_existing_booking_result(message: Message, *, actor_id: int, result: BookingControlResolutionResult) -> None:
+        locale = _locale()
+        current_session_id = (await _load_flow_state(actor_id)).booking_session_id
+        effective_session_id = result.booking_session.booking_session_id if result.booking_session else current_session_id
+        if effective_session_id:
+            flow = await _load_flow_state(actor_id)
+            flow.booking_session_id = effective_session_id
+            await _save_flow_state(actor_id, flow)
+        if result.kind == "ambiguous_escalated":
+            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=effective_session_id, text=i18n.t("patient.booking.escalated", locale))
+            return
+        if result.kind == "no_match":
+            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=effective_session_id, text=i18n.t("patient.booking.my.no_match", locale))
+            return
+        if result.kind != "exact_match" or not result.bookings:
+            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=effective_session_id, text=i18n.t("patient.booking.finalize.invalid_state", locale))
+            return
+        booking = result.bookings[0]
+        keyboard = await _build_patient_booking_controls_keyboard(booking=booking, session_state_token=effective_session_id, locale=locale)
         await _send_or_edit_panel(
             actor_id=actor_id,
             message=message,

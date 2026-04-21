@@ -84,6 +84,13 @@ class ExistingBookingControlValidationResult:
 
 
 @dataclass(slots=True, frozen=True)
+class ExistingBookingControlStartResult:
+    kind: str
+    booking_session: BookingSession | None = None
+    booking: Booking | None = None
+
+
+@dataclass(slots=True, frozen=True)
 class BookingCardView:
     booking_id: str
     doctor_label: str
@@ -139,6 +146,27 @@ class BookingPatientFlowService:
             route_type="existing_booking_control",
         )
         return started.entity
+
+    async def start_existing_booking_control_for_booking(
+        self,
+        *,
+        clinic_id: str,
+        telegram_user_id: int,
+        booking_id: str,
+    ) -> ExistingBookingControlStartResult:
+        booking = await self.reads.get_booking(booking_id)
+        if booking is None:
+            return ExistingBookingControlStartResult(kind="booking_missing")
+        if booking.clinic_id != clinic_id:
+            return ExistingBookingControlStartResult(kind="clinic_mismatch", booking=booking)
+        session = await self.start_new_existing_booking_session(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
+        attached = await self.orchestration.attach_resolved_patient_to_session(
+            booking_session_id=session.booking_session_id,
+            patient_id=booking.patient_id,
+        )
+        if not isinstance(attached, OrchestrationSuccess):
+            return ExistingBookingControlStartResult(kind="session_attach_failed", booking=booking)
+        return ExistingBookingControlStartResult(kind="ready", booking_session=attached.entity, booking=booking)
 
     async def determine_resume_panel(self, *, booking_session_id: str) -> BookingResumePanel | None:
         session = await self.reads.get_booking_session(booking_session_id)

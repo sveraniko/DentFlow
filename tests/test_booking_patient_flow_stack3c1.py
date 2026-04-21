@@ -865,3 +865,48 @@ def test_route_isolation_coexistence_resumes_only_matching_route_family() -> Non
     resumed_existing = asyncio.run(flow.start_or_resume_existing_booking_session(clinic_id="clinic_main", telegram_user_id=7103))
     assert resumed_booking.booking_session_id == booking.booking_session_id
     assert resumed_existing.booking_session_id == existing.booking_session_id
+
+
+def test_start_existing_booking_control_for_booking_creates_fresh_bound_session() -> None:
+    flow, repo, _ = _build_flow(finder_rows=[])
+    now = datetime(2026, 4, 16, 11, 0, tzinfo=timezone.utc)
+    repo.bookings["b_handoff"] = Booking(
+        booking_id="b_handoff",
+        clinic_id="clinic_main",
+        branch_id="branch_1",
+        patient_id="pat_owner",
+        doctor_id="doctor_1",
+        service_id="service_consult",
+        slot_id="slot_1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=now + timedelta(days=1),
+        scheduled_end_at=now + timedelta(days=1, minutes=30),
+        status="confirmed",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=None,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    started = asyncio.run(
+        flow.start_existing_booking_control_for_booking(
+            clinic_id="clinic_main",
+            telegram_user_id=8111,
+            booking_id="b_handoff",
+        )
+    )
+
+    assert started.kind == "ready"
+    assert started.booking is not None
+    assert started.booking.booking_id == "b_handoff"
+    assert started.booking_session is not None
+    assert started.booking_session.route_type == "existing_booking_control"
+    assert started.booking_session.resolved_patient_id == "pat_owner"
