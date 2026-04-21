@@ -3226,6 +3226,10 @@ def make_router(
         if action not in {"ack", "confirm", "reschedule", "cancel"}:
             await callback.answer(i18n.t("patient.reminder.action.invalid", _locale()), show_alert=True)
             return
+        if action == "cancel":
+            await _show_reminder_cancel_confirm_prompt(callback, reminder_id=reminder_id)
+            await callback.answer()
+            return
         message_id = str(callback.message.message_id) if callback.message else None
         outcome = await reminder_actions.handle_action(
             reminder_id=reminder_id,
@@ -3239,6 +3243,71 @@ def make_router(
                 except Exception:
                     pass
             await _handoff_reminder_action_to_booking_panel(callback, action=action, outcome=outcome)
+            await callback.answer()
+            return
+        if outcome.kind == "stale":
+            await callback.answer(i18n.t("patient.reminder.action.stale", _locale()), show_alert=True)
+            return
+        await callback.answer(i18n.t("patient.reminder.action.invalid", _locale()), show_alert=True)
+
+    async def _show_reminder_cancel_confirm_prompt(callback: CallbackQuery, *, reminder_id: str) -> None:
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("common.yes", _locale()),
+                        callback_data=f"remc:confirm:{reminder_id}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("common.no", _locale()),
+                        callback_data=f"remc:abort:{reminder_id}",
+                    )
+                ],
+            ]
+        )
+        if callback.message:
+            await callback.message.answer(
+                i18n.t("patient.reminder.cancel.confirm", _locale()),
+                reply_markup=keyboard,
+            )
+            return
+        await callback.answer(i18n.t("patient.reminder.cancel.confirm", _locale()), show_alert=True)
+
+    @router.callback_query(F.data.startswith("remc:"))
+    async def reminder_cancel_confirm_callback(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        callback_parts = callback.data.split(":", 2)
+        if len(callback_parts) != 3:
+            await callback.answer(i18n.t("patient.reminder.action.invalid", _locale()), show_alert=True)
+            return
+        _, action, reminder_id = callback_parts
+        if action == "abort":
+            if callback.message:
+                try:
+                    await callback.message.edit_reply_markup(reply_markup=None)
+                except Exception:
+                    pass
+            await callback.answer(i18n.t("patient.reminder.cancel.aborted", _locale()), show_alert=True)
+            return
+        if action != "confirm":
+            await callback.answer(i18n.t("patient.reminder.action.invalid", _locale()), show_alert=True)
+            return
+        message_id = str(callback.message.message_id) if callback.message else None
+        outcome = await reminder_actions.handle_action(
+            reminder_id=reminder_id,
+            action="cancel",
+            provider_message_id=message_id,
+        )
+        if outcome.kind == "accepted":
+            if callback.message:
+                try:
+                    await callback.message.edit_reply_markup(reply_markup=None)
+                except Exception:
+                    pass
+            await _handoff_reminder_action_to_booking_panel(callback, action="cancel", outcome=outcome)
             await callback.answer()
             return
         if outcome.kind == "stale":

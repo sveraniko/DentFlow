@@ -31,6 +31,8 @@
   "patient.reminder.action.accepted": "Принято, отметили.",
   "patient.reminder.action.stale": "Это действие по напоминанию уже неактуально.",
   "patient.reminder.action.invalid": "Некорректное действие напоминания.",
+  "patient.reminder.cancel.confirm": "Отменить эту запись?",
+  "patient.reminder.cancel.aborted": "Отмена отменена.",
   "patient.booking.doctor.prompt": "Выберите предпочтение по врачу.",
   "patient.booking.doctor.any": "Любой доступный врач",
   "patient.booking.slot.prompt": "Выберите ближайший доступный слот.",
