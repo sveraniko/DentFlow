@@ -1663,19 +1663,124 @@ def make_router(
         }.get(finalized.kind, "patient.booking.finalize.invalid_state")
         await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=session_id, text=i18n.t(key, locale))
 
-    @router.message(CommandStart())
-    async def start(message: Message) -> None:
-        await message.answer(i18n.t("role.patient.home", _locale()))
+    async def _render_patient_home_panel(message: Message | CallbackQuery, *, actor_id: int) -> None:
+        locale = _locale()
+        rows: list[list[InlineKeyboardButton]] = [
+            [InlineKeyboardButton(text=i18n.t("patient.home.action.book", locale), callback_data="phome:book")],
+            [InlineKeyboardButton(text=i18n.t("patient.home.action.my_booking", locale), callback_data="phome:my_booking")],
+        ]
+        if recommendation_service is not None:
+            rows.append(
+                [InlineKeyboardButton(text=i18n.t("patient.home.action.recommendations", locale), callback_data="phome:recommendations")]
+            )
+        if care_commerce_service is not None:
+            rows.append([InlineKeyboardButton(text=i18n.t("patient.home.action.care", locale), callback_data="phome:care")])
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id="patient_home",
+            text=i18n.t("patient.home.panel", locale),
+            keyboard=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
 
-    @router.message(Command("care"))
-    async def care_catalog(message: Message) -> None:
-        if not message.from_user or care_commerce_service is None:
+    async def _enter_new_booking(message: Message | CallbackQuery, *, actor_id: int) -> None:
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id="patient_home",
+                text=i18n.t("patient.booking.unavailable", _locale()),
+            )
+            return
+        session = await booking_flow.start_or_resume_session(
+            clinic_id=clinic_id,
+            telegram_user_id=actor_id,
+        )
+        flow = await _load_flow_state(actor_id)
+        flow.booking_session_id = session.booking_session_id
+        await _save_flow_state(actor_id, flow)
+        await _render_resume_panel(message, actor_id=actor_id, session_id=session.booking_session_id, clinic_id=clinic_id)
+
+    async def _enter_existing_booking_lookup(message: Message | CallbackQuery, *, actor_id: int) -> None:
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id="patient_home",
+                text=i18n.t("patient.booking.unavailable", _locale()),
+            )
+            return
+        session = await booking_flow.start_or_resume_existing_booking_session(clinic_id=clinic_id, telegram_user_id=actor_id)
+        flow = await _load_flow_state(actor_id)
+        flow.booking_session_id = session.booking_session_id
+        flow.booking_mode = "existing_lookup_contact"
+        await _save_flow_state(actor_id, flow)
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id=session.booking_session_id,
+            text=i18n.t("patient.booking.my.contact_prompt", _locale()),
+        )
+
+    async def _enter_recommendations_list(message: Message | CallbackQuery, *, actor_id: int) -> None:
+        if recommendation_service is None:
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id="patient_home",
+                text=i18n.t("patient.home.action.unavailable", _locale()),
+            )
+            return
+        patient_id = await _resolve_patient_id_for_user(actor_id)
+        if not patient_id:
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id="patient_home",
+                text=i18n.t("patient.recommendations.patient_resolution_failed", _locale()),
+            )
+            return
+        rows = await recommendation_service.list_for_patient(patient_id=patient_id)
+        if not rows:
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id="patient_home",
+                text=i18n.t("patient.recommendations.empty", _locale()),
+            )
+            return
+        lines = [i18n.t("patient.recommendations.title", _locale())]
+        for row in rows[:8]:
+            lines.append(f"• {row.title} [{row.recommendation_type}] ({row.status})")
+            lines.append(f"  /recommendation_open {row.recommendation_id}")
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id="patient_home",
+            text="\n".join(lines),
+        )
+
+    async def _enter_care_catalog(message: Message | CallbackQuery, *, actor_id: int) -> None:
+        if care_commerce_service is None:
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id="patient_home",
+                text=i18n.t("patient.home.action.unavailable", _locale()),
+            )
             return
         clinic_id = _primary_clinic_id()
         if clinic_id is None:
-            await message.answer(i18n.t("patient.booking.unavailable", _locale()))
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id="patient_home",
+                text=i18n.t("patient.booking.unavailable", _locale()),
+            )
             return
-        state = await _care_state(message.from_user.id)
+        state = await _care_state(actor_id)
         state.selected_category = None
         state.category_page = 0
         state.recommendation_id = None
@@ -1684,10 +1789,22 @@ def make_router(
         state.recommendation_page = 0
         state.recommendation_products = []
         state.product_page_by_category = {}
-        flow = await _load_flow_state(message.from_user.id)
+        flow = await _load_flow_state(actor_id)
         flow.care = state
-        await _save_flow_state(message.from_user.id, flow)
-        await _render_care_categories_panel(message, actor_id=message.from_user.id, clinic_id=clinic_id)
+        await _save_flow_state(actor_id, flow)
+        await _render_care_categories_panel(message, actor_id=actor_id, clinic_id=clinic_id)
+
+    @router.message(CommandStart())
+    async def start(message: Message) -> None:
+        if not message.from_user:
+            return
+        await _render_patient_home_panel(message, actor_id=message.from_user.id)
+
+    @router.message(Command("care"))
+    async def care_catalog(message: Message) -> None:
+        if not message.from_user:
+            return
+        await _enter_care_catalog(message, actor_id=message.from_user.id)
 
     async def _resolve_patient_id_for_user(telegram_user_id: int) -> str | None:
         clinic_id = _primary_clinic_id()
@@ -1706,21 +1823,9 @@ def make_router(
 
     @router.message(Command("recommendations"))
     async def recommendations_list(message: Message) -> None:
-        if not message.from_user or recommendation_service is None:
+        if not message.from_user:
             return
-        patient_id = await _resolve_patient_id_for_user(message.from_user.id)
-        if not patient_id:
-            await message.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()))
-            return
-        rows = await recommendation_service.list_for_patient(patient_id=patient_id)
-        if not rows:
-            await message.answer(i18n.t("patient.recommendations.empty", _locale()))
-            return
-        lines = [i18n.t("patient.recommendations.title", _locale())]
-        for row in rows[:8]:
-            lines.append(f"• {row.title} [{row.recommendation_type}] ({row.status})")
-            lines.append(f"  /recommendation_open {row.recommendation_id}")
-        await message.answer("\n".join(lines))
+        await _enter_recommendations_list(message, actor_id=message.from_user.id)
 
     @router.message(Command("recommendation_open"))
     async def recommendations_open(message: Message) -> None:
@@ -1945,38 +2050,41 @@ def make_router(
     async def book_entry(message: Message) -> None:
         if not message.from_user:
             return
-        clinic_id = _primary_clinic_id()
-        if not clinic_id:
-            await message.answer(i18n.t("patient.booking.unavailable", _locale()))
-            return
-        session = await booking_flow.start_or_resume_session(
-            clinic_id=clinic_id,
-            telegram_user_id=message.from_user.id,
-        )
-        flow = await _load_flow_state(message.from_user.id)
-        flow.booking_session_id = session.booking_session_id
-        await _save_flow_state(message.from_user.id, flow)
-        await _render_resume_panel(message, actor_id=message.from_user.id, session_id=session.booking_session_id, clinic_id=clinic_id)
+        await _enter_new_booking(message, actor_id=message.from_user.id)
 
     @router.message(Command("my_booking"))
     async def my_booking_entry(message: Message) -> None:
         if not message.from_user:
             return
-        clinic_id = _primary_clinic_id()
-        if not clinic_id:
-            await message.answer(i18n.t("patient.booking.unavailable", _locale()))
+        await _enter_existing_booking_lookup(message, actor_id=message.from_user.id)
+
+    @router.callback_query(F.data == "phome:book")
+    async def patient_home_book(callback: CallbackQuery) -> None:
+        if not callback.from_user:
             return
-        session = await booking_flow.start_or_resume_existing_booking_session(clinic_id=clinic_id, telegram_user_id=message.from_user.id)
-        flow = await _load_flow_state(message.from_user.id)
-        flow.booking_session_id = session.booking_session_id
-        flow.booking_mode = "existing_lookup_contact"
-        await _save_flow_state(message.from_user.id, flow)
-        await _send_or_edit_panel(
-            actor_id=message.from_user.id,
-            message=message,
-            session_id=session.booking_session_id,
-            text=i18n.t("patient.booking.my.contact_prompt", _locale()),
-        )
+        await _enter_new_booking(callback, actor_id=callback.from_user.id)
+        await callback.answer()
+
+    @router.callback_query(F.data == "phome:my_booking")
+    async def patient_home_my_booking(callback: CallbackQuery) -> None:
+        if not callback.from_user:
+            return
+        await _enter_existing_booking_lookup(callback, actor_id=callback.from_user.id)
+        await callback.answer()
+
+    @router.callback_query(F.data == "phome:recommendations")
+    async def patient_home_recommendations(callback: CallbackQuery) -> None:
+        if not callback.from_user:
+            return
+        await _enter_recommendations_list(callback, actor_id=callback.from_user.id)
+        await callback.answer()
+
+    @router.callback_query(F.data == "phome:care")
+    async def patient_home_care(callback: CallbackQuery) -> None:
+        if not callback.from_user:
+            return
+        await _enter_care_catalog(callback, actor_id=callback.from_user.id)
+        await callback.answer()
 
     @router.callback_query(F.data.startswith("book:svc:"))
     async def select_service(callback: CallbackQuery) -> None:
