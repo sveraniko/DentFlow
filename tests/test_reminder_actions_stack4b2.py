@@ -171,7 +171,9 @@ def test_rendering_actions_and_context_for_confirmation_and_ack() -> None:
     booking = _booking(status="pending_confirmation")
     en_message = render_booking_reminder_message(reminder=_reminder(reminder_type="booking_confirmation", locale="en"), booking=booking)
     assert "2026-04-18" in en_message.text
-    assert "doctor_1" in en_message.text and "service_consult" in en_message.text and "branch_1" in en_message.text
+    assert "your doctor" in en_message.text
+    assert "dental service" in en_message.text
+    assert "clinic branch" in en_message.text
     assert [row.action for row in en_message.actions] == ["confirm", "reschedule", "cancel"]
 
     ru_message = render_booking_reminder_message(reminder=_reminder(reminder_type="booking_day_of", locale="ru"), booking=booking)

@@ -491,5 +491,10 @@
   "admin.doc.regenerate.usage": "Usage: /admin_doc_regenerate <generated_document_id>",
   "admin.doc.regenerate.not_supported": "Regenerate is not available for this document context.",
   "admin.doc.regenerate.ok": "Regeneration created: {generated_document_id}.",
-  "document.delivery.unsupported_provider": "Artifact delivery is not available for this provider yet."
+  "document.delivery.unsupported_provider": "Artifact delivery is not available for this provider yet.",
+  "patient.reminder.action.outcome.booking_confirmed": "Booking confirmed.",
+  "patient.reminder.action.outcome.reschedule_requested": "Reschedule request received.",
+  "patient.reminder.action.outcome.booking_canceled": "Booking canceled.",
+  "patient.reminder.action.outcome.acknowledged": "Got it, thanks.",
+  "patient.reminder.action.handoff.unavailable": "We saved your response, but booking details are unavailable right now."
 }

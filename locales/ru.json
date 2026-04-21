@@ -491,5 +491,10 @@
   "admin.doc.regenerate.usage": "Формат: /admin_doc_regenerate <generated_document_id>",
   "admin.doc.regenerate.not_supported": "Повторная генерация недоступна для этого контекста документа.",
   "admin.doc.regenerate.ok": "Повторная генерация создана: {generated_document_id}.",
-  "document.delivery.unsupported_provider": "Доставка артефакта для этого хранилища пока недоступна."
+  "document.delivery.unsupported_provider": "Доставка артефакта для этого хранилища пока недоступна.",
+  "patient.reminder.action.outcome.booking_confirmed": "Запись подтверждена.",
+  "patient.reminder.action.outcome.reschedule_requested": "Запрос на перенос принят.",
+  "patient.reminder.action.outcome.booking_canceled": "Запись отменена.",
+  "patient.reminder.action.outcome.acknowledged": "Принято, спасибо.",
+  "patient.reminder.action.handoff.unavailable": "Ответ сохранён, но детали записи сейчас недоступны."
 }
