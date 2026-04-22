@@ -7,10 +7,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.application.booking.orchestration_outcomes import OrchestrationSuccess
-from app.application.booking.telegram_flow import BookingResumePanel
+from app.application.booking.telegram_flow import BookingResumePanel, ReturningPatientStartResult
 from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
 from app.common.i18n import I18nService
-from app.domain.booking import Booking, BookingSession
+from app.domain.booking import AvailabilitySlot, Booking, BookingSession
 from app.domain.clinic_reference.models import Branch, Clinic, Doctor, Service
 from app.interfaces.bots.patient.router import make_router
 from app.interfaces.cards import CardCallbackCodec, CardRuntimeCoordinator, CardRuntimeStateStore, PanelFamily
@@ -108,6 +108,19 @@ class _BookingFlowStub:
             created_at=now,
             updated_at=now,
         )
+        self.slot = AvailabilitySlot(
+            slot_id="slot_1",
+            clinic_id="clinic_main",
+            branch_id="branch_1",
+            doctor_id="doctor_1",
+            start_at=now,
+            end_at=now,
+            status="open",
+            visibility_policy="public",
+            service_scope=None,
+            source_ref=None,
+            updated_at=now,
+        )
         self.booking = Booking(
             booking_id="b1",
             clinic_id="clinic_main",
@@ -138,6 +151,27 @@ class _BookingFlowStub:
         self.resolve_known_patient_kind = "exact_match"
         self.raise_on_resolve_known_patient = False
         self.request_reschedule_calls = 0
+        self.start_or_resume_returning_calls = 0
+        self.last_returning_kwargs: dict[str, object] | None = None
+
+    async def start_or_resume_returning_patient_booking(self, **kwargs):  # noqa: ANN003
+        self.start_or_resume_returning_calls += 1
+        self.last_returning_kwargs = kwargs
+        trusted_patient_id = kwargs.get("trusted_patient_id")
+        trusted_phone_snapshot = kwargs.get("trusted_phone_snapshot")
+        session = self.session
+        if isinstance(trusted_patient_id, str) and trusted_patient_id and isinstance(trusted_phone_snapshot, str) and trusted_phone_snapshot:
+            session = BookingSession(
+                **{
+                    **asdict(self.session),
+                    "resolved_patient_id": trusted_patient_id,
+                    "contact_phone_snapshot": trusted_phone_snapshot,
+                    "selected_slot_id": "slot_1",
+                    "status": "in_progress",
+                }
+            )
+        self.session = session
+        return ReturningPatientStartResult(booking_session=self.session, trusted_shortcut_applied=bool(trusted_patient_id and trusted_phone_snapshot))
 
     async def start_or_resume_existing_booking_session(self, **kwargs):  # noqa: ANN003
         self.start_or_resume_existing_calls += 1
@@ -154,7 +188,8 @@ class _BookingFlowStub:
         return SimpleNamespace(kind=self.resolve_known_patient_kind, bookings=bookings, booking_session=result_session)
 
     async def determine_resume_panel(self, **kwargs):  # noqa: ANN003
-        return BookingResumePanel(panel_key="contact_collection", booking_session=self.session)
+        panel_key = "review_finalize" if self.session.selected_slot_id and self.session.contact_phone_snapshot and self.session.resolved_patient_id else "contact_collection"
+        return BookingResumePanel(panel_key=panel_key, booking_session=self.session)
 
     async def start_existing_booking_control_for_booking(self, **kwargs):  # noqa: ANN003
         session = SimpleNamespace(booking_session_id="sess_rem_1")
@@ -163,6 +198,12 @@ class _BookingFlowStub:
     async def start_patient_reschedule_session(self, **kwargs):  # noqa: ANN003
         session = SimpleNamespace(booking_session_id="sess_rsch_1")
         return SimpleNamespace(kind="ready", booking=self.booking, booking_session=session)
+
+    async def get_booking_session(self, *, booking_session_id: str):
+        return self.session if booking_session_id == self.session.booking_session_id else None
+
+    async def get_availability_slot(self, *, slot_id: str):
+        return self.slot if slot_id == self.slot.slot_id else None
 
     def build_booking_snapshot(self, **kwargs):  # noqa: ANN003
         from app.interfaces.cards import BookingRuntimeSnapshot
@@ -203,6 +244,16 @@ class _BookingFlowStub:
 class _RepoUnique:
     async def find_patient_ids_by_telegram_user(self, *, clinic_id: str, telegram_user_id: int) -> list[str]:
         return ["pat_1"]
+
+
+class _RepoUniqueWithPhone(_RepoUnique):
+    async def find_primary_phone_by_patient(self, *, clinic_id: str, patient_id: str) -> str | None:
+        return "+15550101099"
+
+
+class _RepoUniqueWithoutPhone(_RepoUnique):
+    async def find_primary_phone_by_patient(self, *, clinic_id: str, patient_id: str) -> str | None:
+        return None
 
 
 class _RepoMultiple:
@@ -375,6 +426,38 @@ def test_contact_input_outside_contact_prompt_mode_is_ignored() -> None:
     assert active is not None
     assert booking_flow.start_or_resume_existing_calls == 0
 
+
+
+def test_book_entry_uses_trusted_identity_and_phone_to_skip_contact_prompt() -> None:
+    router, runtime, booking_flow, _ = _build_router(recommendation_repository=_RepoUniqueWithPhone())
+
+    message = _Message(text="/book", user_id=1001)
+    asyncio.run(_handler(router, "book_entry")(message))
+
+    assert booking_flow.start_or_resume_returning_calls == 1
+    assert booking_flow.last_returning_kwargs is not None
+    assert booking_flow.last_returning_kwargs.get("trusted_patient_id") == "pat_1"
+    assert booking_flow.last_returning_kwargs.get("trusted_phone_snapshot") == "+15550101099"
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "new_booking_flow"
+    assert message.answers
+    assert "Review your booking before confirming" in message.answers[-1][0]
+
+
+def test_book_entry_with_trusted_identity_without_phone_falls_back_to_contact_prompt() -> None:
+    router, runtime, booking_flow, _ = _build_router(recommendation_repository=_RepoUniqueWithoutPhone())
+
+    message = _Message(text="/book", user_id=1001)
+    asyncio.run(_handler(router, "book_entry")(message))
+
+    assert booking_flow.start_or_resume_returning_calls == 1
+    assert booking_flow.last_returning_kwargs is not None
+    assert booking_flow.last_returning_kwargs.get("trusted_patient_id") is None
+    assert booking_flow.last_returning_kwargs.get("trusted_phone_snapshot") is None
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "new_booking_contact"
+    assert message.answers
+    assert "Share your phone contact or type the number in chat." in message.answers[-1][0]
 
 def test_pat_a3_2_no_migration_directories_present() -> None:
     assert not Path("migrations").exists()

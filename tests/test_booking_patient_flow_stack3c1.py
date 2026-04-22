@@ -243,6 +243,40 @@ def _build_flow(*, finder_rows: list[dict]) -> tuple[BookingPatientFlowService, 
     return flow, repo, creator
 
 
+
+def test_start_or_resume_returning_patient_booking_hydrates_trusted_identity_and_phone() -> None:
+    flow, repo, _ = _build_flow(finder_rows=[])
+
+    started = asyncio.run(
+        flow.start_or_resume_returning_patient_booking(
+            clinic_id="clinic_main",
+            telegram_user_id=999,
+            trusted_patient_id="pat_1",
+            trusted_phone_snapshot="+15550101099",
+        )
+    )
+
+    assert started.trusted_shortcut_applied is True
+    assert started.booking_session.resolved_patient_id == "pat_1"
+    assert started.booking_session.contact_phone_snapshot == "+15550101099"
+
+
+def test_start_or_resume_returning_patient_booking_without_phone_keeps_default_session() -> None:
+    flow, repo, _ = _build_flow(finder_rows=[])
+
+    started = asyncio.run(
+        flow.start_or_resume_returning_patient_booking(
+            clinic_id="clinic_main",
+            telegram_user_id=999,
+            trusted_patient_id="pat_1",
+            trusted_phone_snapshot=None,
+        )
+    )
+
+    assert started.trusted_shortcut_applied is False
+    assert started.booking_session.resolved_patient_id is None
+    assert started.booking_session.contact_phone_snapshot is None
+
 def test_happy_path_with_no_match_creates_canonical_patient_and_finalizes() -> None:
     flow, repo, creator = _build_flow(finder_rows=[])
     session = asyncio.run(flow.start_or_resume_session(clinic_id="clinic_main", telegram_user_id=999))

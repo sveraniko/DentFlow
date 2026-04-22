@@ -80,7 +80,7 @@ class _CareViewState:
 @dataclass(slots=True)
 class _PatientFlowState:
     booking_session_id: str = ""
-    booking_mode: str = "new_booking_contact"
+    booking_mode: str = "new_booking_flow"
     reschedule_booking_id: str = ""
     care: _CareViewState | None = None
 
@@ -389,7 +389,7 @@ def make_router(
         )
         return _PatientFlowState(
             booking_session_id=payload.get("booking_session_id", ""),
-            booking_mode=payload.get("booking_mode", "new_booking_contact"),
+            booking_mode=payload.get("booking_mode", "new_booking_flow"),
             reschedule_booking_id=payload.get("reschedule_booking_id", ""),
             care=care_state,
         )
@@ -1982,16 +1982,19 @@ def make_router(
             on_stale_key="patient.booking.reschedule.start.unavailable",
         ):
             return
-        session = await booking_flow.start_or_resume_session(
+        trusted_patient_id, trusted_phone = await _resolve_trusted_returning_patient_identity(actor_id)
+        started = await booking_flow.start_or_resume_returning_patient_booking(
             clinic_id=clinic_id,
             telegram_user_id=actor_id,
+            trusted_patient_id=trusted_patient_id,
+            trusted_phone_snapshot=trusted_phone,
         )
         flow = await _load_flow_state(actor_id)
-        flow.booking_session_id = session.booking_session_id
-        flow.booking_mode = "new_booking_contact"
+        flow.booking_session_id = started.booking_session.booking_session_id
+        flow.booking_mode = "new_booking_flow"
         flow.reschedule_booking_id = ""
         await _save_flow_state(actor_id, flow)
-        await _render_resume_panel(message, actor_id=actor_id, session_id=session.booking_session_id, clinic_id=clinic_id)
+        await _render_resume_panel(message, actor_id=actor_id, session_id=started.booking_session.booking_session_id, clinic_id=clinic_id)
 
     async def _enter_existing_booking_lookup(message: Message | CallbackQuery, *, actor_id: int) -> None:
         clinic_id = _primary_clinic_id()
@@ -2252,7 +2255,7 @@ def make_router(
             else:
                 await _render_reschedule_start_panel(message, actor_id=actor_id, session_id=callback_session_id)
             return True
-        flow.booking_mode = "new_booking_contact"
+        flow.booking_mode = "new_booking_flow"
         flow.booking_session_id = ""
         flow.reschedule_booking_id = ""
         await _save_flow_state(actor_id, flow)
@@ -2335,6 +2338,27 @@ def make_router(
             return None
         trusted = patient_id.strip()
         return trusted or None
+
+    async def _resolve_trusted_returning_patient_identity(telegram_user_id: int) -> tuple[str | None, str | None]:
+        clinic_id = _primary_clinic_id()
+        if clinic_id is None or recommendation_repository is None:
+            return None, None
+        patient_id = await _resolve_patient_id_for_user(telegram_user_id)
+        if not patient_id:
+            return None, None
+        phone_finder = getattr(recommendation_repository, "find_primary_phone_by_patient", None)
+        if not callable(phone_finder):
+            return None, None
+        try:
+            phone = await phone_finder(clinic_id=clinic_id, patient_id=patient_id)
+        except Exception:
+            return None, None
+        if not isinstance(phone, str):
+            return None, None
+        trusted_phone = phone.strip()
+        if not trusted_phone:
+            return None, None
+        return patient_id, trusted_phone
 
     async def _try_resolve_existing_booking_shortcut(
         *,
@@ -3970,6 +3994,8 @@ def make_router(
                 text=i18n.t("patient.booking.reschedule.start.contact_ignored", locale),
             )
             return
+        if mode != "new_booking_contact":
+            return
         await booking_flow.set_contact_phone(booking_session_id=session_id, phone=phone)
         display_name = (message.from_user.full_name or "").strip() or i18n.t("patient.booking.contact.default_name", locale)
         resolution = await booking_flow.resolve_patient_from_contact(
@@ -4009,9 +4035,17 @@ def make_router(
             await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=session_id, text=i18n.t("patient.booking.session.missing", _locale()))
             return
         if resume.panel_key == "service_selection":
+            flow = await _load_flow_state(actor_id)
+            flow.booking_mode = "new_booking_flow"
+            flow.reschedule_booking_id = ""
+            await _save_flow_state(actor_id, flow)
             await _render_service_panel(message, actor_id=actor_id, session_id=session_id, clinic_id=clinic_id)
             return
         if resume.panel_key == "doctor_preference_selection":
+            flow = await _load_flow_state(actor_id)
+            flow.booking_mode = "new_booking_flow"
+            flow.reschedule_booking_id = ""
+            await _save_flow_state(actor_id, flow)
             await _render_doctor_pref_panel(
                 message,
                 actor_id=actor_id,
@@ -4021,6 +4055,10 @@ def make_router(
             )
             return
         if resume.panel_key == "slot_selection":
+            flow = await _load_flow_state(actor_id)
+            flow.booking_mode = "new_booking_flow"
+            flow.reschedule_booking_id = ""
+            await _save_flow_state(actor_id, flow)
             await _render_slot_panel(message, actor_id=actor_id, session_id=session_id)
             return
         if resume.panel_key == "contact_collection":
@@ -4042,6 +4080,10 @@ def make_router(
             )
             return
         if resume.panel_key == "review_finalize":
+            flow = await _load_flow_state(actor_id)
+            flow.booking_mode = "new_booking_flow"
+            flow.reschedule_booking_id = ""
+            await _save_flow_state(actor_id, flow)
             await _render_review_finalize_panel(message, actor_id=actor_id, session_id=session_id)
             return
         await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=session_id, text=i18n.t("patient.booking.resume.terminal", _locale()))

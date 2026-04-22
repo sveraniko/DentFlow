@@ -79,6 +79,12 @@ class BookingControlResolutionResult:
 
 
 @dataclass(slots=True, frozen=True)
+class ReturningPatientStartResult:
+    booking_session: BookingSession
+    trusted_shortcut_applied: bool = False
+
+
+@dataclass(slots=True, frozen=True)
 class ExistingBookingControlValidationResult:
     kind: str
     booking_session: BookingSession | None = None
@@ -125,6 +131,50 @@ class BookingPatientFlowService:
             branch_id=branch_id,
         )
         return started.entity
+
+    async def start_or_resume_returning_patient_booking(
+        self,
+        *,
+        clinic_id: str,
+        telegram_user_id: int,
+        branch_id: str | None = None,
+        trusted_patient_id: str | None = None,
+        trusted_phone_snapshot: str | None = None,
+    ) -> ReturningPatientStartResult:
+        latest = await self._latest_active_session(
+            clinic_id=clinic_id,
+            telegram_user_id=telegram_user_id,
+            allowed_route_types=NEW_BOOKING_ROUTE_TYPES,
+        )
+        if latest is not None:
+            return ReturningPatientStartResult(booking_session=latest, trusted_shortcut_applied=False)
+
+        started = await self.orchestration.start_booking_session(
+            clinic_id=clinic_id,
+            telegram_user_id=telegram_user_id,
+            route_type="service_first",
+            branch_id=branch_id,
+        )
+        session = started.entity
+
+        if not trusted_patient_id or not trusted_phone_snapshot:
+            return ReturningPatientStartResult(booking_session=session, trusted_shortcut_applied=False)
+
+        attached = await self.orchestration.attach_resolved_patient_to_session(
+            booking_session_id=session.booking_session_id,
+            patient_id=trusted_patient_id,
+        )
+        if not isinstance(attached, OrchestrationSuccess):
+            return ReturningPatientStartResult(booking_session=session, trusted_shortcut_applied=False)
+
+        hydrated = await self.orchestration.update_session_context(
+            booking_session_id=session.booking_session_id,
+            contact_phone_snapshot=trusted_phone_snapshot,
+        )
+        if not isinstance(hydrated, OrchestrationSuccess):
+            return ReturningPatientStartResult(booking_session=attached.entity, trusted_shortcut_applied=False)
+
+        return ReturningPatientStartResult(booking_session=hydrated.entity, trusted_shortcut_applied=True)
 
     async def start_or_resume_existing_booking_session(self, *, clinic_id: str, telegram_user_id: int) -> BookingSession:
         latest = await self._latest_active_session(
