@@ -222,9 +222,9 @@ Each scenario in this document contains:
   6. Pickup is completed with admin-side operational handling.
 - **Outbound messages / notifications:** order creation, reserve/pickup update messages.
 - **State / object transitions:** care order created, confirmed, and later processed through pickup lifecycle.
-- **Current implementation status:** **Partial**.
+- **Current implementation status:** **Implemented**.
 - **Evidence:** `app/interfaces/bots/patient/router.py` (`care_catalog`, `recommendation_products`, `care_product_open`, `care_order_create`, `care_orders`, `care_order_repeat`, callback handlers for product/branch/reserve/order open); `docs/60_care_commerce.md`; `docs/68_admin_reception_workdesk.md`.
-- **Known gaps / comments:** core patient care-commerce path exists, but broader commercial polish, operator sync, and governance surfaces are still evolving.
+- **Known gaps / comments:** PAT-008 closure scope is reserve/pickup continuity and patient-safe pickup-ready proactive open; broader commerce polish/governance remains outside PAT-008.
 
 ### PAT-DOC-001 — Patient receives a post-visit document artifact
 - **Actor / persona:** Patient.
@@ -520,7 +520,7 @@ The key outbound message classes currently intended by the product are:
 | Reminder issue / no-response visibility | Admin, Owner | Makes operational failures visible for rescue or oversight | Partial |
 | Reschedule / cancel updates | Patient, Admin | Keeps booking state aligned across patient and workdesk | Implemented |
 | Recommendation / aftercare | Patient, Doctor, Admin | Clinical follow-up and product-bridge layer | Partial |
-| Care reserve / pickup updates | Patient, Admin | Connects patient care order with reception fulfillment | Partial |
+| Care reserve / pickup updates | Patient, Admin | Connects patient care order with reception fulfillment | Implemented |
 | Generated document artifact status | Admin, Doctor | Staff-side export/open/download baseline | Implemented |
 | Patient-facing document delivery | Patient | Post-visit export/aftercare artifact delivery | Missing |
 | Owner digest / alerts | Owner | Aggregated clinic visibility | Implemented |
@@ -538,7 +538,7 @@ The key outbound message classes currently intended by the product are:
 | PAT-005 | Patient | Implemented | patient router cancel callbacks | keep regression coverage |
 | PAT-006 | Patient | Implemented | reminder callback flow | keep regression coverage |
 | PAT-007 | Patient | Partial | recommendation routes + care docs | deepen aftercare/document bridge |
-| PAT-008 | Patient | Partial | care router flows + admin pickup docs | finish commercial/operator polish |
+| PAT-008 | Patient | Implemented | care router flows + admin pickup docs | keep regression coverage |
 | PAT-DOC-001 | Patient | Missing | document docs + convergence reports | design patient-facing artifact delivery |
 | ADM-001 | Admin | Implemented | admin workdesk routes | continue workdesk polish only as needed |
 | ADM-002 | Admin | Implemented | admin patient search/list routes | add governance/reporting companion surfaces separately |

@@ -738,6 +738,54 @@ def test_careo_open_callback_is_ownership_safe_and_reuses_canonical_detail() -> 
     assert "no longer accessible" in foreign_callback.answers[-1]
 
 
+def test_proactive_careo_open_and_manual_orders_open_share_same_canonical_surface() -> None:
+    router, _, _, _, _ = _build_router(with_recommendations=False, with_care=True)
+    reserve_callback = _Callback(data="care:reserve:prod_1", user_id=1001)
+    orders_callback = _Callback(data="care:orders", user_id=1001, message_id=503)
+    proactive_open = _Callback(data="careo:open:co_new_1", user_id=1001, message_id=501)
+
+    asyncio.run(_handler(router, "care_reserve_pick", kind="callback")(reserve_callback))
+    asyncio.run(_handler(router, "care_orders_callback", kind="callback")(orders_callback))
+    _, manual_markup = _latest_callback_panel(orders_callback)
+    manual_open_callback = next(
+        button.callback_data
+        for row in manual_markup.inline_keyboard
+        for button in row
+        if str(button.callback_data).startswith("c2|")
+    )
+    manual_open = _Callback(data=manual_open_callback, user_id=1001, message_id=504)
+
+    asyncio.run(_handler(router, "care_order_open_callback", kind="callback")(proactive_open))
+    asyncio.run(_handler(router, "runtime_card_callback", kind="callback")(manual_open))
+
+    proactive_text, _ = _latest_callback_panel(proactive_open)
+    manual_text, _ = _latest_callback_panel(manual_open)
+    assert proactive_text == manual_text
+    assert "Order co_new_1" in proactive_text
+
+
+def test_careo_open_callback_rejects_malformed_and_stale_payloads_safely() -> None:
+    router, _, _, _, _ = _build_router(with_recommendations=False, with_care=True)
+    malformed = _Callback(data="careo:open:", user_id=1001, message_id=505)
+    stale = _Callback(data="careo:open:co_missing", user_id=1001, message_id=506)
+
+    asyncio.run(_handler(router, "care_order_open_callback", kind="callback")(malformed))
+    asyncio.run(_handler(router, "care_order_open_callback", kind="callback")(stale))
+
+    assert malformed.answers
+    assert "no longer accessible" in malformed.answers[-1]
+    assert stale.answers
+    assert "no longer accessible" in stale.answers[-1]
+
+
+def test_pat_a8_2b_contains_no_new_migration_artifacts() -> None:
+    migrations_root = Path("migrations")
+    if not migrations_root.exists():
+        assert True
+        return
+    assert not any("pat_a8_2b" in path.name.lower() for path in migrations_root.rglob("*.py"))
+
+
 def test_home_hides_optional_actions_when_services_unavailable() -> None:
     router, _, _, _, _ = _build_router(with_recommendations=False, with_care=False)
     msg = _Message(text="/start")
