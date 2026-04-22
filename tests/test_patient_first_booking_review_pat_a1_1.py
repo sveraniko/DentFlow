@@ -117,6 +117,7 @@ class _BookingFlowStub:
         self.finalize_calls = 0
         self.start_or_resume_calls = 0
         self.start_or_resume_existing_calls = 0
+        self.set_contact_phone_calls = 0
 
     async def start_or_resume_session(self, **kwargs):  # noqa: ANN003
         self.start_or_resume_calls += 1
@@ -152,6 +153,7 @@ class _BookingFlowStub:
         return OrchestrationSuccess(kind="success", entity=self.session)
 
     async def set_contact_phone(self, *, booking_session_id: str, phone: str):
+        self.set_contact_phone_calls += 1
         self.session = BookingSession(**{**asdict(self.session), "contact_phone_snapshot": phone})
         return self.session
 
@@ -387,3 +389,23 @@ def test_finalize_invalid_path_is_safe_and_localized() -> None:
 
     assert booking_flow.finalize_calls == 1
     assert callback.answers[-1] == "Booking could not be finalized from the current state."
+
+
+def test_contact_submission_with_stale_session_id_is_ignored_and_state_is_normalized() -> None:
+    router, booking_flow, runtime = _build_router_and_flow()
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_missing", "booking_mode": "new_booking_contact", "care": {}},
+        )
+    )
+
+    msg = _Message(text="+1 555 123 1234", user_id=1001)
+    asyncio.run(_handler(router, "on_contact_text")(msg))
+
+    assert booking_flow.set_contact_phone_calls == 0
+    assert booking_flow.finalize_calls == 0
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_session_id"] == ""
+    assert state["booking_mode"] == "new_booking_flow"

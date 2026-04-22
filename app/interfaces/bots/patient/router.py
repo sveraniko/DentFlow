@@ -3996,6 +3996,13 @@ def make_router(
             return
         if mode != "new_booking_contact":
             return
+        session = await booking_flow.get_booking_session(booking_session_id=session_id)
+        if session is None:
+            flow.booking_session_id = ""
+            flow.booking_mode = "new_booking_flow"
+            flow.reschedule_booking_id = ""
+            await _save_flow_state(actor_id, flow)
+            return
         await booking_flow.set_contact_phone(booking_session_id=session_id, phone=phone)
         display_name = (message.from_user.full_name or "").strip() or i18n.t("patient.booking.contact.default_name", locale)
         resolution = await booking_flow.resolve_patient_from_contact(
