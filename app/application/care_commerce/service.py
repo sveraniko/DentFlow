@@ -13,6 +13,7 @@ from app.domain.care_commerce import (
     CareReservation,
     RecommendationProductLink,
 )
+from app.application.care_commerce.delivery import PatientCareOrderDeliveryService
 
 _ORDER_TRANSITIONS: dict[str, set[str]] = {
     "created": {"awaiting_confirmation", "confirmed", "awaiting_payment", "canceled", "expired"},
@@ -119,6 +120,7 @@ class RepeatOrderOutcome:
 @dataclass(slots=True)
 class CareCommerceService:
     repository: CareCommerceRepository
+    patient_order_delivery: PatientCareOrderDeliveryService | None = None
 
     _ADMIN_ACTION_TARGETS: ClassVar[dict[str, str]] = {
         "ready": "ready_for_pickup",
@@ -828,7 +830,14 @@ class CareCommerceService:
         await self._adjust_reservation_stock(branch_id=current.branch_id, care_product_id=current.care_product_id, qty=current.reserved_qty, consume=True)
         return consumed
 
-    async def apply_admin_order_action(self, *, care_order_id: str, action: str) -> CareOrder | None:
+    async def apply_admin_order_action(
+        self,
+        *,
+        care_order_id: str,
+        action: str,
+        locale_hint: str = "en",
+        pickup_branch_label: str | None = None,
+    ) -> CareOrder | None:
         target = self._ADMIN_ACTION_TARGETS.get(action)
         if target is None:
             raise ValueError(f"unsupported admin care action: {action}")
@@ -844,6 +853,11 @@ class CareCommerceService:
             if updated is None:
                 return None
             await self._ensure_reservations_for_order(updated)
+            await self._deliver_pickup_ready_if_possible(
+                updated,
+                locale_hint=locale_hint,
+                pickup_branch_label=pickup_branch_label or updated.pickup_branch_id,
+            )
             return updated
 
         if action == "issue":
@@ -861,6 +875,26 @@ class CareCommerceService:
             return updated
 
         return await self.transition_order(care_order_id=care_order_id, to_status=target)
+
+    async def _deliver_pickup_ready_if_possible(
+        self,
+        order: CareOrder,
+        *,
+        locale_hint: str,
+        pickup_branch_label: str | None,
+    ) -> None:
+        if self.patient_order_delivery is None:
+            return
+        try:
+            await self.patient_order_delivery.deliver_pickup_ready_if_possible(
+                clinic_id=order.clinic_id,
+                patient_id=order.patient_id,
+                care_order_id=order.care_order_id,
+                locale=locale_hint,
+                pickup_branch_label=pickup_branch_label,
+            )
+        except Exception:
+            return
 
     async def _ensure_reservations_for_order(self, order: CareOrder) -> None:
         items = await self.repository.list_order_items(order.care_order_id)

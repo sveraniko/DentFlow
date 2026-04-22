@@ -169,6 +169,14 @@ def make_router(
         translated = i18n.t(key, locale)
         return translated if translated != key else status
 
+    def _pickup_branch_label(*, clinic_id: str, branch_id: str | None) -> str | None:
+        if not branch_id:
+            return None
+        branch = reference_service.get_branch(clinic_id, branch_id)
+        if branch is None:
+            return branch_id
+        return branch.display_name or branch_id
+
     def _ops_issue_label(*, issue_type: str, locale: str) -> str:
         key = f"admin.issues.type.{issue_type}"
         translated = i18n.t(key, locale)
@@ -1406,13 +1414,23 @@ def make_router(
         if action not in {"ready", "issue", "fulfill", "cancel", "pay_required", "paid"}:
             await message.answer(i18n.t("admin.care.order.action.usage", locale))
             return
+        existing_order = await care_commerce_service.get_order(care_order_id)
         try:
-            updated = await care_commerce_service.apply_admin_order_action(care_order_id=care_order_id, action=action)
+            updated = await care_commerce_service.apply_admin_order_action(
+                care_order_id=care_order_id,
+                action=action,
+                locale_hint=locale,
+                pickup_branch_label=_pickup_branch_label(
+                    clinic_id=existing_order.clinic_id,
+                    branch_id=existing_order.pickup_branch_id,
+                )
+                if existing_order is not None
+                else None,
+            )
         except ValueError:
             error_key = "admin.care.order.action.invalid"
             if action == "ready":
-                existing = await care_commerce_service.get_order(care_order_id)
-                if existing is not None and existing.pickup_branch_id is None:
+                if existing_order is not None and existing_order.pickup_branch_id is None:
                     error_key = "admin.care.order.action.pickup_branch_required"
                 else:
                     error_key = "admin.care.order.action.insufficient_stock"
@@ -2047,7 +2065,13 @@ def make_router(
             action = parts[2]
             care_order_id = parts[3]
             try:
-                await care_commerce_service.apply_admin_order_action(care_order_id=care_order_id, action=action)
+                order = await care_commerce_service.get_order(care_order_id)
+                await care_commerce_service.apply_admin_order_action(
+                    care_order_id=care_order_id,
+                    action=action,
+                    locale_hint=locale,
+                    pickup_branch_label=_pickup_branch_label(clinic_id=actor_context.clinic_id, branch_id=(order.pickup_branch_id if order else None)),
+                )
             except ValueError:
                 await callback.answer(i18n.t("admin.care.order.action.invalid", locale), show_alert=True)
                 return
