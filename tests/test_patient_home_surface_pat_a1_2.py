@@ -387,6 +387,29 @@ def test_recommendation_open_callback_marks_issued_as_viewed_and_renders_detail(
     assert recommendation_service.mark_viewed_calls == ["rec_latest"]
 
 
+def test_proactive_open_callback_and_manual_open_share_canonical_detail_surface() -> None:
+    router, _, _, _, _ = _build_router(with_recommendations=True, with_care=True)
+    seed_message = _Message(text="/recommendations", user_id=1001)
+    asyncio.run(_handler(router, "recommendations_list")(seed_message))
+    proactive_callback = _Callback(data="prec:open:rec_latest", user_id=1001, message_id=501)
+    manual_message = _Message(text="/recommendation_open rec_latest", user_id=1001)
+
+    asyncio.run(_handler(router, "recommendation_open_callback", kind="callback")(proactive_callback))
+    asyncio.run(_handler(router, "recommendations_open")(manual_message))
+
+    proactive_edit = proactive_callback.bot.edits[-1]
+    proactive_text = proactive_edit["text"]
+    proactive_keyboard = proactive_edit["reply_markup"]
+    manual_edit = manual_message.bot.edits[-1]
+    manual_text = manual_edit["text"]
+    manual_keyboard = manual_edit["reply_markup"]
+    assert proactive_text == manual_text
+    proactive_buttons = [button.text for row in proactive_keyboard.inline_keyboard for button in row]
+    manual_buttons = [button.text for row in manual_keyboard.inline_keyboard for button in row]
+    assert "Open recommended products" in proactive_buttons
+    assert proactive_buttons == manual_buttons
+
+
 def test_recommendation_action_callback_updates_lifecycle_and_re_renders_detail() -> None:
     router, _, _, recommendation_service, _ = _build_router(with_recommendations=True, with_care=False)
     message = _Message(text="/recommendations", user_id=1001)
@@ -420,6 +443,20 @@ def test_recommendation_callback_rejects_malformed_payload_safely() -> None:
 
     assert callback.answers
     assert "no longer available" in callback.answers[-1]
+
+
+def test_recommendation_open_callback_rejects_stale_or_manually_replayed_payloads_safely() -> None:
+    router, _, _, _, _ = _build_router(with_recommendations=True, with_care=False)
+    malformed = _Callback(data="prec:open:", user_id=1001, message_id=501)
+    missing = _Callback(data="prec:open:rec_missing", user_id=1001, message_id=502)
+
+    asyncio.run(_handler(router, "recommendation_open_callback", kind="callback")(malformed))
+    asyncio.run(_handler(router, "recommendation_open_callback", kind="callback")(missing))
+
+    assert malformed.answers
+    assert "no longer available" in malformed.answers[-1]
+    assert missing.answers
+    assert "Recommendation not found." in missing.answers[-1]
 
 
 def test_recommendation_open_and_actions_reject_other_patient_recommendation() -> None:

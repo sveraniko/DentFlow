@@ -190,6 +190,7 @@
   "patient.recommendations.action.usage": "Usage: /recommendation_action <ack|accept|decline> <recommendation_id>",
   "patient.recommendations.action.invalid_state": "This action is not available for the current recommendation state.",
   "patient.recommendations.action.unavailable": "This recommendation action is no longer available. Please reopen recommendations.",
+  "patient.recommendations.callback.unavailable": "This recommendation link is no longer available. Please reopen recommendations.",
   "patient.recommendations.action.ok": "Saved. Current status: {status}",
   "patient.recommendations.action.ack.button": "Acknowledge",
   "patient.recommendations.action.accept.button": "Accept",

@@ -2559,7 +2559,7 @@ def make_router(
             expected_parts=3,
         )
         if parts is None:
-            await callback.answer(i18n.t("patient.recommendations.action.unavailable", _locale()), show_alert=True)
+            await callback.answer(i18n.t("patient.recommendations.callback.unavailable", _locale()), show_alert=True)
             return
         recommendation_id = parts[2]
         patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
@@ -2589,7 +2589,7 @@ def make_router(
             expected_parts=4,
         )
         if parts is None:
-            await callback.answer(i18n.t("patient.recommendations.action.unavailable", _locale()), show_alert=True)
+            await callback.answer(i18n.t("patient.recommendations.callback.unavailable", _locale()), show_alert=True)
             return
         action, recommendation_id = parts[2], parts[3]
         patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
@@ -2605,7 +2605,7 @@ def make_router(
             elif action == "decline":
                 updated = await recommendation_service.decline(recommendation_id=recommendation_id)
             else:
-                await callback.answer(i18n.t("patient.recommendations.action.unavailable", _locale()), show_alert=True)
+                await callback.answer(i18n.t("patient.recommendations.callback.unavailable", _locale()), show_alert=True)
                 return
         except ValueError:
             await _render_recommendation_detail_panel(
@@ -2636,7 +2636,7 @@ def make_router(
             expected_parts=3,
         )
         if parts is None:
-            await callback.answer(i18n.t("patient.recommendations.action.unavailable", _locale()), show_alert=True)
+            await callback.answer(i18n.t("patient.recommendations.callback.unavailable", _locale()), show_alert=True)
             return
         recommendation_id = parts[2]
         patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
