@@ -556,5 +556,6 @@
   "patient.booking.quick.panel": "Быстрая запись на основе последнего визита:\nУслуга: {service}\nВрач: {doctor}\nФилиал: {branch}",
   "patient.booking.quick.repeat": "Повторить прошлую услугу",
   "patient.booking.quick.same_doctor": "К тому же врачу",
+  "patient.booking.quick.same_doctor.fallback": "Поняли — выберите услугу, и мы сохраним выбор этого врача.",
   "patient.booking.quick.other": "Выбрать другое"
 }

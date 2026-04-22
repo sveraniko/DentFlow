@@ -405,6 +405,8 @@ def test_get_recent_booking_prefill_returns_latest_relevant_pattern() -> None:
     assert prefill.service_id == "service_consult"
     assert prefill.doctor_id == "doctor_1"
     assert prefill.branch_id == "branch_1"
+    assert prefill.service_title_key == "s"
+    assert prefill.service_code == "CONSULT"
     assert prefill.doctor_label == "Dr One"
 
 
@@ -423,6 +425,24 @@ def test_apply_recent_booking_prefill_sets_service_branch_and_specific_doctor() 
 
     assert updated is not None
     assert updated.service_id == "service_consult"
+    assert updated.branch_id == "branch_1"
+    assert updated.doctor_preference_type == "specific"
+    assert updated.doctor_id == "doctor_1"
+
+
+def test_apply_recent_booking_same_doctor_prefill_sets_branch_and_specific_doctor_only() -> None:
+    flow, _, _ = _build_flow(finder_rows=[])
+    session = asyncio.run(flow.start_or_resume_session(clinic_id="clinic_main", telegram_user_id=999))
+
+    updated = asyncio.run(
+        flow.apply_recent_booking_same_doctor_prefill(
+            booking_session_id=session.booking_session_id,
+            doctor_id="doctor_1",
+            branch_id="branch_1",
+        )
+    )
+
+    assert updated is not None
     assert updated.branch_id == "branch_1"
     assert updated.doctor_preference_type == "specific"
     assert updated.doctor_id == "doctor_1"
