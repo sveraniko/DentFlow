@@ -2798,31 +2798,52 @@ def make_router(
         )
         await callback.answer()
 
-    @router.callback_query(F.data.startswith("careo:open:"))
-    async def care_order_open_callback(callback: CallbackQuery) -> None:
-        if not callback.from_user or not callback.data or care_commerce_service is None:
-            return
+    async def _open_patient_care_order_from_callback(
+        callback: CallbackQuery,
+        *,
+        care_order_id: str,
+        mode: CardMode = CardMode.COMPACT,
+    ) -> bool:
+        if not callback.from_user or care_commerce_service is None:
+            return False
         clinic_id = _primary_clinic_id()
         patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
         if clinic_id is None or patient_id is None:
             await callback.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()), show_alert=True)
-            return
-        care_order_id = callback.data.split(":", 2)[2].strip()
-        if not care_order_id:
+            return False
+        target_order_id = care_order_id.strip()
+        if not target_order_id:
             await callback.answer(i18n.t("patient.care.order.open.denied", _locale()), show_alert=True)
-            return
-        order = await care_commerce_service.get_order(care_order_id)
+            return False
+        order = await care_commerce_service.get_order(target_order_id)
         if order is None or order.patient_id != patient_id:
             await callback.answer(i18n.t("patient.care.order.open.denied", _locale()), show_alert=True)
-            return
+            return False
         await _render_care_order_card(
             callback,
             actor_id=callback.from_user.id,
             clinic_id=clinic_id,
             patient_id=patient_id,
-            care_order_id=care_order_id,
+            care_order_id=target_order_id,
+            mode=mode,
+        )
+        return True
+
+    @router.callback_query(F.data.startswith("careo:open:"))
+    async def care_order_open_callback(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data or care_commerce_service is None:
+            return
+        parts = callback.data.split(":")
+        if len(parts) != 3:
+            await callback.answer(i18n.t("patient.care.order.open.denied", _locale()), show_alert=True)
+            return
+        opened = await _open_patient_care_order_from_callback(
+            callback,
+            care_order_id=parts[2],
             mode=CardMode.COMPACT,
         )
+        if not opened:
+            return
         await callback.answer()
 
     @router.callback_query(F.data.startswith("book:svc:"))
@@ -3219,21 +3240,15 @@ def make_router(
                 await callback.answer()
                 return
             if decoded.page_or_index == "open":
-                await _render_care_order_card(
+                await _open_patient_care_order_from_callback(
                     callback,
-                    actor_id=callback.from_user.id,
-                    clinic_id=clinic_id,
-                    patient_id=patient_id,
                     care_order_id=decoded.entity_id,
                     mode=CardMode.COMPACT,
                 )
                 return
             if decoded.page_or_index == "open_expand":
-                await _render_care_order_card(
+                await _open_patient_care_order_from_callback(
                     callback,
-                    actor_id=callback.from_user.id,
-                    clinic_id=clinic_id,
-                    patient_id=patient_id,
                     care_order_id=decoded.entity_id,
                     mode=CardMode.EXPANDED,
                 )

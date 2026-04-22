@@ -846,6 +846,8 @@ class CareCommerceService:
             return None
 
         if action == "ready":
+            if order.status == target:
+                return order
             if not order.pickup_branch_id:
                 raise ValueError("pickup_branch_required")
             await self._assert_order_stock_available(order)

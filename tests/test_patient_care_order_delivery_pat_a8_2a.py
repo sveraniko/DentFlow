@@ -80,3 +80,24 @@ def test_pickup_ready_delivery_skips_on_ambiguous_binding() -> None:
 
     assert result.status == "skipped_ambiguous_binding"
     assert sender.payloads == []
+
+
+def test_pickup_ready_delivery_skips_without_binding_and_does_not_send() -> None:
+    sender = _Sender()
+    service = PatientCareOrderDeliveryService(
+        binding_reader=_BindingReader(rows=[]),
+        sender=sender,
+        i18n=I18nService(locales_path=Path("locales"), default_locale="en"),
+    )
+
+    result = asyncio.run(
+        service.deliver_pickup_ready_if_possible(
+            clinic_id="c1",
+            patient_id="p1",
+            care_order_id="co-no-binding",
+            locale="en",
+        )
+    )
+
+    assert result.status == "skipped_no_binding"
+    assert sender.payloads == []
