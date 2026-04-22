@@ -89,6 +89,8 @@ class RecentBookingPrefill:
     service_id: str
     doctor_id: str
     branch_id: str
+    service_title_key: str | None = None
+    service_code: str | None = None
     service_label: str | None = None
     doctor_label: str | None = None
     branch_label: str | None = None
@@ -205,6 +207,8 @@ class BookingPatientFlowService:
             service_id=latest.service_id,
             doctor_id=latest.doctor_id,
             branch_id=latest.branch_id,
+            service_title_key=service.title_key,
+            service_code=service.code,
             service_label=service.code,
             doctor_label=doctor.display_name,
             branch_label=branch.display_name,
@@ -221,6 +225,23 @@ class BookingPatientFlowService:
         updated = await self.orchestration.update_session_context(
             booking_session_id=booking_session_id,
             service_id=service_id,
+            branch_id=branch_id,
+            doctor_preference_type="specific",
+            doctor_id=doctor_id,
+        )
+        if not isinstance(updated, OrchestrationSuccess):
+            return None
+        return updated.entity
+
+    async def apply_recent_booking_same_doctor_prefill(
+        self,
+        *,
+        booking_session_id: str,
+        doctor_id: str,
+        branch_id: str,
+    ) -> BookingSession | None:
+        updated = await self.orchestration.update_session_context(
+            booking_session_id=booking_session_id,
             branch_id=branch_id,
             doctor_preference_type="specific",
             doctor_id=doctor_id,

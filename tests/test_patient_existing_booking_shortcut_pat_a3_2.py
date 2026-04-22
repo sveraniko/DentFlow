@@ -155,6 +155,7 @@ class _BookingFlowStub:
         self.last_returning_kwargs: dict[str, object] | None = None
         self.recent_prefill: RecentBookingPrefill | None = None
         self.apply_prefill_calls = 0
+        self.apply_same_doctor_prefill_calls = 0
 
     async def start_or_resume_returning_patient_booking(self, **kwargs):  # noqa: ANN003
         self.start_or_resume_returning_calls += 1
@@ -187,6 +188,19 @@ class _BookingFlowStub:
                 "branch_id": kwargs["branch_id"],
                 "doctor_preference_type": "specific",
                 "doctor_id": kwargs["doctor_id"],
+            }
+        )
+        return self.session
+
+    async def apply_recent_booking_same_doctor_prefill(self, **kwargs):  # noqa: ANN003
+        self.apply_same_doctor_prefill_calls += 1
+        self.session = BookingSession(
+            **{
+                **asdict(self.session),
+                "branch_id": kwargs["branch_id"],
+                "doctor_preference_type": "specific",
+                "doctor_id": kwargs["doctor_id"],
+                "service_id": None,
             }
         )
         return self.session
@@ -478,6 +492,10 @@ def test_book_entry_uses_trusted_identity_and_phone_to_skip_contact_prompt() -> 
     assert state["quick_booking_prefill"]["service_id"] == "service_consult"
     assert message.answers
     assert "Quick booking suggestion based on your recent visit" in message.answers[-1][0]
+    keyboard = message.answers[-1][1]
+    assert keyboard is not None
+    callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+    assert callbacks == ["qbook:repeat:sess_1", "qbook:same_doctor:sess_1", "qbook:other:sess_1"]
 
 
 def test_quick_book_repeat_prefills_session_and_opens_slot_selection() -> None:
@@ -497,6 +515,7 @@ def test_quick_book_repeat_prefills_session_and_opens_slot_selection() -> None:
     asyncio.run(_handler(router, "quick_book_repeat", kind="callback")(callback))
 
     assert booking_flow.apply_prefill_calls == 1
+    assert booking_flow.apply_same_doctor_prefill_calls == 0
     assert callback.bot.edits
     assert "Choose one of the nearest available slots" in callback.bot.edits[-1]["text"]
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
@@ -523,6 +542,101 @@ def test_quick_book_other_falls_back_to_service_selection() -> None:
     assert "Choose a service to begin booking." in callback.bot.edits[-1]["text"]
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
     assert state["quick_booking_prefill"] == {}
+
+
+def test_quick_book_same_doctor_prefills_doctor_and_branch_then_opens_service_selection() -> None:
+    router, runtime, booking_flow, _ = _build_router(recommendation_repository=_RepoUniqueWithPhone())
+    booking_flow.recent_prefill = RecentBookingPrefill(
+        service_id="service_consult",
+        doctor_id="doctor_1",
+        branch_id="branch_1",
+        service_label="Consultation",
+        doctor_label="Dr One",
+        branch_label="Main Branch",
+    )
+    message = _Message(text="/book", user_id=1001)
+    asyncio.run(_handler(router, "book_entry")(message))
+
+    callback = _Callback(data="qbook:same_doctor:sess_1", user_id=1001)
+    asyncio.run(_handler(router, "quick_book_same_doctor", kind="callback")(callback))
+
+    assert booking_flow.apply_same_doctor_prefill_calls == 1
+    assert booking_flow.apply_prefill_calls == 0
+    assert callback.bot.edits
+    assert "Choose a service to begin booking." in callback.bot.edits[-1]["text"]
+    assert booking_flow.session.doctor_preference_type == "specific"
+    assert booking_flow.session.doctor_id == "doctor_1"
+    assert booking_flow.session.branch_id == "branch_1"
+    assert booking_flow.session.service_id is None
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["quick_booking_prefill"] == {}
+
+
+def test_quick_book_same_doctor_with_incomplete_prefill_falls_back_safely() -> None:
+    router, runtime, booking_flow, _ = _build_router(recommendation_repository=_RepoUniqueWithPhone())
+    booking_flow.recent_prefill = RecentBookingPrefill(
+        service_id="service_consult",
+        doctor_id="",
+        branch_id="branch_1",
+        service_label="Consultation",
+        doctor_label="Dr One",
+        branch_label="Main Branch",
+    )
+    message = _Message(text="/book", user_id=1001)
+    asyncio.run(_handler(router, "book_entry")(message))
+
+    callback = _Callback(data="qbook:same_doctor:sess_1", user_id=1001)
+    asyncio.run(_handler(router, "quick_book_same_doctor", kind="callback")(callback))
+
+    assert booking_flow.apply_same_doctor_prefill_calls == 0
+    assert callback.bot.edits
+    assert "Choose a service to begin booking." in callback.bot.edits[-1]["text"]
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["quick_booking_prefill"] == {}
+
+
+def test_quick_booking_panel_prefers_localized_service_title_when_available() -> None:
+    router, _, booking_flow, _ = _build_router(recommendation_repository=_RepoUniqueWithPhone())
+    booking_flow.recent_prefill = RecentBookingPrefill(
+        service_id="service_cleaning",
+        doctor_id="doctor_1",
+        branch_id="branch_1",
+        service_title_key="service.cleaning",
+        service_code="CLEANING",
+        service_label="",
+        doctor_label="Dr One",
+        branch_label="Main Branch",
+    )
+
+    message = _Message(text="/book", user_id=1001)
+    asyncio.run(_handler(router, "book_entry")(message))
+
+    assert message.answers
+    panel_text = message.answers[-1][0]
+    assert "Service: Teeth cleaning" in panel_text
+
+
+def test_quick_book_manual_stale_callback_is_bounded() -> None:
+    router, runtime, booking_flow, _ = _build_router(recommendation_repository=_RepoUniqueWithPhone())
+    booking_flow.recent_prefill = RecentBookingPrefill(
+        service_id="service_consult",
+        doctor_id="doctor_1",
+        branch_id="branch_1",
+        service_label="Consultation",
+        doctor_label="Dr One",
+        branch_label="Main Branch",
+    )
+    message = _Message(text="/book", user_id=1001)
+    asyncio.run(_handler(router, "book_entry")(message))
+
+    callback = _Callback(data="qbook:same_doctor:sess_manual", user_id=1001)
+    asyncio.run(_handler(router, "quick_book_same_doctor", kind="callback")(callback))
+
+    assert booking_flow.apply_same_doctor_prefill_calls == 0
+    assert callback.answers
+    assert "This button is no longer active. Please use /book to continue." in callback.answers[-1]
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["quick_booking_prefill"]["service_id"] == "service_consult"
 
 
 def test_book_entry_with_trusted_identity_without_phone_falls_back_to_contact_prompt() -> None:
@@ -563,6 +677,11 @@ def test_phome_book_has_parity_with_book_for_trusted_identity_and_phone() -> Non
     assert state["booking_mode"] == "new_booking_flow"
     assert callback.answers
     assert "Quick booking suggestion based on your recent visit" in callback.answers[-1]
+    same_doctor_callback = _Callback(data="qbook:same_doctor:sess_1", user_id=1001)
+    asyncio.run(_handler(router, "quick_book_same_doctor", kind="callback")(same_doctor_callback))
+    assert booking_flow.apply_same_doctor_prefill_calls == 1
+    assert same_doctor_callback.bot.edits
+    assert "Choose a service to begin booking." in same_doctor_callback.bot.edits[-1]["text"]
 
 
 def test_book_entry_without_trusted_patient_falls_back_to_contact_prompt() -> None:

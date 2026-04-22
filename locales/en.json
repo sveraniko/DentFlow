@@ -556,5 +556,6 @@
   "patient.booking.quick.panel": "Quick booking suggestion based on your recent visit:\nService: {service}\nDoctor: {doctor}\nBranch: {branch}",
   "patient.booking.quick.repeat": "Repeat previous service",
   "patient.booking.quick.same_doctor": "Use same doctor",
+  "patient.booking.quick.same_doctor.fallback": "Got it — choose a service and we'll keep your doctor preference.",
   "patient.booking.quick.other": "Choose something else"
 }
