@@ -195,6 +195,8 @@
   "patient.recommendations.action.accept.button": "Принять",
   "patient.recommendations.action.decline.button": "Отклонить",
   "patient.recommendations.action.products.button": "Открыть рекомендованные товары",
+  "patient.recommendations.proactive.text": "После визита появилась новая рекомендация. Откройте карточку, чтобы посмотреть детали.",
+  "patient.recommendations.proactive.open.button": "Открыть рекомендацию",
   "patient.recommendations.type.aftercare": "После визита",
   "patient.recommendations.type.follow_up": "Повторный приём",
   "patient.recommendations.type.next_step": "Следующий шаг",
