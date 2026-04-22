@@ -84,6 +84,7 @@ class _Search:
 class _BookingFlow:
     def __init__(self) -> None:
         self._sessions: dict[str, SimpleNamespace] = {}
+        self._issue_states: dict[tuple[str, str], str] = {}
         self.reads = self
         self.orchestration = SimpleNamespace(
             confirm_booking=self._ok,
@@ -127,6 +128,20 @@ class _BookingFlow:
 
     async def complete_admin_reschedule_from_session(self, **kwargs):
         return OrchestrationSuccess(kind="success", entity=self._booking(status="confirmed"))
+
+    async def get_issue_escalation(self, *, clinic_id: str, issue_type: str, issue_ref_id: str):
+        status = self._issue_states.get((issue_type, issue_ref_id))
+        if status is None:
+            return None
+        return SimpleNamespace(status=status)
+
+    async def take_issue_escalation(self, *, issue_type: str, issue_ref_id: str, **kwargs):
+        self._issue_states[(issue_type, issue_ref_id)] = "in_progress"
+        return SimpleNamespace(status="in_progress")
+
+    async def resolve_issue_escalation(self, *, issue_type: str, issue_ref_id: str, **kwargs):
+        self._issue_states[(issue_type, issue_ref_id)] = "resolved"
+        return SimpleNamespace(status="resolved")
 
     def build_booking_snapshot(self, **kwargs):
         booking = kwargs["booking"]
@@ -251,6 +266,22 @@ class _Workdesk:
                 care_order_id=None,
                 local_related_date=date(2026, 4, 19),
                 local_related_time="10:00",
+                summary_text="raw",
+                patient_display_name="Jane Roe",
+                updated_at=datetime.now(timezone.utc),
+            ),
+            OpsIssueQueueRow(
+                clinic_id="c1",
+                branch_id="br1",
+                issue_type="unknown_issue",
+                issue_ref_id="unknown_1",
+                issue_status="open",
+                severity="low",
+                patient_id="p1",
+                booking_id="b1",
+                care_order_id=None,
+                local_related_date=date(2026, 4, 19),
+                local_related_time="11:30",
                 summary_text="raw",
                 patient_display_name="Jane Roe",
                 updated_at=datetime.now(timezone.utc),
@@ -383,7 +414,12 @@ def test_admin_issues_patient_linked_open_has_back_to_queue() -> None:
     msg = _Message("/admin_issues")
     asyncio.run(_handler(router, "admin_issues")(msg))
     _, keyboard = msg.answers[-1]
-    patient_cb = keyboard.inline_keyboard[4][0].callback_data
+    patient_cb = next(
+        button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+        if (button.callback_data or "").startswith("aw4i:patient:")
+    )
     callback = _Callback(patient_cb)
     asyncio.run(_handler(router, "admin_issues_object_callback", kind="callback")(callback))
     panel_text, panel_markup = callback.message.edits[-1]
@@ -411,7 +447,12 @@ def test_admin_issues_retry_action_is_visible_and_bounded() -> None:
     msg = _Message("/admin_issues")
     asyncio.run(_handler(router, "admin_issues")(msg))
     _, keyboard = msg.answers[-1]
-    retry_cb = keyboard.inline_keyboard[3][0].callback_data
+    retry_cb = next(
+        button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+        if (button.callback_data or "").startswith("aw4i:retry:r_fail_1")
+    )
 
     first = _Callback(retry_cb)
     asyncio.run(_handler(router, "admin_issues_object_callback", kind="callback")(first))
@@ -421,3 +462,81 @@ def test_admin_issues_retry_action_is_visible_and_bounded() -> None:
     asyncio.run(_handler(router, "admin_issues_object_callback", kind="callback")(second))
     assert "Retry already scheduled." in second.answers[-1]
     assert recovery.calls.count("r_fail_1") == 2
+
+
+def test_admin_issues_take_and_resolve_callbacks_refresh_queue() -> None:
+    router, _, _ = _router()
+    msg = _Message("/admin_issues")
+    asyncio.run(_handler(router, "admin_issues")(msg))
+    _, keyboard = msg.answers[-1]
+    take_cb = next(
+        button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+        if (button.callback_data or "").startswith("aw4i:take:confirmation_no_response:")
+    )
+    take = _Callback(take_cb)
+    asyncio.run(_handler(router, "admin_issues_object_callback", kind="callback")(take))
+    assert "Issue taken." in take.answers[-1]
+    _, take_markup = take.message.edits[-1]
+    assert take_markup is not None
+    status_cb = take_markup.inline_keyboard[0][0].callback_data
+    status_cycle = _Callback(status_cb)
+    asyncio.run(_handler(router, "admin_aw4_queue_callback", kind="callback")(status_cycle))
+    _, in_progress_markup = status_cycle.message.edits[-1]
+    assert in_progress_markup is not None
+    assert any(
+        (button.callback_data or "").startswith("aw4i:resolve:confirmation_no_response:")
+        for row in in_progress_markup.inline_keyboard
+        for button in row
+    )
+    resolve_cb = next(
+        button.callback_data
+        for row in in_progress_markup.inline_keyboard
+        for button in row
+        if (button.callback_data or "").startswith("aw4i:resolve:confirmation_no_response:")
+    )
+    resolve = _Callback(resolve_cb)
+    asyncio.run(_handler(router, "admin_issues_object_callback", kind="callback")(resolve))
+    assert "Issue resolved." in resolve.answers[-1]
+    _, resolved_markup = resolve.message.edits[-1]
+    assert resolved_markup is not None
+    assert all(
+        not (button.callback_data or "").startswith("aw4i:resolve:confirmation_no_response:")
+        for row in resolved_markup.inline_keyboard
+        for button in row
+    )
+
+
+def test_admin_issues_unsupported_and_stale_lifecycle_callbacks_are_bounded() -> None:
+    router, _, _ = _router()
+    msg = _Message("/admin_issues")
+    asyncio.run(_handler(router, "admin_issues")(msg))
+    _, keyboard = msg.answers[-1]
+    stale_take = next(
+        button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+        if (button.callback_data or "").startswith("aw4i:take:confirmation_no_response:")
+    )
+    stale = _Callback(stale_take.replace(stale_take.split(":")[-1], "bad"))
+    asyncio.run(_handler(router, "admin_issues_object_callback", kind="callback")(stale))
+    assert any("outdated" in text.lower() for text in stale.answers)
+
+    token = stale_take.split(":")[-1]
+    unsupported = _Callback(f"aw4i:take:unknown_issue:unknown_1:{token}")
+    asyncio.run(_handler(router, "admin_issues_object_callback", kind="callback")(unsupported))
+    assert any("supported" in text.lower() for text in unsupported.answers)
+
+
+def test_admin_issues_unsupported_kind_has_no_lifecycle_buttons() -> None:
+    router, _, _ = _router()
+    msg = _Message("/admin_issues")
+    asyncio.run(_handler(router, "admin_issues")(msg))
+    _, keyboard = msg.answers[-1]
+    assert all(
+        not (button.callback_data or "").startswith("aw4i:take:unknown_issue")
+        and not (button.callback_data or "").startswith("aw4i:resolve:unknown_issue")
+        for row in keyboard.inline_keyboard
+        for button in row
+    )
