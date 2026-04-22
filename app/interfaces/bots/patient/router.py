@@ -45,6 +45,18 @@ from app.interfaces.cards import (
 )
 
 _TERMINAL_RECOMMENDATION_STATUSES = {"accepted", "declined", "withdrawn", "expired"}
+_TERMINAL_CARE_ORDER_STATUSES = {"fulfilled", "canceled", "expired"}
+
+
+def _is_live_care_order_status(status: str) -> bool:
+    return status not in _TERMINAL_CARE_ORDER_STATUSES
+
+
+def _split_patient_orders_for_surface(rows: list[Any]) -> tuple[list[Any], list[Any]]:
+    ordered = sorted(rows, key=lambda row: row.updated_at, reverse=True)
+    live_rows = [row for row in ordered if _is_live_care_order_status(getattr(row, "status", ""))]
+    history_rows = [row for row in ordered if not _is_live_care_order_status(getattr(row, "status", ""))]
+    return live_rows, history_rows
 
 
 @dataclass(slots=True)
@@ -559,7 +571,9 @@ def make_router(
         flow = await _load_flow_state(actor_id)
         flow.care = state
         await _save_flow_state(actor_id, flow)
-        rows: list[list[InlineKeyboardButton]] = []
+        rows: list[list[InlineKeyboardButton]] = [
+            [InlineKeyboardButton(text=i18n.t("patient.care.orders.entry.action", locale), callback_data="care:orders")]
+        ]
         for category in categories[start:end]:
             callback_data = await _encode_runtime_callback(
                 profile=CardProfile.PRODUCT,
@@ -1300,49 +1314,89 @@ def make_router(
         locale = _locale()
         rows = await care_commerce_service.list_patient_orders(clinic_id=clinic_id, patient_id=patient_id)
         if not rows:
-            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id="care", text=i18n.t("patient.care.orders.empty", locale))
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id="care",
+                text=i18n.t("patient.care.orders.empty", locale),
+                keyboard=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text=i18n.t("patient.care.orders.empty.browse", locale), callback_data="care:catalog")]
+                    ]
+                ),
+            )
             return
+
+        live_rows, history_rows = _split_patient_orders_for_surface(rows)
         state = await _care_state(actor_id)
-        active_page, start, end = _page_slice(len(rows), state.care_order_page if page is None else page)
+        active_page, start, end = _page_slice(len(history_rows), state.care_order_page if page is None else page)
         state.care_order_page = active_page
         flow = await _load_flow_state(actor_id)
         flow.care = state
         await _save_flow_state(actor_id, flow)
-        compact_rows: list[_CompactCareOrderRowCard] = []
-        for order in rows[start:end]:
-            compact_rows.append(await _build_care_order_row_card(clinic_id=clinic_id, actor_id=actor_id, order=order, locale=locale))
+
+        current_cards: list[_CompactCareOrderRowCard] = []
+        for order in live_rows[:1]:
+            current_cards.append(await _build_care_order_row_card(clinic_id=clinic_id, actor_id=actor_id, order=order, locale=locale))
+        history_cards: list[_CompactCareOrderRowCard] = []
+        for order in history_rows[start:end]:
+            history_cards.append(await _build_care_order_row_card(clinic_id=clinic_id, actor_id=actor_id, order=order, locale=locale))
+
+        lines: list[str] = [i18n.t("patient.care.orders.title", locale)]
+        if current_cards:
+            lines.append("")
+            lines.append(i18n.t("patient.care.orders.current.label", locale))
+            lines.extend(current_cards[0].object_block_lines(index=1))
+        if history_rows:
+            lines.append("")
+            lines.append(i18n.t("patient.care.orders.history.label", locale))
+            if history_cards:
+                for idx, card in enumerate(history_cards, start=1):
+                    lines.extend(card.object_block_lines(index=idx))
+                    if idx < len(history_cards):
+                        lines.append("")
+                lines.append("")
+                lines.append(i18n.t("patient.care.catalog.page_indicator", locale).format(page=active_page + 1))
+            else:
+                lines.append(i18n.t("patient.care.orders.history.empty", locale))
+
         keyboard_rows: list[list[InlineKeyboardButton]] = []
-        for row_card in compact_rows:
-            keyboard_rows.append(
-                [
-                    InlineKeyboardButton(
-                        text=row_card.button_label(),
-                        callback_data=await _encode_runtime_callback(
-                            profile=CardProfile.CARE_ORDER,
-                            entity_type=EntityType.CARE_ORDER,
-                            entity_id=row_card.care_order_id,
-                            action=CardAction.OPEN,
-                            source_context=SourceContext.CARE_ORDER_LIST,
-                            source_ref="care.orders.list.open",
-                            page_or_index="open",
-                            state_token=f"care:{actor_id}",
-                        ),
+
+        async def _order_row_buttons(*, row_card: _CompactCareOrderRowCard) -> list[InlineKeyboardButton]:
+            return [
+                InlineKeyboardButton(
+                    text=i18n.t("patient.care.orders.open.action", locale),
+                    callback_data=await _encode_runtime_callback(
+                        profile=CardProfile.CARE_ORDER,
+                        entity_type=EntityType.CARE_ORDER,
+                        entity_id=row_card.care_order_id,
+                        action=CardAction.OPEN,
+                        source_context=SourceContext.CARE_ORDER_LIST,
+                        source_ref="care.orders.list.open",
+                        page_or_index="open",
+                        state_token=f"care:{actor_id}",
                     ),
-                    InlineKeyboardButton(
-                        text=row_card.reserve_label(),
-                        callback_data=await _encode_runtime_callback(
-                            profile=CardProfile.CARE_ORDER,
-                            entity_type=EntityType.CARE_ORDER,
-                            entity_id=row_card.care_order_id,
-                            action=CardAction.RESERVE,
-                            source_context=SourceContext.CARE_ORDER_LIST,
-                            source_ref="care.orders.list.repeat",
-                            page_or_index="repeat",
-                            state_token=f"care:{actor_id}",
-                        ),
+                ),
+                InlineKeyboardButton(
+                    text=row_card.reserve_label(),
+                    callback_data=await _encode_runtime_callback(
+                        profile=CardProfile.CARE_ORDER,
+                        entity_type=EntityType.CARE_ORDER,
+                        entity_id=row_card.care_order_id,
+                        action=CardAction.RESERVE,
+                        source_context=SourceContext.CARE_ORDER_LIST,
+                        source_ref="care.orders.list.repeat",
+                        page_or_index="repeat",
+                        state_token=f"care:{actor_id}",
                     ),
-                ]
-            )
+                ),
+            ]
+
+        for row_card in current_cards:
+            keyboard_rows.append(await _order_row_buttons(row_card=row_card))
+        for row_card in history_cards:
+            keyboard_rows.append(await _order_row_buttons(row_card=row_card))
+
         nav: list[InlineKeyboardButton] = []
         if active_page > 0:
             nav.append(
@@ -1360,7 +1414,7 @@ def make_router(
                     ),
                 )
             )
-        if end < len(rows):
+        if end < len(history_rows):
             nav.append(
                 InlineKeyboardButton(
                     text=i18n.t("common.next", locale),
@@ -1378,19 +1432,16 @@ def make_router(
             )
         if nav:
             keyboard_rows.append(nav)
+        keyboard_rows.append([InlineKeyboardButton(text=i18n.t("patient.care.orders.empty.browse", locale), callback_data="care:catalog")])
+
         await _send_or_edit_panel(
             actor_id=actor_id,
             message=message,
             session_id="care",
-            text=_compose_care_order_object_list_text(
-                header_lines=[
-                    i18n.t("patient.care.orders.title", locale),
-                    i18n.t("patient.care.catalog.page_indicator", locale).format(page=active_page + 1),
-                ],
-                row_cards=compact_rows,
-            ),
+            text="\n".join(lines),
             keyboard=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
         )
+
 
     async def _render_care_order_card(
         message: Message | CallbackQuery,
@@ -2695,6 +2746,31 @@ def make_router(
         if not callback.from_user:
             return
         await _enter_care_catalog(callback, actor_id=callback.from_user.id)
+        await callback.answer()
+
+    @router.callback_query(F.data == "care:catalog")
+    async def care_catalog_callback(callback: CallbackQuery) -> None:
+        if not callback.from_user:
+            return
+        await _enter_care_catalog(callback, actor_id=callback.from_user.id)
+        await callback.answer()
+
+    @router.callback_query(F.data == "care:orders")
+    async def care_orders_callback(callback: CallbackQuery) -> None:
+        if not callback.from_user or care_commerce_service is None:
+            return
+        patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
+        clinic_id = _primary_clinic_id()
+        if not patient_id or clinic_id is None:
+            await callback.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()), show_alert=True)
+            return
+        await _render_care_orders_panel(
+            callback,
+            actor_id=callback.from_user.id,
+            clinic_id=clinic_id,
+            patient_id=patient_id,
+            page=0,
+        )
         await callback.answer()
 
     @router.callback_query(F.data.startswith("book:svc:"))

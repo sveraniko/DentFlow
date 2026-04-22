@@ -222,8 +222,8 @@
   "patient.care.order.create.usage": "Формат: /care_order_create <recommendation_id> <care_product_id> <pickup_branch_id>",
   "patient.care.order.product_not_linked": "Этот продукт не привязан к выбранной рекомендации.",
   "patient.care.order.created": "Care-заказ создан: {care_order_id} (статус: {status}, филиал выдачи: {branch_id}).",
-  "patient.care.orders.title": "Ваши care-заказы:",
-  "patient.care.orders.empty": "У вас пока нет care-заказов.",
+  "patient.care.orders.title": "Мои резервы и care-заказы",
+  "patient.care.orders.empty": "У вас пока нет резервов или care-заказов.",
   "patient.care.orders.item": "• {care_order_id} · {status} · {amount} {currency} · филиал {branch_id}",
   "admin.care.orders.title": "Ожидающие care-заказы:",
   "admin.care.orders.empty": "Ожидающих care-заказов нет.",
@@ -541,5 +541,10 @@
   "patient.booking.reschedule.complete.success": "Ваша запись успешно перенесена.",
   "patient.booking.reschedule.complete.slot_unavailable": "Это время уже недоступно. Выберите другой слот.",
   "patient.booking.reschedule.complete.conflict": "Этот слот только что заняли. Выберите другое время.",
-  "patient.booking.reschedule.complete.unavailable": "Сейчас не удалось завершить перенос. Выберите другой слот."
+  "patient.booking.reschedule.complete.unavailable": "Сейчас не удалось завершить перенос. Выберите другой слот.",
+  "patient.care.orders.entry.action": "Мои резервы / заказы",
+  "patient.care.orders.current.label": "Текущий резерв / заказ",
+  "patient.care.orders.history.label": "История",
+  "patient.care.orders.history.empty": "Завершённых заказов пока нет.",
+  "patient.care.orders.empty.browse": "Перейти в каталог ухода"
 }
