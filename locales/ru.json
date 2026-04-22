@@ -481,6 +481,7 @@
   "admin.issues.action.retry_reminder": "Безопасно повторить напоминание",
   "admin.issues.lifecycle.taken": "Проблема взята в работу.",
   "admin.issues.lifecycle.resolved": "Проблема отмечена как решённая.",
+  "admin.issues.lifecycle.take_first": "Сначала возьмите проблему в работу, затем отметьте как решённую.",
   "admin.issues.lifecycle.failed": "Не удалось выполнить действие. Обновите очередь и повторите.",
   "admin.issues.lifecycle.unsupported": "Действие не поддерживается для этой проблемы.",
   "admin.issues.lifecycle.stale": "Запись проблемы устарела или недоступна. Обновите очередь.",

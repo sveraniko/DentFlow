@@ -140,6 +140,8 @@ class _BookingFlow:
         return SimpleNamespace(status="in_progress")
 
     async def resolve_issue_escalation(self, *, issue_type: str, issue_ref_id: str, **kwargs):
+        if self._issue_states.get((issue_type, issue_ref_id)) != "in_progress":
+            return None
         self._issue_states[(issue_type, issue_ref_id)] = "resolved"
         return SimpleNamespace(status="resolved")
 
@@ -506,6 +508,62 @@ def test_admin_issues_take_and_resolve_callbacks_refresh_queue() -> None:
         for row in resolved_markup.inline_keyboard
         for button in row
     )
+
+
+def test_admin_issues_handcrafted_resolve_on_open_is_rejected() -> None:
+    router, _, _ = _router()
+    msg = _Message("/admin_issues")
+    asyncio.run(_handler(router, "admin_issues")(msg))
+    _, keyboard = msg.answers[-1]
+    issue_token = next(
+        button.callback_data.split(":")[-1]
+        for row in keyboard.inline_keyboard
+        for button in row
+        if (button.callback_data or "").startswith("aw4i:take:confirmation_no_response:")
+    )
+    handcrafted_resolve = _Callback(f"aw4i:resolve:confirmation_no_response:b1:{issue_token}")
+    asyncio.run(_handler(router, "admin_issues_object_callback", kind="callback")(handcrafted_resolve))
+    assert any("first" in text.lower() for text in handcrafted_resolve.answers)
+    assert not handcrafted_resolve.message.edits
+
+
+def test_admin_issues_retry_and_lifecycle_coexist_without_queue_breakage() -> None:
+    router, _, _ = _router()
+    msg = _Message("/admin_issues")
+    asyncio.run(_handler(router, "admin_issues")(msg))
+    _, keyboard = msg.answers[-1]
+    retry_cb = next(
+        button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+        if (button.callback_data or "").startswith("aw4i:retry:r_fail_1")
+    )
+    retry = _Callback(retry_cb)
+    asyncio.run(_handler(router, "admin_issues_object_callback", kind="callback")(retry))
+    assert "Retry scheduled." in retry.answers[-1]
+
+    take_cb = next(
+        button.callback_data
+        for row in retry.message.edits[-1][1].inline_keyboard  # type: ignore[union-attr]
+        for button in row
+        if (button.callback_data or "").startswith("aw4i:take:reminder_failed:r_fail_1")
+    )
+    take = _Callback(take_cb)
+    asyncio.run(_handler(router, "admin_issues_object_callback", kind="callback")(take))
+    assert "Issue taken." in take.answers[-1]
+
+    status_cb = take.message.edits[-1][1].inline_keyboard[0][0].callback_data  # type: ignore[union-attr]
+    status_cycle = _Callback(status_cb)
+    asyncio.run(_handler(router, "admin_aw4_queue_callback", kind="callback")(status_cycle))
+    resolve_cb = next(
+        button.callback_data
+        for row in status_cycle.message.edits[-1][1].inline_keyboard  # type: ignore[union-attr]
+        for button in row
+        if (button.callback_data or "").startswith("aw4i:resolve:reminder_failed:r_fail_1")
+    )
+    resolve = _Callback(resolve_cb)
+    asyncio.run(_handler(router, "admin_issues_object_callback", kind="callback")(resolve))
+    assert "Issue resolved." in resolve.answers[-1]
 
 
 def test_admin_issues_unsupported_and_stale_lifecycle_callbacks_are_bounded() -> None:
