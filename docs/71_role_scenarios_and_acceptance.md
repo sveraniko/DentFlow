@@ -94,6 +94,8 @@ Each scenario in this document contains:
 
 ## 6. Patient scenarios
 
+> PAT-001 ... PAT-008 are currently closure-aligned in runtime truth.
+
 ### PAT-001 — New visitor first booking
 - **Actor / persona:** New patient.
 - **Preconditions:** Patient opens PatientBot without an active booking session.
@@ -109,16 +111,14 @@ Each scenario in this document contains:
   8. Only after slot selection does the system request contact/phone.
   9. System resolves or creates the patient linkage from contact.
   10. State machine marks review-ready.
-  11. Runtime currently finalizes immediately after contact resolution instead of showing a rich explicit pre-final-confirmation review card.
+  11. Runtime presents an explicit review/finalize panel before booking finalization.
 - **Outbound messages / notifications:** booking success message, then reminder chain according to clinic policy.
 - **State / object transitions:** booking session progresses through service/doctor/slot/contact steps -> `review_ready` -> booking created and reminder planning is emitted.
-- **Current implementation status:** **Partial**.
-- **Evidence:** `app/interfaces/bots/patient/router.py` (`start`, `book_entry`, `select_service`, `select_doctor_preference`, `select_slot`, `_handle_contact_submission`, `_render_resume_panel`); `booking_docs/10_booking_flow_dental.md`; `booking_docs/50_booking_telegram_ui_contract.md`; `docs/17_localization_and_i18n.md`.
+- **Current implementation status:** **Implemented**.
+- **Evidence:** `app/interfaces/bots/patient/router.py` (`start`, `book_entry`, `select_service`, `select_doctor_preference`, `select_slot`, `_handle_contact_submission`, `_render_resume_panel`, `_render_review_finalize_panel`); `booking_docs/10_booking_flow_dental.md`; `booking_docs/50_booking_telegram_ui_contract.md`; `docs/17_localization_and_i18n.md`.
 - **Known gaps / comments:**
   - `/start` is still a text-command home, not a polished first-run intent panel.
-  - explicit first-run language picker is not evidenced in current patient runtime;
-  - state machine supports `review_ready`, but runtime currently finalizes immediately after contact resolution;
-  - success copy still uses raw identifiers (`doctor_id`, `service_id`, `branch_id`) instead of human display labels.
+  - explicit first-run language picker is not evidenced in current patient runtime.
 
 ### PAT-002 — Returning patient quick booking
 - **Actor / persona:** Returning patient.
@@ -131,11 +131,10 @@ Each scenario in this document contains:
   4. Continuity assumptions may influence route selection.
 - **Outbound messages / notifications:** booking success and reminder chain.
 - **State / object transitions:** new booking created and linked to an existing patient identity when resolution succeeds.
-- **Current implementation status:** **Partial**.
-- **Evidence:** `app/interfaces/bots/patient/router.py` (`book_entry`, `_handle_contact_submission`); `booking_docs/10_booking_flow_dental.md` (repeat-patient and continuity ideas); `docs/70_bot_flows.md`.
+- **Current implementation status:** **Implemented**.
+- **Evidence:** `app/interfaces/bots/patient/router.py` (`book_entry`, `_handle_contact_submission`, `_try_render_quick_book_suggestions`); `booking_docs/10_booking_flow_dental.md` (repeat-patient and continuity ideas); `docs/70_bot_flows.md`.
 - **Known gaps / comments:**
-  - current runtime clearly supports contact-based identity continuity;
-  - explicit “quick booking with previous doctor / continuity-first shortcut” is not strongly evidenced as a fully polished patient-visible branch.
+  - quick booking remains heuristic/recent-booking driven rather than preference-model-driven.
 
 ### PAT-003 — Existing booked patient confirmation flow
 - **Actor / persona:** Booked patient.
@@ -203,7 +202,7 @@ Each scenario in this document contains:
   5. Patient may continue into recommendation-linked product flow.
 - **Outbound messages / notifications:** recommendation text, action acknowledgement, potential follow-up guidance.
 - **State / object transitions:** recommendation status may change from issued -> viewed/acknowledged/accepted/declined.
-- **Current implementation status:** **Partial**.
+- **Current implementation status:** **Implemented**.
 - **Evidence:** `app/interfaces/bots/patient/router.py` (`recommendations_list`, `recommendations_open`, `recommendations_action`, `recommendation_products`); `docs/60_care_commerce.md`; `docs/70_bot_flows.md`.
 - **Known gaps / comments:**
   - patient-facing recommendations exist as commands and flows;
@@ -519,7 +518,7 @@ The key outbound message classes currently intended by the product are:
 | Reminder chain | Patient | Confirms / nudges / routes reschedule-cancel decisions | Implemented |
 | Reminder issue / no-response visibility | Admin, Owner | Makes operational failures visible for rescue or oversight | Partial |
 | Reschedule / cancel updates | Patient, Admin | Keeps booking state aligned across patient and workdesk | Implemented |
-| Recommendation / aftercare | Patient, Doctor, Admin | Clinical follow-up and product-bridge layer | Partial |
+| Recommendation / aftercare | Patient, Doctor, Admin | Clinical follow-up and product-bridge layer | Implemented |
 | Care reserve / pickup updates | Patient, Admin | Connects patient care order with reception fulfillment | Implemented |
 | Generated document artifact status | Admin, Doctor | Staff-side export/open/download baseline | Implemented |
 | Patient-facing document delivery | Patient | Post-visit export/aftercare artifact delivery | Missing |
@@ -531,13 +530,13 @@ The key outbound message classes currently intended by the product are:
 
 | Scenario ID | Role | Status | Primary evidence | Next action if partial/missing |
 |---|---|---|---|---|
-| PAT-001 | Patient | Partial | patient router + booking docs | polish `/start`, add true home CTA panel, explicit review-before-finalize, human labels in success copy |
-| PAT-002 | Patient | Partial | patient router + booking docs | add stronger continuity-first UX for returning patients |
+| PAT-001 | Patient | Implemented | patient router + booking docs | keep regression coverage; optional `/start` UX polish only |
+| PAT-002 | Patient | Implemented | patient router + booking docs | keep regression coverage; optional preference-model upgrade later |
 | PAT-003 | Patient | Implemented | patient router + reminder flows | keep regression coverage |
 | PAT-004 | Patient | Implemented | patient router reschedule callbacks | keep regression coverage |
 | PAT-005 | Patient | Implemented | patient router cancel callbacks | keep regression coverage |
 | PAT-006 | Patient | Implemented | reminder callback flow | keep regression coverage |
-| PAT-007 | Patient | Partial | recommendation routes + care docs | deepen aftercare/document bridge |
+| PAT-007 | Patient | Implemented | recommendation routes + care docs | keep regression coverage; patient document delivery remains PAT-DOC-001 |
 | PAT-008 | Patient | Implemented | care router flows + admin pickup docs | keep regression coverage |
 | PAT-DOC-001 | Patient | Missing | document docs + convergence reports | design patient-facing artifact delivery |
 | ADM-001 | Admin | Implemented | admin workdesk routes | continue workdesk polish only as needed |
