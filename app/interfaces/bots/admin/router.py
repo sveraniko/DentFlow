@@ -11,7 +11,7 @@ from app.application.admin.workdesk import AdminWorkdeskReadService
 from app.application.access import AccessResolver
 from app.application.booking.orchestration_outcomes import ConflictOutcome, OrchestrationSuccess, SlotUnavailableOutcome
 from app.application.care_commerce import CareCommerceService
-from app.application.booking.telegram_flow import BookingPatientFlowService
+from app.application.booking.telegram_flow import BookingPatientFlowService, LIVE_EXISTING_BOOKING_STATUSES
 from app.application.communication import ReminderRecoveryService
 from app.application.clinic_reference import ClinicReferenceService
 from app.application.recommendation import RecommendationService
@@ -828,6 +828,32 @@ def make_router(
             chart_summary_entry=i18n.t("admin.patient.summary.chart.policy", locale),
         )
 
+    async def _resolve_admin_patient_active_booking(
+        *,
+        clinic_id: str,
+        patient_id: str,
+    ):
+        bookings = await booking_flow.reads.list_bookings_by_patient(patient_id=patient_id)
+        now = datetime.now(timezone.utc)
+        candidates = [
+            row
+            for row in bookings
+            if row.clinic_id == clinic_id
+            and row.status in LIVE_EXISTING_BOOKING_STATUSES
+            and row.scheduled_start_at is not None
+        ]
+        if not candidates:
+            return None
+
+        def _sort_key(row):
+            if row.status in {"checked_in", "in_service"}:
+                return (0, row.scheduled_start_at)
+            if row.scheduled_start_at >= now:
+                return (1, row.scheduled_start_at)
+            return (2, -row.scheduled_start_at.timestamp())
+
+        return sorted(candidates, key=_sort_key)[0]
+
     async def _render_patient_panel(
         *,
         clinic_id: str,
@@ -1114,7 +1140,7 @@ def make_router(
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.chart", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.OPEN_CHART, page_or_index="open_chart", source_context=source_context, source_ref=source_ref, state_token=state_token))])
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.recommendation", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.OPEN_RECOMMENDATION, page_or_index="open_recommendation", source_context=source_context, source_ref=source_ref, state_token=state_token))])
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.care_order", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.OPEN_CARE_ORDER, page_or_index="open_care_order", source_context=source_context, source_ref=source_ref, state_token=state_token))])
-        if source_context in {SourceContext.ADMIN_TODAY, SourceContext.ADMIN_CONFIRMATIONS, SourceContext.ADMIN_RESCHEDULES, SourceContext.ADMIN_ISSUES}:
+        if source_context in {SourceContext.ADMIN_TODAY, SourceContext.ADMIN_CONFIRMATIONS, SourceContext.ADMIN_RESCHEDULES, SourceContext.ADMIN_ISSUES, SourceContext.ADMIN_PATIENTS}:
             rows.append([InlineKeyboardButton(text=i18n.t("common.back", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.BACK, page_or_index=page_or_index, source_context=source_context, source_ref=source_ref, state_token=state_token))])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -2582,30 +2608,66 @@ def make_router(
                 source_ref=decoded.source_ref,
                 state_token=decoded.state_token,
             )
+            if decoded.action == CardAction.BOOKINGS and decoded.source_context == SourceContext.ADMIN_PATIENTS:
+                active_booking = await _resolve_admin_patient_active_booking(
+                    clinic_id=actor_context.clinic_id,
+                    patient_id=decoded.entity_id,
+                )
+                if active_booking is None:
+                    await callback.answer(i18n.t("admin.patient.booking.no_active", locale), show_alert=True)
+                    return
+                await callback.message.edit_text(
+                    _render_admin_booking_panel(booking=active_booking, locale=locale),
+                    reply_markup=await _admin_booking_keyboard(
+                        booking=active_booking,
+                        locale=locale,
+                        source_context=SourceContext.ADMIN_PATIENTS,
+                        source_ref=f"{decoded.source_ref}|patient:{decoded.entity_id}",
+                        page_or_index=f"patients_open:{decoded.entity_id}",
+                        state_token=decoded.state_token,
+                    ),
+                )
+                return
             if decoded.action == CardAction.BACK and decoded.source_context == SourceContext.ADMIN_PATIENTS:
                 state = await _load_queue_state(scope=admin_patients_scope, actor_id=callback.from_user.id, default_state={"query": "", "state_token": "na"})
                 text, keyboard = await _render_admin_patients(actor_id=callback.from_user.id, clinic_id=actor_context.clinic_id, locale=locale, state=state)
                 await callback.message.edit_text(text, reply_markup=keyboard)
                 return
+            action_rows: list[list[InlineKeyboardButton]] = []
+            if decoded.source_context == SourceContext.ADMIN_PATIENTS:
+                action_rows.append(
+                    [
+                        InlineKeyboardButton(
+                            text=i18n.t("card.patient.action.bookings", locale),
+                            callback_data=await _encode_patient_callback(
+                                patient_id=decoded.entity_id,
+                                action=CardAction.BOOKINGS,
+                                page_or_index=decoded.page_or_index,
+                                source_context=decoded.source_context,
+                                source_ref=decoded.source_ref,
+                                state_token=decoded.state_token,
+                            ),
+                        )
+                    ]
+                )
+            action_rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("common.back", locale),
+                        callback_data=await _encode_patient_callback(
+                            patient_id=decoded.entity_id,
+                            action=CardAction.BACK,
+                            page_or_index=decoded.page_or_index,
+                            source_context=decoded.source_context,
+                            source_ref=decoded.source_ref,
+                            state_token=decoded.state_token,
+                        ),
+                    )
+                ]
+            )
             await callback.message.edit_text(
                 panel,
-                reply_markup=InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text=i18n.t("common.back", locale),
-                                callback_data=await _encode_patient_callback(
-                                    patient_id=decoded.entity_id,
-                                    action=CardAction.BACK,
-                                    page_or_index=decoded.page_or_index,
-                                    source_context=decoded.source_context,
-                                    source_ref=decoded.source_ref,
-                                    state_token=decoded.state_token,
-                                ),
-                            )
-                        ]
-                    ]
-                ),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=action_rows),
             )
             return
         if decoded.profile != CardProfile.BOOKING:
@@ -2691,6 +2753,56 @@ def make_router(
                 state=state,
             )
             await callback.message.edit_text(text, reply_markup=keyboard)
+            return
+        if decoded.action == CardAction.BACK and decoded.source_context == SourceContext.ADMIN_PATIENTS and decoded.page_or_index.startswith("patients_open:"):
+            actor_context = access_resolver.resolve_actor_context(callback.from_user.id)
+            if actor_context is None:
+                return
+            _, _, patient_id = decoded.page_or_index.partition(":")
+            if not patient_id:
+                await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+                return
+            panel = await _render_patient_panel(
+                clinic_id=actor_context.clinic_id,
+                patient_id=patient_id,
+                locale=locale,
+                source_context=SourceContext.ADMIN_PATIENTS,
+                source_ref=decoded.source_ref,
+                state_token=decoded.state_token,
+            )
+            await callback.message.edit_text(
+                panel,
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text=i18n.t("card.patient.action.bookings", locale),
+                                callback_data=await _encode_patient_callback(
+                                    patient_id=patient_id,
+                                    action=CardAction.BOOKINGS,
+                                    page_or_index="open_patient",
+                                    source_context=SourceContext.ADMIN_PATIENTS,
+                                    source_ref=decoded.source_ref,
+                                    state_token=decoded.state_token,
+                                ),
+                            )
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                text=i18n.t("common.back", locale),
+                                callback_data=await _encode_patient_callback(
+                                    patient_id=patient_id,
+                                    action=CardAction.BACK,
+                                    page_or_index="open_patient",
+                                    source_context=SourceContext.ADMIN_PATIENTS,
+                                    source_ref=decoded.source_ref,
+                                    state_token=decoded.state_token,
+                                ),
+                            )
+                        ],
+                    ]
+                ),
+            )
             return
         if decoded.action == CardAction.BACK and decoded.source_context == SourceContext.ADMIN_CONFIRMATIONS and decoded.page_or_index.startswith("confirmations_open:"):
             actor_context = access_resolver.resolve_actor_context(callback.from_user.id)
