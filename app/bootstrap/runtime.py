@@ -36,7 +36,7 @@ from app.application.export import (
 )
 from app.application.timezone import DoctorTimezoneFormatter
 from app.application.policy import PolicyResolver
-from app.application.recommendation import RecommendationService
+from app.application.recommendation import PatientRecommendationDeliveryService, RecommendationService
 from app.application.search.service import HybridSearchService
 from app.application.voice import SpeechToTextService, VoiceSearchModeStore
 from app.application.voice.provider import SpeechToTextProvider
@@ -65,6 +65,7 @@ from app.infrastructure.cache import build_card_runtime_redis
 from app.infrastructure.speech.disabled_provider import DisabledSpeechToTextProvider
 from app.infrastructure.speech.fake_provider import FakeSpeechToTextProvider
 from app.infrastructure.speech.openai_provider import OpenAITranscriptionConfig, OpenAISpeechToTextProvider
+from app.infrastructure.communication import AiogramTelegramPatientRecommendationSender
 from app.interfaces.cards import CardCallbackCodec, CardRuntimeCoordinator, CardRuntimeStateStore
 from app.interfaces.bots.admin.router import make_router as make_admin_router
 from app.interfaces.bots.doctor.router import make_router as make_doctor_router
@@ -119,6 +120,11 @@ class RuntimeRegistry:
         )
         self.access_resolver = AccessResolver(self.access_repository)
         self.recommendation_service = RecommendationService(self.recommendation_repository)
+        self.patient_recommendation_delivery_service = PatientRecommendationDeliveryService(
+            binding_reader=self.recommendation_repository,
+            sender=AiogramTelegramPatientRecommendationSender(self.settings.telegram.patient_bot_token),
+            i18n=self.i18n,
+        )
         self.care_commerce_service = CareCommerceService(self.care_commerce_repository)
         self.policy_resolver = PolicyResolver(self.policy_repository)
         self.booking_session_service = BookingSessionService(self.booking_repository)
@@ -199,6 +205,7 @@ class RuntimeRegistry:
                 self.reference_service,
                 reminder_actions=self.reminder_action_service,
                 recommendation_service=self.recommendation_service,
+                recommendation_delivery_service=self.patient_recommendation_delivery_service,
                 care_commerce_service=self.care_commerce_service,
                 recommendation_repository=self.recommendation_repository,
                 default_locale=self.settings.app.default_locale,

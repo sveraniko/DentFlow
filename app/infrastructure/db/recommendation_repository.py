@@ -210,6 +210,27 @@ class DbRecommendationRepository:
         )
         return [str(row["patient_id"]) for row in rows]
 
+    async def find_telegram_user_ids_by_patient(self, *, clinic_id: str, patient_id: str) -> list[int]:
+        rows = await _fetch_all(
+            self._db_config,
+            """
+            SELECT p.normalized_value
+            FROM core_patient.patient_contacts p
+            JOIN core_patient.patients cp ON cp.patient_id=p.patient_id
+            WHERE cp.clinic_id=:clinic_id
+              AND p.patient_id=:patient_id
+              AND p.contact_type='telegram'
+              AND p.is_active=TRUE
+            """,
+            {"clinic_id": clinic_id, "patient_id": patient_id},
+        )
+        trusted: list[int] = []
+        for row in rows:
+            raw = str(row.get("normalized_value") or "").strip()
+            if raw.isdigit():
+                trusted.append(int(raw))
+        return trusted
+
 
 async def _fetch_one(db_config: Any, sql: str, params: dict[str, object]) -> dict[str, object] | None:
     engine = create_engine(db_config)

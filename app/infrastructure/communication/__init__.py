@@ -1,3 +1,11 @@
-from app.infrastructure.communication.telegram_delivery import AiogramTelegramReminderSender, DbTelegramReminderRecipientResolver
+from app.infrastructure.communication.telegram_delivery import (
+    AiogramTelegramPatientRecommendationSender,
+    AiogramTelegramReminderSender,
+    DbTelegramReminderRecipientResolver,
+)
 
-__all__ = ["DbTelegramReminderRecipientResolver", "AiogramTelegramReminderSender"]
+__all__ = [
+    "DbTelegramReminderRecipientResolver",
+    "AiogramTelegramReminderSender",
+    "AiogramTelegramPatientRecommendationSender",
+]

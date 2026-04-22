@@ -9,7 +9,7 @@ import pytest
 from app.application.access import AccessResolver, InMemoryAccessRepository
 from app.application.booking.orchestration_outcomes import OrchestrationSuccess
 from app.application.doctor.operations import DoctorOperationsService
-from app.application.recommendation import RecommendationService
+from app.application.recommendation import PatientRecommendationDeliveryService, RecommendationService
 from app.domain.access_identity.models import ActorIdentity, ActorStatus, ActorType, ClinicRoleAssignment, DoctorProfile, RoleCode, StaffMember, StaffStatus, TelegramBinding
 from app.domain.booking import Booking
 from app.domain.recommendations import Recommendation
@@ -37,6 +37,33 @@ class InMemoryRecommendationRepository:
 
     async def list_for_chart(self, *, chart_id: str) -> list[Recommendation]:
         return [row for row in self.rows.values() if row.chart_id == chart_id]
+
+    async def find_telegram_user_ids_by_patient(self, *, clinic_id: str, patient_id: str) -> list[int]:
+        if clinic_id == "c1" and patient_id == "p1":
+            return [777001]
+        return []
+
+
+class _RecommendationPushSender:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def send_patient_recommendation_delivery(
+        self,
+        *,
+        telegram_user_id: int,
+        text: str,
+        button_text: str,
+        callback_data: str,
+    ) -> None:
+        self.calls.append(
+            {
+                "telegram_user_id": telegram_user_id,
+                "text": text,
+                "button_text": button_text,
+                "callback_data": callback_data,
+            }
+        )
 
 
 def test_recommendation_lifecycle_happy_path_and_idempotent() -> None:
@@ -207,6 +234,106 @@ def test_doctor_issue_and_booking_trigger() -> None:
         )
     )
     assert denied is None
+
+
+def test_proactive_delivery_uses_callback_open_path() -> None:
+    sender = _RecommendationPushSender()
+    delivery = PatientRecommendationDeliveryService(
+        binding_reader=InMemoryRecommendationRepository(),
+        sender=sender,
+    )
+    result = asyncio.run(
+        delivery.deliver_patient_recommendation_if_possible(
+            clinic_id="c1",
+            patient_id="p1",
+            recommendation_id="rec_123",
+            locale="en",
+        )
+    )
+    assert result.status == "delivered"
+    assert sender.calls and sender.calls[0]["callback_data"] == "prec:open:rec_123"
+    assert "/recommendation_open" not in str(sender.calls[0]["text"])
+
+
+def test_proactive_delivery_safe_skip_without_trusted_binding() -> None:
+    sender = _RecommendationPushSender()
+    delivery = PatientRecommendationDeliveryService(
+        binding_reader=InMemoryRecommendationRepository(),
+        sender=sender,
+    )
+    result = asyncio.run(
+        delivery.deliver_patient_recommendation_if_possible(
+            clinic_id="c1",
+            patient_id="missing_patient",
+            recommendation_id="rec_404",
+            locale="en",
+        )
+    )
+    assert result.status == "skipped_no_binding"
+    assert sender.calls == []
+
+
+def test_doctor_issue_recommendation_still_succeeds_when_proactive_delivery_fails_safe() -> None:
+    now = datetime.now(timezone.utc)
+    booking = Booking(
+        booking_id="b1",
+        clinic_id="c1",
+        branch_id="br1",
+        patient_id="p1",
+        service_id="srv",
+        doctor_id="doc1",
+        slot_id="s1",
+        booking_mode="manual",
+        source_channel="doctor",
+        status="in_service",
+        scheduled_start_at=now,
+        scheduled_end_at=now,
+        confirmation_required=True,
+        completed_at=None,
+        canceled_at=None,
+        no_show_at=None,
+        checked_in_at=now,
+        in_service_at=now,
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmed_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+    rec_repo = InMemoryRecommendationRepository()
+    rec_service = RecommendationService(rec_repo)
+
+    class _FailingBindingReader:
+        async def find_telegram_user_ids_by_patient(self, *, clinic_id: str, patient_id: str) -> list[int]:
+            raise RuntimeError("db down")
+
+    delivery = PatientRecommendationDeliveryService(
+        binding_reader=_FailingBindingReader(),
+        sender=_RecommendationPushSender(),
+    )
+    ops = DoctorOperationsService(
+        access_resolver=_access_for_doctor(),
+        booking_service=_BookingRepo(booking),
+        booking_state_service=_BookState(),
+        booking_orchestration=_Orch(),
+        reference_service=None,
+        patient_reader=None,
+        recommendation_service=rec_service,
+        recommendation_delivery_service=delivery,
+    )
+    issued = asyncio.run(
+        ops.issue_recommendation(
+            doctor_id="doc1",
+            clinic_id="c1",
+            patient_id="p1",
+            recommendation_type="follow_up",
+            title="Follow-up",
+            body_text="Return in 7 days",
+            booking_id="b1",
+        )
+    )
+    assert issued is not None
+    assert issued.status == "issued"
 
 
 def test_db_recommendation_repository_emits_events(monkeypatch: pytest.MonkeyPatch) -> None:

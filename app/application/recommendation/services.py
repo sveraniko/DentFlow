@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Protocol
 from uuid import uuid4
 
+from app.common.i18n import I18nService
 from app.domain.recommendations import RECOMMENDATION_SOURCE_KINDS, RECOMMENDATION_TYPES, Recommendation
 
 _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
@@ -26,6 +27,92 @@ class RecommendationRepository(Protocol):
     async def list_for_patient(self, *, patient_id: str, include_terminal: bool = False) -> list[Recommendation]: ...
     async def list_for_booking(self, *, booking_id: str) -> list[Recommendation]: ...
     async def list_for_chart(self, *, chart_id: str) -> list[Recommendation]: ...
+
+
+class RecommendationTelegramBindingReader(Protocol):
+    async def find_telegram_user_ids_by_patient(self, *, clinic_id: str, patient_id: str) -> list[int | str]: ...
+
+
+class PatientRecommendationDeliverySender(Protocol):
+    async def send_patient_recommendation_delivery(
+        self,
+        *,
+        telegram_user_id: int,
+        text: str,
+        button_text: str,
+        callback_data: str,
+    ) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class PatientRecommendationDeliveryResult:
+    status: str
+    recommendation_id: str
+
+
+@dataclass(slots=True)
+class PatientRecommendationDeliveryService:
+    binding_reader: RecommendationTelegramBindingReader | None = None
+    sender: PatientRecommendationDeliverySender | None = None
+    i18n: I18nService | None = None
+
+    async def deliver_patient_recommendation_if_possible(
+        self,
+        *,
+        clinic_id: str,
+        patient_id: str,
+        recommendation_id: str,
+        locale: str = "en",
+    ) -> PatientRecommendationDeliveryResult:
+        if self.binding_reader is None or self.sender is None:
+            return PatientRecommendationDeliveryResult(status="skipped_unavailable", recommendation_id=recommendation_id)
+        try:
+            raw_rows = await self.binding_reader.find_telegram_user_ids_by_patient(clinic_id=clinic_id, patient_id=patient_id)
+        except Exception:
+            return PatientRecommendationDeliveryResult(status="failed_safe", recommendation_id=recommendation_id)
+        trusted_targets = self._trusted_targets(raw_rows)
+        if len(trusted_targets) == 0:
+            return PatientRecommendationDeliveryResult(status="skipped_no_binding", recommendation_id=recommendation_id)
+        if len(trusted_targets) > 1:
+            return PatientRecommendationDeliveryResult(status="skipped_ambiguous_binding", recommendation_id=recommendation_id)
+        try:
+            await self.sender.send_patient_recommendation_delivery(
+                telegram_user_id=trusted_targets[0],
+                text=self._message_text(locale=locale),
+                button_text=self._button_text(locale=locale),
+                callback_data=f"prec:open:{recommendation_id}",
+            )
+        except Exception:
+            return PatientRecommendationDeliveryResult(status="failed_safe", recommendation_id=recommendation_id)
+        return PatientRecommendationDeliveryResult(status="delivered", recommendation_id=recommendation_id)
+
+    def _trusted_targets(self, rows: list[int | str] | tuple[int | str, ...] | None) -> tuple[int, ...]:
+        if not rows:
+            return ()
+        trusted: set[int] = set()
+        for row in rows:
+            normalized = str(row).strip()
+            if normalized.isdigit():
+                trusted.add(int(normalized))
+        return tuple(sorted(trusted))
+
+    def _message_text(self, *, locale: str) -> str:
+        key = "patient.recommendations.proactive.text"
+        if self.i18n is None:
+            return "После визита появилась новая рекомендация. Откройте карточку, чтобы посмотреть детали." if str(locale).lower().startswith("ru") else "You have a new aftercare recommendation after your visit. Open it to view details."
+        translated = self.i18n.t(key, locale)
+        if translated != key:
+            return translated
+        return self.i18n.t(key, "en")
+
+    def _button_text(self, *, locale: str) -> str:
+        key = "patient.recommendations.proactive.open.button"
+        if self.i18n is None:
+            return "Открыть рекомендацию" if str(locale).lower().startswith("ru") else "Open recommendation"
+        translated = self.i18n.t(key, locale)
+        if translated != key:
+            return translated
+        return self.i18n.t(key, "en")
 
 
 @dataclass(slots=True)

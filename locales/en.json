@@ -195,6 +195,8 @@
   "patient.recommendations.action.accept.button": "Accept",
   "patient.recommendations.action.decline.button": "Decline",
   "patient.recommendations.action.products.button": "Open recommended products",
+  "patient.recommendations.proactive.text": "You have a new aftercare recommendation after your visit. Open it to view details.",
+  "patient.recommendations.proactive.open.button": "Open recommendation",
   "patient.recommendations.type.aftercare": "Aftercare",
   "patient.recommendations.type.follow_up": "Follow-up",
   "patient.recommendations.type.next_step": "Next step",

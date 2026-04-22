@@ -18,7 +18,7 @@ from app.application.export import (
     MediaAssetRegistryService,
 )
 from app.application.export.services import TemplateResolutionError
-from app.application.recommendation import RecommendationService
+from app.application.recommendation import PatientRecommendationDeliveryService, RecommendationService
 from app.application.search.service import HybridSearchService
 from app.application.voice import SpeechToTextService, VoiceSearchModeStore
 from app.common.i18n import I18nService
@@ -60,6 +60,7 @@ def make_router(
     patient_reader: DoctorPatientReader | None = None,
     clinical_service: ClinicalChartService | None = None,
     recommendation_service: RecommendationService | None = None,
+    recommendation_delivery_service: PatientRecommendationDeliveryService | None = None,
     care_commerce_service: CareCommerceService | None = None,
     document_export_service: DocumentExportApplicationService | None = None,
     generated_document_registry: GeneratedDocumentRegistryService | None = None,
@@ -106,6 +107,7 @@ def make_router(
             patient_reader=patient_reader,
             clinical_service=clinical_service,
             recommendation_service=recommendation_service,
+            recommendation_delivery_service=recommendation_delivery_service,
             i18n=i18n,
         )
         if booking_service and booking_state_service and booking_orchestration and reference_service and patient_reader

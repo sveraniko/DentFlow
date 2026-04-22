@@ -14,7 +14,7 @@ from app.application.clinical import ChartSummary, ClinicalChartService
 from app.application.care_commerce import CareCommerceService
 from app.application.doctor.patient_read import DoctorPatientReader
 from app.common.i18n import I18nService
-from app.application.recommendation import RecommendationService
+from app.application.recommendation import PatientRecommendationDeliveryService, RecommendationService
 from app.application.timezone import DoctorTimezoneFormatter
 from app.domain.booking import Booking
 from app.domain.booking.errors import InvalidBookingTransitionError
@@ -89,6 +89,7 @@ class DoctorOperationsService:
     patient_reader: DoctorPatientReader
     clinical_service: ClinicalChartService | None = None
     recommendation_service: RecommendationService | None = None
+    recommendation_delivery_service: PatientRecommendationDeliveryService | None = None
     care_commerce_service: CareCommerceService | None = None
     i18n: I18nService | None = None
     app_default_timezone: str = "UTC"
@@ -414,6 +415,15 @@ class DoctorOperationsService:
                 target_code=target_code,
                 justification_text=target_justification_text,
             )
+        if issued_recommendation is not None and self.recommendation_delivery_service is not None:
+            clinic = self.reference_service.get_clinic(clinic_id) if self.reference_service else None
+            locale = clinic.default_locale if clinic and clinic.default_locale else "en"
+            await self.recommendation_delivery_service.deliver_patient_recommendation_if_possible(
+                clinic_id=clinic_id,
+                patient_id=patient_id,
+                recommendation_id=issued_recommendation.recommendation_id,
+                locale=locale,
+            )
         return issued_recommendation
 
     async def _create_completion_aftercare(self, *, booking: Booking) -> None:
@@ -434,4 +444,11 @@ class DoctorOperationsService:
             rationale_text=None,
             prepared=True,
         )
-        await self.recommendation_service.issue(recommendation_id=created.recommendation_id)
+        issued = await self.recommendation_service.issue(recommendation_id=created.recommendation_id)
+        if issued is not None and self.recommendation_delivery_service is not None:
+            await self.recommendation_delivery_service.deliver_patient_recommendation_if_possible(
+                clinic_id=booking.clinic_id,
+                patient_id=booking.patient_id,
+                recommendation_id=issued.recommendation_id,
+                locale=locale or "en",
+            )
