@@ -158,6 +158,9 @@ class _CareRepo:
     async def list_reservations_for_order(self, *, care_order_id: str):
         return [row for row in self.reservations if row.care_order_id == care_order_id]
 
+    async def get_order(self, care_order_id: str):
+        return next((row for row in self.orders if row.care_order_id == care_order_id), None)
+
 
 class _CareService:
     def __init__(self, repo: _CareRepo) -> None:
@@ -169,6 +172,9 @@ class _CareService:
 
     async def resolve_product_content(self, *, clinic_id: str, product: CareProduct, locale: str):
         return SimpleNamespace(title=product.sku, short_label=None)
+
+    async def get_order(self, care_order_id: str):
+        return await self._repo.get_order(care_order_id)
 
 
 class _DoctorBookingService:
@@ -296,7 +302,7 @@ def _build_recommendation_rows() -> list[Recommendation]:
     ]
 
 
-def _build_care_service() -> _CareService:
+def _build_care_service(*, status: str = "ready_for_pickup") -> _CareService:
     now = datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc)
     orders = [
         CareOrder(
@@ -305,7 +311,7 @@ def _build_care_service() -> _CareService:
             patient_id="p1",
             booking_id="b1",
             recommendation_id=None,
-            status="ready_for_pickup",
+            status=status,
             payment_mode="cash",
             pickup_branch_id="br1",
             total_amount=250,
@@ -314,7 +320,7 @@ def _build_care_service() -> _CareService:
             updated_at=now,
             confirmed_at=None,
             paid_at=None,
-            ready_for_pickup_at=now,
+            ready_for_pickup_at=now if status in {"ready_for_pickup", "issued", "fulfilled"} else None,
             issued_at=None,
             fulfilled_at=None,
             canceled_at=None,
@@ -467,13 +473,31 @@ def test_admin_linked_opens_render_panels_and_back_navigation() -> None:
     assert "Order co_new" in order_text
     assert "Post-op gel ×2" in order_text
     assert "care_order :: patient=" not in order_text
-    assert order_kb.inline_keyboard[0][0].text == "Back"
+    order_actions = [row[0].text for row in order_kb.inline_keyboard]
+    assert order_actions == ["Patient", "Open pickup handling", "Back"]
 
     open_order_data = rec_kb.inline_keyboard[1][0].callback_data
     open_order_callback = _Callback(open_order_data, user_id=701)
     asyncio.run(callback_handler(open_order_callback))
     order_from_recommendation_text, _ = open_order_callback.message.edits[-1]
     assert "Order co_new" in order_from_recommendation_text
+
+    open_pickup_data = order_kb.inline_keyboard[1][0].callback_data
+    open_pickup_callback = _Callback(open_pickup_data, user_id=701)
+    asyncio.run(_handler(router, "admin_care_pickups_callback", kind="callback")(open_pickup_callback))
+    pickup_text, _ = open_pickup_callback.message.edits[-1]
+    assert "Care order co_new" in pickup_text
+
+
+def test_admin_linked_care_order_hides_pickup_cta_when_not_applicable() -> None:
+    router, codec = _admin_router(recommendation_rows=_build_recommendation_rows(), care_service=_build_care_service(status="created"))
+    callback_handler = _handler(router, "admin_runtime_card_callback")
+    order_data = asyncio.run(codec.encode(_booking_callback_payload(page_or_index="open_care_order", booking_id="b1", source_context=SourceContext.BOOKING_LIST)))
+    order_callback = _Callback(order_data, user_id=701)
+    asyncio.run(callback_handler(order_callback))
+    _, order_kb = order_callback.message.edits[-1]
+    order_actions = [row[0].text for row in order_kb.inline_keyboard]
+    assert order_actions == ["Patient", "Back"]
 
 
 def test_admin_linked_recommendation_hides_care_order_cta_when_absent_and_manual_open_is_bounded() -> None:
@@ -491,7 +515,12 @@ def test_admin_linked_recommendation_hides_care_order_cta_when_absent_and_manual
     asyncio.run(callback_handler(manual_open_order_callback))
     manual_text, manual_kb = manual_open_order_callback.message.edits[-1]
     assert "No booking-linked care order found for this booking." in manual_text
-    assert manual_kb.inline_keyboard[0][0].text == "Back"
+    manual_actions = [row[0].text for row in manual_kb.inline_keyboard]
+    assert manual_actions == ["Patient", "Back"]
+
+    manual_open_pickup_callback = _Callback("aw4cp:open:co_missing:na", user_id=701)
+    asyncio.run(_handler(router, "admin_care_pickups_callback", kind="callback")(manual_open_pickup_callback))
+    assert manual_open_pickup_callback.answers
 
 
 def test_doctor_linked_opens_render_panels_and_missing_state() -> None:
