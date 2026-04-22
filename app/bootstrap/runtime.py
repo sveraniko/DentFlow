@@ -129,6 +129,7 @@ class RuntimeRegistry:
             binding_reader=self.recommendation_repository,
             sender=AiogramTelegramPatientCareOrderSender(self.settings.telegram.patient_bot_token),
             i18n=self.i18n,
+            locale_reader=self.patient_preference_reader,
         )
         self.care_commerce_service = CareCommerceService(
             self.care_commerce_repository,

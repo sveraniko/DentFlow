@@ -38,6 +38,19 @@ class _Sender:
         )
 
 
+class _PreferenceReader:
+    def __init__(self, preferred_language: str | None) -> None:
+        self._preferred_language = preferred_language
+
+    async def get_preferences(self, patient_id: str):
+        _ = patient_id
+        if self._preferred_language is None:
+            return None
+        class _Pref:
+            preferred_language = self._preferred_language
+        return _Pref()
+
+
 def test_pickup_ready_delivery_uses_canonical_careo_open_callback() -> None:
     sender = _Sender()
     service = PatientCareOrderDeliveryService(
@@ -101,3 +114,47 @@ def test_pickup_ready_delivery_skips_without_binding_and_does_not_send() -> None
 
     assert result.status == "skipped_no_binding"
     assert sender.payloads == []
+
+
+def test_pickup_ready_delivery_uses_patient_preferred_locale_over_hint() -> None:
+    sender = _Sender()
+    service = PatientCareOrderDeliveryService(
+        binding_reader=_BindingReader(rows=[123456]),
+        sender=sender,
+        i18n=I18nService(locales_path=Path("locales"), default_locale="en"),
+        locale_reader=_PreferenceReader(preferred_language="ru"),
+    )
+
+    result = asyncio.run(
+        service.deliver_pickup_ready_if_possible(
+            clinic_id="c1",
+            patient_id="p1",
+            care_order_id="co-locale",
+            locale="en",
+        )
+    )
+
+    assert result.status == "delivered"
+    assert "ваш заказ готов к выдаче" in str(sender.payloads[0]["text"]).lower()
+
+
+def test_pickup_ready_delivery_falls_back_to_locale_hint_without_patient_preference() -> None:
+    sender = _Sender()
+    service = PatientCareOrderDeliveryService(
+        binding_reader=_BindingReader(rows=[123456]),
+        sender=sender,
+        i18n=I18nService(locales_path=Path("locales"), default_locale="en"),
+        locale_reader=_PreferenceReader(preferred_language=None),
+    )
+
+    result = asyncio.run(
+        service.deliver_pickup_ready_if_possible(
+            clinic_id="c1",
+            patient_id="p1",
+            care_order_id="co-locale-fallback",
+            locale="en",
+        )
+    )
+
+    assert result.status == "delivered"
+    assert "ready for pickup" in str(sender.payloads[0]["text"]).lower()

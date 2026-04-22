@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from app.common.i18n import I18nService
+from app.domain.patient_registry.models import PatientPreference
 
 
 class PatientCareOrderTelegramBindingReader(Protocol):
@@ -21,6 +22,10 @@ class PatientCareOrderDeliverySender(Protocol):
     ) -> None: ...
 
 
+class PatientCareOrderLocaleReader(Protocol):
+    async def get_preferences(self, patient_id: str) -> PatientPreference | None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class PatientCareOrderDeliveryResult:
     status: str
@@ -32,6 +37,7 @@ class PatientCareOrderDeliveryService:
     binding_reader: PatientCareOrderTelegramBindingReader | None = None
     sender: PatientCareOrderDeliverySender | None = None
     i18n: I18nService | None = None
+    locale_reader: PatientCareOrderLocaleReader | None = None
 
     async def deliver_pickup_ready_if_possible(
         self,
@@ -53,16 +59,28 @@ class PatientCareOrderDeliveryService:
             return PatientCareOrderDeliveryResult(status="skipped_no_binding", care_order_id=care_order_id)
         if len(trusted_targets) > 1:
             return PatientCareOrderDeliveryResult(status="skipped_ambiguous_binding", care_order_id=care_order_id)
+        effective_locale = await self._resolve_patient_locale(patient_id=patient_id, locale_hint=locale)
         try:
             await self.sender.send_patient_care_pickup_ready_delivery(
                 telegram_user_id=trusted_targets[0],
-                text=self._message_text(locale=locale, pickup_branch_label=pickup_branch_label),
-                button_text=self._button_text(locale=locale),
+                text=self._message_text(locale=effective_locale, pickup_branch_label=pickup_branch_label),
+                button_text=self._button_text(locale=effective_locale),
                 callback_data=f"careo:open:{care_order_id}",
             )
         except Exception:
             return PatientCareOrderDeliveryResult(status="failed_safe", care_order_id=care_order_id)
         return PatientCareOrderDeliveryResult(status="delivered", care_order_id=care_order_id)
+
+    async def _resolve_patient_locale(self, *, patient_id: str, locale_hint: str) -> str:
+        normalized_hint = str(locale_hint or "").strip().lower() or "en"
+        if self.locale_reader is None:
+            return normalized_hint
+        try:
+            preference = await self.locale_reader.get_preferences(patient_id)
+        except Exception:
+            return normalized_hint
+        preferred = str(preference.preferred_language or "").strip().lower() if preference is not None else ""
+        return preferred or normalized_hint
 
     def _trusted_targets(self, rows: list[int | str] | tuple[int | str, ...] | None) -> tuple[int, ...]:
         if not rows:
