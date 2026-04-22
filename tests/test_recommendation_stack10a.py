@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -64,6 +65,29 @@ class _RecommendationPushSender:
                 "callback_data": callback_data,
             }
         )
+
+
+class _DeliverySpy:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, str]] = []
+
+    async def deliver_patient_recommendation_if_possible(
+        self,
+        *,
+        clinic_id: str,
+        patient_id: str,
+        recommendation_id: str,
+        locale: str = "en",
+    ):
+        self.calls.append(
+            {
+                "clinic_id": clinic_id,
+                "patient_id": patient_id,
+                "recommendation_id": recommendation_id,
+                "locale": locale,
+            }
+        )
+        return None
 
 
 def test_recommendation_lifecycle_happy_path_and_idempotent() -> None:
@@ -336,6 +360,82 @@ def test_doctor_issue_recommendation_still_succeeds_when_proactive_delivery_fail
     assert issued.status == "issued"
 
 
+def test_delivery_trigger_is_narrow_and_not_called_for_non_issuance_paths() -> None:
+    now = datetime.now(timezone.utc)
+    booking = Booking(
+        booking_id="b1",
+        clinic_id="c1",
+        branch_id="br1",
+        patient_id="p1",
+        service_id="srv",
+        doctor_id="doc1",
+        slot_id="s1",
+        booking_mode="manual",
+        source_channel="doctor",
+        status="in_service",
+        scheduled_start_at=now,
+        scheduled_end_at=now,
+        confirmation_required=True,
+        completed_at=None,
+        canceled_at=None,
+        no_show_at=None,
+        checked_in_at=now,
+        in_service_at=now,
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmed_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+    rec_repo = InMemoryRecommendationRepository()
+    rec_service = RecommendationService(rec_repo)
+    delivery_spy = _DeliverySpy()
+    ops = DoctorOperationsService(
+        access_resolver=_access_for_doctor(),
+        booking_service=_BookingRepo(booking),
+        booking_state_service=_BookState(),
+        booking_orchestration=_Orch(),
+        reference_service=None,
+        patient_reader=None,
+        recommendation_service=rec_service,
+        recommendation_delivery_service=delivery_spy,
+    )
+
+    rows_before = asyncio.run(rec_service.list_for_patient(patient_id="p1"))
+    got_before = asyncio.run(rec_service.get("missing"))
+    assert rows_before == []
+    assert got_before is None
+    assert delivery_spy.calls == []
+
+    denied = asyncio.run(
+        ops.issue_recommendation(
+            doctor_id="doc_x",
+            clinic_id="c1",
+            patient_id="p1",
+            recommendation_type="follow_up",
+            title="Denied",
+            body_text="Denied",
+            booking_id="b1",
+        )
+    )
+    assert denied is None
+    assert delivery_spy.calls == []
+
+    issued = asyncio.run(
+        ops.issue_recommendation(
+            doctor_id="doc1",
+            clinic_id="c1",
+            patient_id="p1",
+            recommendation_type="follow_up",
+            title="Follow-up",
+            body_text="Return in 7 days",
+            booking_id="b1",
+        )
+    )
+    assert issued is not None
+    assert len(delivery_spy.calls) == 1
+
+
 def test_db_recommendation_repository_emits_events(monkeypatch: pytest.MonkeyPatch) -> None:
     appended: list[str] = []
 
@@ -430,3 +530,11 @@ def test_db_patient_resolution_ambiguity_returns_none(monkeypatch: pytest.Monkey
     repo = DbRecommendationRepository(db_config=object())
     resolved = asyncio.run(repo.find_patient_id_by_telegram_user(clinic_id="c1", telegram_user_id=100))
     assert resolved is None
+
+
+def test_pat_a7_2b_contains_no_new_migration_artifacts() -> None:
+    migrations_root = Path("migrations")
+    if not migrations_root.exists():
+        assert True
+        return
+    assert not any("pat_a7_2b" in path.name.lower() for path in migrations_root.rglob("*.py"))

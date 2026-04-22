@@ -190,6 +190,7 @@
   "patient.recommendations.action.usage": "Формат: /recommendation_action <ack|accept|decline> <recommendation_id>",
   "patient.recommendations.action.invalid_state": "Это действие недоступно для текущего состояния рекомендации.",
   "patient.recommendations.action.unavailable": "Это действие по рекомендации больше недоступно. Откройте рекомендации заново.",
+  "patient.recommendations.callback.unavailable": "Эта ссылка на рекомендацию больше недоступна. Откройте рекомендации заново.",
   "patient.recommendations.action.ok": "Сохранено. Текущий статус: {status}",
   "patient.recommendations.action.ack.button": "Подтвердить ознакомление",
   "patient.recommendations.action.accept.button": "Принять",
