@@ -319,7 +319,9 @@ def test_admin_reschedules_queue_render_open_and_back_preserves_queue() -> None:
 
 
 def test_admin_reschedule_rescue_start_select_and_confirm() -> None:
-    router, _ = _router()
+    router, codec = _router()
+    queue = _Message("/admin_reschedules")
+    asyncio.run(_handler(router, "admin_reschedules")(queue))
     start = _Callback("aresch:start:b2")
     asyncio.run(_handler(router, "admin_reschedule_start", kind="callback")(start))
     assert start.message.edits
@@ -338,6 +340,19 @@ def test_admin_reschedule_rescue_start_select_and_confirm() -> None:
     confirm = _Callback(confirm_cb)
     asyncio.run(_handler(router, "admin_reschedule_confirm", kind="callback")(confirm))
     assert any("Reschedule completed." in row for row in confirm.answers)
+    _, completed_markup = confirm.message.edits[-1]
+    assert completed_markup is not None
+    back_cb = next(
+        button.callback_data
+        for row in completed_markup.inline_keyboard
+        for button in row
+        if button.text == "Back"
+    )
+    back_decoded = asyncio.run(codec.decode(back_cb))
+    assert back_decoded.source_context == SourceContext.ADMIN_RESCHEDULES
+    callback_back = _Callback(back_cb)
+    asyncio.run(_handler(router, "admin_runtime_card_callback", kind="callback")(callback_back))
+    assert any("Reschedules Queue" in t for t, _ in callback_back.message.edits)
 
 
 def test_admin_reschedule_rescue_stale_and_unavailable_paths_are_bounded() -> None:

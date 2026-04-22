@@ -481,6 +481,7 @@
   "admin.issues.action.retry_reminder": "Retry reminder safely",
   "admin.issues.lifecycle.taken": "Issue taken.",
   "admin.issues.lifecycle.resolved": "Issue resolved.",
+  "admin.issues.lifecycle.take_first": "Take the issue first, then resolve it.",
   "admin.issues.lifecycle.failed": "Issue action failed. Refresh queue and retry.",
   "admin.issues.lifecycle.unsupported": "Issue action is not supported for this issue.",
   "admin.issues.lifecycle.stale": "Issue row is stale or unavailable. Refresh queue.",

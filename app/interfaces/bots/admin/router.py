@@ -2323,6 +2323,14 @@ def make_router(
                     return
                 await callback.answer(i18n.t("admin.issues.lifecycle.taken", locale))
             else:
+                escalation = await booking_flow.get_issue_escalation(
+                    clinic_id=actor_context.clinic_id,
+                    issue_type=issue_type,
+                    issue_ref_id=entity_id,
+                )
+                if escalation is None or escalation.status != "in_progress":
+                    await callback.answer(i18n.t("admin.issues.lifecycle.take_first", locale), show_alert=True)
+                    return
                 updated = await booking_flow.resolve_issue_escalation(
                     clinic_id=actor_context.clinic_id,
                     issue_type=issue_type,
@@ -2477,9 +2485,22 @@ def make_router(
         )
         await callback.answer(i18n.t("admin.reschedule.complete.success", locale))
         booking = completed.entity
+        reschedule_state = await _load_queue_state(
+            scope=admin_reschedules_scope,
+            actor_id=callback.from_user.id,
+            default_state={"state_token": "na"},
+        )
+        state_token = reschedule_state.get("state_token")
         await callback.message.edit_text(
             _render_admin_booking_panel(booking=booking, locale=locale),
-            reply_markup=await _admin_booking_keyboard(booking=booking, locale=locale),
+            reply_markup=await _admin_booking_keyboard(
+                booking=booking,
+                locale=locale,
+                source_context=SourceContext.ADMIN_RESCHEDULES,
+                source_ref="admin_reschedules",
+                page_or_index=f"reschedules_open:{state_token}",
+                state_token=state_token,
+            ),
         )
 
     @router.callback_query(F.data.startswith("c2|"))

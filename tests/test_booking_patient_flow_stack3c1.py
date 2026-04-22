@@ -187,6 +187,22 @@ class _Repo:
     async def get_availability_slot(self, slot_id: str) -> AvailabilitySlot | None:
         return self.slots.get(slot_id)
 
+    async def get_admin_escalation(self, escalation_id: str) -> AdminEscalation | None:
+        return self.escalations.get(escalation_id)
+
+    async def upsert_admin_escalation(self, item: AdminEscalation) -> None:
+        self.escalations[item.admin_escalation_id] = item
+
+    async def find_latest_session_for_patient(self, *, clinic_id: str, patient_id: str) -> BookingSession | None:
+        rows = [
+            row
+            for row in self.sessions.values()
+            if row.clinic_id == clinic_id and row.resolved_patient_id == patient_id
+        ]
+        if not rows:
+            return None
+        return sorted(rows, key=lambda row: row.updated_at, reverse=True)[0]
+
 
 class _Finder:
     def __init__(self, rows: list[dict]) -> None:
@@ -1250,3 +1266,131 @@ def test_start_patient_reschedule_session_creates_prefilled_reschedule_session()
     assert started.booking_session.service_id == "service_consult"
     assert started.booking_session.doctor_preference_type == "specific"
     assert started.booking_session.doctor_id == "doctor_1"
+
+
+def test_issue_escalation_new_open_row_has_no_owner_until_taken() -> None:
+    flow, repo, _ = _build_flow(finder_rows=[])
+    now = datetime(2026, 4, 16, 12, 0, tzinfo=timezone.utc)
+    repo.sessions["sess_patient"] = BookingSession(
+        booking_session_id="sess_patient",
+        clinic_id="clinic_main",
+        telegram_user_id=7001,
+        status="in_progress",
+        route_type="service_first",
+        expires_at=now + timedelta(hours=1),
+        created_at=now,
+        updated_at=now,
+        resolved_patient_id="pat_issue",
+    )
+    repo.bookings["b_issue"] = Booking(
+        booking_id="b_issue",
+        clinic_id="clinic_main",
+        branch_id="branch_1",
+        patient_id="pat_issue",
+        doctor_id="doctor_1",
+        service_id="service_consult",
+        slot_id="slot_1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=now + timedelta(days=1),
+        scheduled_end_at=now + timedelta(days=1, minutes=30),
+        status="pending_confirmation",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=None,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    created = asyncio.run(
+        flow.get_or_create_issue_escalation(
+            clinic_id="clinic_main",
+            issue_type="confirmation_no_response",
+            issue_ref_id="b_issue",
+            booking_id="b_issue",
+            actor_id="adm_11",
+        )
+    )
+    assert created is not None
+    assert created.status == "open"
+    assert created.assigned_to_actor_id is None
+
+    taken = asyncio.run(
+        flow.take_issue_escalation(
+            clinic_id="clinic_main",
+            issue_type="confirmation_no_response",
+            issue_ref_id="b_issue",
+            booking_id="b_issue",
+            actor_id="adm_11",
+        )
+    )
+    assert taken is not None
+    assert taken.status == "in_progress"
+    assert taken.assigned_to_actor_id == "adm_11"
+
+
+def test_issue_escalation_cannot_resolve_before_take() -> None:
+    flow, repo, _ = _build_flow(finder_rows=[])
+    now = datetime(2026, 4, 16, 12, 0, tzinfo=timezone.utc)
+    repo.sessions["sess_patient"] = BookingSession(
+        booking_session_id="sess_patient",
+        clinic_id="clinic_main",
+        telegram_user_id=7001,
+        status="in_progress",
+        route_type="service_first",
+        expires_at=now + timedelta(hours=1),
+        created_at=now,
+        updated_at=now,
+        resolved_patient_id="pat_issue",
+    )
+    repo.bookings["b_issue"] = Booking(
+        booking_id="b_issue",
+        clinic_id="clinic_main",
+        branch_id="branch_1",
+        patient_id="pat_issue",
+        doctor_id="doctor_1",
+        service_id="service_consult",
+        slot_id="slot_1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=now + timedelta(days=1),
+        scheduled_end_at=now + timedelta(days=1, minutes=30),
+        status="pending_confirmation",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=None,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    blocked = asyncio.run(
+        flow.resolve_issue_escalation(
+            clinic_id="clinic_main",
+            issue_type="confirmation_no_response",
+            issue_ref_id="b_issue",
+            booking_id="b_issue",
+            actor_id="adm_11",
+        )
+    )
+    assert blocked is None
+    open_row = asyncio.run(
+        flow.get_issue_escalation(
+            clinic_id="clinic_main",
+            issue_type="confirmation_no_response",
+            issue_ref_id="b_issue",
+        )
+    )
+    assert open_row is not None
+    assert open_row.status == "open"

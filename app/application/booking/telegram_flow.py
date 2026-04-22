@@ -855,7 +855,7 @@ class BookingPatientFlowService:
             reason_code=f"admin_issue_{issue_type}",
             priority="high" if issue_type == "confirmation_no_response" else "normal",
             status="open",
-            assigned_to_actor_id=actor_id,
+            assigned_to_actor_id=None,
             payload_summary={
                 "issue_type": issue_type,
                 "issue_ref_id": issue_ref_id,
@@ -920,6 +920,8 @@ class BookingPatientFlowService:
             reminder_id=reminder_id,
         )
         if escalation is None:
+            return None
+        if escalation.status != "in_progress":
             return None
         payload = dict(escalation.payload_summary or {})
         payload["resolved_by"] = actor_id
