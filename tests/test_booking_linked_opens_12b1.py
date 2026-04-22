@@ -24,6 +24,7 @@ from app.interfaces.bots.admin.router import make_router as make_admin_router
 from app.interfaces.bots.doctor.router import make_router as make_doctor_router
 from app.interfaces.cards import CardAction, CardCallback, CardCallbackCodec, CardMode, CardProfile, CardRuntimeCoordinator, CardRuntimeStateStore, EntityType, SourceContext
 from app.interfaces.cards.runtime_state import InMemoryRedis
+from app.application.search.models import PatientSearchResponse, PatientSearchResult, SearchResultOrigin
 
 
 class _CallbackMessage:
@@ -54,6 +55,21 @@ class _AdminReference:
 
     def list_branches(self, clinic_id: str):
         return [SimpleNamespace(branch_id="br1", display_name="Main", timezone="UTC")]
+
+
+class _Search:
+    async def search_patients(self, query):
+        row = PatientSearchResult(
+            patient_id="p1",
+            clinic_id=query.clinic_id,
+            display_name="Jane Roe",
+            patient_number="1001",
+            primary_phone_normalized="+15551234567",
+            active_flags_summary=None,
+            status="active",
+            origin=SearchResultOrigin.POSTGRES_STRICT,
+        )
+        return PatientSearchResponse(exact_matches=[row], suggestions=[])
 
 
 class _DoctorReference(_AdminReference):
@@ -354,6 +370,10 @@ def _build_care_service() -> _CareService:
     return _CareService(_CareRepo(orders, items, products, reservations))
 
 
+def _build_empty_care_service() -> _CareService:
+    return _CareService(_CareRepo(orders=[], items=[], products=[], reservations=[]))
+
+
 def _admin_router(*, recommendation_rows: list[Recommendation], care_service: _CareService):
     i18n = I18nService(Path("locales"), default_locale="en")
     runtime = CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=InMemoryRedis()))
@@ -363,7 +383,7 @@ def _admin_router(*, recommendation_rows: list[Recommendation], care_service: _C
         access_resolver=_access(RoleCode.ADMIN, user_id=701),
         reference_service=_AdminReference(),
         booking_flow=_BookingFlow(),
-        search_service=SimpleNamespace(),
+        search_service=_Search(),
         stt_service=SimpleNamespace(),
         voice_mode_store=SimpleNamespace(),
         care_commerce_service=care_service,
@@ -430,7 +450,15 @@ def test_admin_linked_opens_render_panels_and_back_navigation() -> None:
     assert "Recommendation rec_new" in rec_text
     assert "Type: Follow-up" in rec_text
     assert "recommendation :: patient=" not in rec_text
-    assert rec_kb.inline_keyboard[0][0].text == "Back"
+    rec_actions = [row[0].text for row in rec_kb.inline_keyboard]
+    assert rec_actions == ["Patient", "Care", "Back"]
+
+    open_patient_data = rec_kb.inline_keyboard[0][0].callback_data
+    open_patient_callback = _Callback(open_patient_data, user_id=701)
+    asyncio.run(callback_handler(open_patient_callback))
+    patient_text, _ = open_patient_callback.message.edits[-1]
+    assert "Jane Roe" in patient_text
+    assert "Open active booking" in patient_text
 
     order_data = asyncio.run(codec.encode(_booking_callback_payload(page_or_index="open_care_order", booking_id="b1", source_context=SourceContext.BOOKING_LIST)))
     order_callback = _Callback(order_data, user_id=701)
@@ -440,6 +468,30 @@ def test_admin_linked_opens_render_panels_and_back_navigation() -> None:
     assert "Post-op gel ×2" in order_text
     assert "care_order :: patient=" not in order_text
     assert order_kb.inline_keyboard[0][0].text == "Back"
+
+    open_order_data = rec_kb.inline_keyboard[1][0].callback_data
+    open_order_callback = _Callback(open_order_data, user_id=701)
+    asyncio.run(callback_handler(open_order_callback))
+    order_from_recommendation_text, _ = open_order_callback.message.edits[-1]
+    assert "Order co_new" in order_from_recommendation_text
+
+
+def test_admin_linked_recommendation_hides_care_order_cta_when_absent_and_manual_open_is_bounded() -> None:
+    router, codec = _admin_router(recommendation_rows=_build_recommendation_rows(), care_service=_build_empty_care_service())
+    callback_handler = _handler(router, "admin_runtime_card_callback")
+    rec_data = asyncio.run(codec.encode(_booking_callback_payload(page_or_index="open_recommendation", booking_id="b1", source_context=SourceContext.BOOKING_LIST)))
+    rec_callback = _Callback(rec_data, user_id=701)
+    asyncio.run(callback_handler(rec_callback))
+    _, rec_kb = rec_callback.message.edits[-1]
+    rec_actions = [row[0].text for row in rec_kb.inline_keyboard]
+    assert rec_actions == ["Patient", "Back"]
+
+    manual_open_order_data = asyncio.run(codec.encode(_booking_callback_payload(page_or_index="open_care_order", booking_id="b1", source_context=SourceContext.BOOKING_LIST)))
+    manual_open_order_callback = _Callback(manual_open_order_data, user_id=701)
+    asyncio.run(callback_handler(manual_open_order_callback))
+    manual_text, manual_kb = manual_open_order_callback.message.edits[-1]
+    assert "No booking-linked care order found for this booking." in manual_text
+    assert manual_kb.inline_keyboard[0][0].text == "Back"
 
 
 def test_doctor_linked_opens_render_panels_and_missing_state() -> None:
@@ -453,8 +505,7 @@ def test_doctor_linked_opens_render_panels_and_missing_state() -> None:
     assert rec_kb.inline_keyboard[0][0].text == "Back"
     assert rec_text.strip() != "-"
 
-    empty_care = _CareService(_CareRepo(orders=[], items=[], products=[], reservations=[]))
-    router2, codec2 = _doctor_router(recommendation_rows=_build_recommendation_rows(), care_service=empty_care)
+    router2, codec2 = _doctor_router(recommendation_rows=_build_recommendation_rows(), care_service=_build_empty_care_service())
     callback_handler2 = _handler(router2, "doctor_runtime_booking_callback")
     order_data = asyncio.run(codec2.encode(_booking_callback_payload(page_or_index="open_care_order", booking_id="b1", source_context=SourceContext.DOCTOR_QUEUE)))
     order_callback = _Callback(order_data, user_id=702)

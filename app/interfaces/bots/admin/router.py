@@ -951,6 +951,15 @@ def make_router(
             ),
         )
 
+    async def _resolve_latest_linked_care_order(*, booking) -> object | None:
+        if care_commerce_service is None:
+            return None
+        orders = await care_commerce_service.list_patient_orders(
+            clinic_id=booking.clinic_id,
+            patient_id=booking.patient_id,
+        )
+        return _select_latest_care_order(orders, booking_id=booking.booking_id)
+
     async def _build_care_order_item_summary(*, order, locale: str) -> str:
         if care_commerce_service is None:
             return "-"
@@ -978,11 +987,7 @@ def make_router(
     async def _render_linked_care_order_panel(*, booking, locale: str) -> str:
         if care_commerce_service is None:
             return i18n.t("staff.linked.care_order.missing", locale)
-        orders = await care_commerce_service.list_patient_orders(
-            clinic_id=booking.clinic_id,
-            patient_id=booking.patient_id,
-        )
-        care_order = _select_latest_care_order(orders, booking_id=booking.booking_id)
+        care_order = await _resolve_latest_linked_care_order(booking=booking)
         if care_order is None:
             return i18n.t("staff.linked.care_order.missing", locale)
         branch_label = "-"
@@ -1041,6 +1046,47 @@ def make_router(
                 ]
             ]
         )
+
+    async def _admin_linked_recommendation_keyboard(*, booking, locale: str) -> InlineKeyboardMarkup:
+        rows: list[list[InlineKeyboardButton]] = [
+            [
+                InlineKeyboardButton(
+                    text=i18n.t("card.booking.action.patient", locale),
+                    callback_data=await _encode_booking_callback(
+                        booking_id=booking.booking_id,
+                        action=CardAction.OPEN_PATIENT,
+                        page_or_index="open_patient",
+                    ),
+                )
+            ]
+        ]
+        linked_order = await _resolve_latest_linked_care_order(booking=booking)
+        if linked_order is not None:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("card.booking.action.care_order", locale),
+                        callback_data=await _encode_booking_callback(
+                            booking_id=booking.booking_id,
+                            action=CardAction.OPEN_CARE_ORDER,
+                            page_or_index="open_care_order",
+                        ),
+                    )
+                ]
+            )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=i18n.t("common.back", locale),
+                    callback_data=await _encode_booking_callback(
+                        booking_id=booking.booking_id,
+                        action=CardAction.OPEN,
+                        page_or_index="open_booking",
+                    ),
+                )
+            ]
+        )
+        return InlineKeyboardMarkup(inline_keyboard=rows)
 
     def _simple_back_keyboard(*, locale: str, callback_data: str) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
@@ -2738,7 +2784,7 @@ def make_router(
         elif decoded.page_or_index == "open_recommendation":
             await callback.message.edit_text(
                 await _render_linked_recommendation_panel(booking=booking, locale=locale),
-                reply_markup=await _admin_linked_back_keyboard(booking_id=booking.booking_id, locale=locale),
+                reply_markup=await _admin_linked_recommendation_keyboard(booking=booking, locale=locale),
             )
             return
         elif decoded.page_or_index == "open_care_order":
