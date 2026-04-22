@@ -184,6 +184,33 @@ def make_router(
         translated = i18n.t(key, locale)
         return translated if translated != key else issue_type
 
+    def _ops_issue_lifecycle_supported(*, issue_type: str, booking_id: str | None) -> bool:
+        return bool(booking_id) and issue_type in {"confirmation_no_response", "reminder_failed"}
+
+    def _ops_issue_effective_status(*, projected_status: str, escalation_status: str | None) -> str:
+        if escalation_status in {"open", "in_progress", "resolved"}:
+            return escalation_status
+        return projected_status if projected_status in {"open", "in_progress", "resolved"} else "open"
+
+    async def _load_issue_escalation_statuses(
+        *,
+        clinic_id: str,
+        rows: list,
+    ) -> dict[tuple[str, str], str]:
+        statuses: dict[tuple[str, str], str] = {}
+        for row in rows:
+            if not _ops_issue_lifecycle_supported(issue_type=row.issue_type, booking_id=row.booking_id):
+                continue
+            escalation = await booking_flow.get_issue_escalation(
+                clinic_id=clinic_id,
+                issue_type=row.issue_type,
+                issue_ref_id=row.issue_ref_id,
+            )
+            if escalation is None:
+                continue
+            statuses[(row.issue_type, row.issue_ref_id)] = escalation.status
+        return statuses
+
     def _confirmation_signal_label(*, signal: str, locale: str) -> str:
         translated = i18n.t(f"admin.confirmations.signal.{signal}", locale)
         return translated if translated != f"admin.confirmations.signal.{signal}" else signal
@@ -615,32 +642,50 @@ def make_router(
         if admin_workdesk is None:
             return i18n.t("common.placeholder", locale), InlineKeyboardMarkup(inline_keyboard=[])
         status = state.get("status", "open")
-        statuses = None if status == "all" else (status,)
-        rows = await admin_workdesk.get_ops_issue_queue(clinic_id=clinic_id, statuses=statuses, limit=40)
+        rows = await admin_workdesk.get_ops_issue_queue(clinic_id=clinic_id, statuses=None, limit=40)
+        escalation_statuses = await _load_issue_escalation_statuses(clinic_id=clinic_id, rows=rows)
+        filtered_rows = [
+            row
+            for row in rows
+            if status == "all"
+            or _ops_issue_effective_status(
+                projected_status=row.issue_status,
+                escalation_status=escalation_statuses.get((row.issue_type, row.issue_ref_id)),
+            )
+            == status
+        ]
         lines = [i18n.t("admin.issues.title", locale)]
-        if not rows:
+        if not filtered_rows:
             lines.append(i18n.t("admin.issues.empty", locale))
-        for row in rows[:15]:
+        for row in filtered_rows[:15]:
+            effective_status = _ops_issue_effective_status(
+                projected_status=row.issue_status,
+                escalation_status=escalation_statuses.get((row.issue_type, row.issue_ref_id)),
+            )
             lines.append(
                 i18n.t("admin.issues.row", locale).format(
                     issue=_ops_issue_label(issue_type=row.issue_type, locale=locale),
-                    severity=row.severity,
+                    severity=f"{row.severity}/{_status_label(status=effective_status, locale=locale)}",
                     summary=(i18n.t(f"admin.issues.summary.{row.issue_type}", locale) if i18n.t(f"admin.issues.summary.{row.issue_type}", locale) != f"admin.issues.summary.{row.issue_type}" else row.summary_text),
                     related=(row.patient_display_name or row.patient_id or row.booking_id or row.care_order_id or "-"),
                 )
             )
-        token = f"{actor_id}-is-{len(rows)}-{status}"
+        token = f"{actor_id}-is-{len(filtered_rows)}-{status}"
         next_state = dict(state)
         next_state["state_token"] = token
         await _save_queue_state(scope=admin_issues_scope, actor_id=actor_id, state=next_state)
         controls = [[InlineKeyboardButton(text=i18n.t("admin.issues.filter.status", locale), callback_data=f"aw4:issues:status:{token}")]]
         row_buttons: list[list[InlineKeyboardButton]] = []
-        for row in rows[:8]:
+        for row in filtered_rows[:8]:
+            effective_status = _ops_issue_effective_status(
+                projected_status=row.issue_status,
+                escalation_status=escalation_statuses.get((row.issue_type, row.issue_ref_id)),
+            )
             if row.booking_id:
                 row_buttons.append(
                     [
                         InlineKeyboardButton(
-                            text=f"{_ops_issue_label(issue_type=row.issue_type, locale=locale)} · {row.booking_id}",
+                            text=f"{_ops_issue_label(issue_type=row.issue_type, locale=locale)} · {row.booking_id} · {_status_label(status=effective_status, locale=locale)}",
                             callback_data=await _encode_booking_callback(
                                 booking_id=row.booking_id,
                                 action=CardAction.OPEN,
@@ -650,8 +695,27 @@ def make_router(
                                 state_token=token,
                             ),
                         )
-                    ]
-                )
+                        ]
+                    )
+                if _ops_issue_lifecycle_supported(issue_type=row.issue_type, booking_id=row.booking_id):
+                    if effective_status == "open":
+                        row_buttons.append(
+                            [
+                                InlineKeyboardButton(
+                                    text=i18n.t("admin.issues.action.take", locale),
+                                    callback_data=f"aw4i:take:{row.issue_type}:{row.issue_ref_id}:{token}",
+                                )
+                            ]
+                        )
+                    elif effective_status == "in_progress":
+                        row_buttons.append(
+                            [
+                                InlineKeyboardButton(
+                                    text=i18n.t("admin.issues.action.resolve", locale),
+                                    callback_data=f"aw4i:resolve:{row.issue_type}:{row.issue_ref_id}:{token}",
+                                )
+                            ]
+                        )
                 if reminder_recovery is not None and row.issue_type == "reminder_failed":
                     row_buttons.append(
                         [
@@ -2185,10 +2249,13 @@ def make_router(
             clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
         )
         parts = callback.data.split(":")
-        if len(parts) != 4:
+        if len(parts) not in {4, 5}:
             await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
             return
-        kind, entity_id, token = parts[1], parts[2], parts[3]
+        kind = parts[1]
+        issue_type = parts[2] if len(parts) == 5 else None
+        entity_id = parts[3] if len(parts) == 5 else parts[2]
+        token = parts[4] if len(parts) == 5 else parts[3]
         state = await _load_queue_state(scope=admin_issues_scope, actor_id=callback.from_user.id, default_state={"status": "open", "state_token": "na"})
         if card_runtime is not None and token != state.get("state_token"):
             await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
@@ -2232,6 +2299,51 @@ def make_router(
                 state=state,
             )
             await callback.message.edit_text(text, reply_markup=keyboard)
+            return
+        if kind in {"take", "resolve"}:
+            if issue_type not in {"confirmation_no_response", "reminder_failed"}:
+                await callback.answer(i18n.t("admin.issues.lifecycle.unsupported", locale), show_alert=True)
+                return
+            rows = await admin_workdesk.get_ops_issue_queue(clinic_id=actor_context.clinic_id, statuses=None, limit=80) if admin_workdesk is not None else []
+            row = next((item for item in rows if item.issue_type == issue_type and item.issue_ref_id == entity_id), None)
+            if row is None or not row.booking_id:
+                await callback.answer(i18n.t("admin.issues.lifecycle.stale", locale), show_alert=True)
+                return
+            if kind == "take":
+                updated = await booking_flow.take_issue_escalation(
+                    clinic_id=actor_context.clinic_id,
+                    issue_type=issue_type,
+                    issue_ref_id=entity_id,
+                    booking_id=row.booking_id,
+                    reminder_id=(entity_id if issue_type == "reminder_failed" else None),
+                    actor_id=str(callback.from_user.id),
+                )
+                if updated is None:
+                    await callback.answer(i18n.t("admin.issues.lifecycle.failed", locale), show_alert=True)
+                    return
+                await callback.answer(i18n.t("admin.issues.lifecycle.taken", locale))
+            else:
+                updated = await booking_flow.resolve_issue_escalation(
+                    clinic_id=actor_context.clinic_id,
+                    issue_type=issue_type,
+                    issue_ref_id=entity_id,
+                    booking_id=row.booking_id,
+                    reminder_id=(entity_id if issue_type == "reminder_failed" else None),
+                    actor_id=str(callback.from_user.id),
+                )
+                if updated is None:
+                    await callback.answer(i18n.t("admin.issues.lifecycle.failed", locale), show_alert=True)
+                    return
+                await callback.answer(i18n.t("admin.issues.lifecycle.resolved", locale))
+            text, keyboard = await _render_admin_issues(
+                actor_id=callback.from_user.id,
+                clinic_id=actor_context.clinic_id,
+                locale=locale,
+                state=state,
+            )
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            return
+        await callback.answer(i18n.t("admin.issues.lifecycle.unsupported", locale), show_alert=True)
 
     @router.callback_query(F.data.startswith("aresch:start:"))
     async def admin_reschedule_start(callback: CallbackQuery) -> None:

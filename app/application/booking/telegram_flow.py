@@ -31,6 +31,7 @@ NEW_BOOKING_ROUTE_TYPES: frozenset[str] = frozenset({"service_first"})
 EXISTING_BOOKING_CONTROL_ROUTE_TYPES: frozenset[str] = frozenset({"existing_booking_control"})
 RESCHEDULE_BOOKING_CONTROL_ROUTE_TYPES: frozenset[str] = frozenset({"reschedule_booking_control"})
 LIVE_EXISTING_BOOKING_STATUSES: frozenset[str] = frozenset({"pending_confirmation", "confirmed", "reschedule_requested", "checked_in", "in_service"})
+ADMIN_ISSUE_SUPPORTED_TYPES: frozenset[str] = frozenset({"confirmation_no_response", "reminder_failed"})
 
 
 class BookingFlowReadRepository(Protocol):
@@ -809,6 +810,131 @@ class BookingPatientFlowService:
                 return row
         return None
 
+    async def get_issue_escalation(
+        self,
+        *,
+        clinic_id: str,
+        issue_type: str,
+        issue_ref_id: str,
+    ) -> AdminEscalation | None:
+        if issue_type not in ADMIN_ISSUE_SUPPORTED_TYPES:
+            return None
+        escalation_id = self._issue_escalation_id(issue_type=issue_type, issue_ref_id=issue_ref_id)
+        escalation = await self.orchestration.repository.get_admin_escalation(escalation_id)  # type: ignore[attr-defined]
+        if escalation is not None and escalation.clinic_id == clinic_id:
+            return escalation
+        return None
+
+    async def get_or_create_issue_escalation(
+        self,
+        *,
+        clinic_id: str,
+        issue_type: str,
+        issue_ref_id: str,
+        booking_id: str,
+        actor_id: str,
+        reminder_id: str | None = None,
+    ) -> AdminEscalation | None:
+        if issue_type not in ADMIN_ISSUE_SUPPORTED_TYPES:
+            return None
+        existing = await self.get_issue_escalation(clinic_id=clinic_id, issue_type=issue_type, issue_ref_id=issue_ref_id)
+        if existing is not None:
+            return existing
+        booking = await self.reads.get_booking(booking_id=booking_id)
+        if booking is None or booking.clinic_id != clinic_id:
+            return None
+        session = await self.orchestration.repository.find_latest_session_for_patient(clinic_id=clinic_id, patient_id=booking.patient_id)  # type: ignore[attr-defined]
+        if session is None:
+            return None
+        now = datetime.now(timezone.utc)
+        escalation = AdminEscalation(
+            admin_escalation_id=self._issue_escalation_id(issue_type=issue_type, issue_ref_id=issue_ref_id),
+            clinic_id=clinic_id,
+            booking_session_id=session.booking_session_id,
+            patient_id=booking.patient_id,
+            reason_code=f"admin_issue_{issue_type}",
+            priority="high" if issue_type == "confirmation_no_response" else "normal",
+            status="open",
+            assigned_to_actor_id=actor_id,
+            payload_summary={
+                "issue_type": issue_type,
+                "issue_ref_id": issue_ref_id,
+                "booking_id": booking_id,
+                "reminder_id": reminder_id,
+            },
+            created_at=now,
+            updated_at=now,
+        )
+        await self.orchestration.repository.upsert_admin_escalation(escalation)  # type: ignore[attr-defined]
+        return escalation
+
+    async def take_issue_escalation(
+        self,
+        *,
+        clinic_id: str,
+        issue_type: str,
+        issue_ref_id: str,
+        booking_id: str,
+        actor_id: str,
+        reminder_id: str | None = None,
+    ) -> AdminEscalation | None:
+        escalation = await self.get_or_create_issue_escalation(
+            clinic_id=clinic_id,
+            issue_type=issue_type,
+            issue_ref_id=issue_ref_id,
+            booking_id=booking_id,
+            actor_id=actor_id,
+            reminder_id=reminder_id,
+        )
+        if escalation is None:
+            return None
+        if escalation.status == "resolved":
+            return escalation
+        updated = AdminEscalation(
+            **{
+                **asdict(escalation),
+                "status": "in_progress",
+                "assigned_to_actor_id": actor_id,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        await self.orchestration.repository.upsert_admin_escalation(updated)  # type: ignore[attr-defined]
+        return updated
+
+    async def resolve_issue_escalation(
+        self,
+        *,
+        clinic_id: str,
+        issue_type: str,
+        issue_ref_id: str,
+        booking_id: str,
+        actor_id: str,
+        reminder_id: str | None = None,
+    ) -> AdminEscalation | None:
+        escalation = await self.get_or_create_issue_escalation(
+            clinic_id=clinic_id,
+            issue_type=issue_type,
+            issue_ref_id=issue_ref_id,
+            booking_id=booking_id,
+            actor_id=actor_id,
+            reminder_id=reminder_id,
+        )
+        if escalation is None:
+            return None
+        payload = dict(escalation.payload_summary or {})
+        payload["resolved_by"] = actor_id
+        updated = AdminEscalation(
+            **{
+                **asdict(escalation),
+                "status": "resolved",
+                "assigned_to_actor_id": actor_id,
+                "payload_summary": payload,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        await self.orchestration.repository.upsert_admin_escalation(updated)  # type: ignore[attr-defined]
+        return updated
+
     async def take_admin_escalation(self, *, clinic_id: str, escalation_id: str, actor_id: str) -> AdminEscalation | None:
         escalation = await self.orchestration.repository.get_admin_escalation(escalation_id)  # type: ignore[attr-defined]
         if escalation is None or escalation.clinic_id != clinic_id:
@@ -857,6 +983,9 @@ class BookingPatientFlowService:
         if isinstance(service_ids, list):
             return service_id in service_ids
         return True
+
+    def _issue_escalation_id(self, *, issue_type: str, issue_ref_id: str) -> str:
+        return f"aes_issue_{issue_type}_{issue_ref_id}"
 
     def _panel_for_session(self, session: BookingSession) -> str:
         if session.status in {"admin_escalated", "completed", "canceled", "expired"}:
