@@ -185,6 +185,7 @@ class BookingOrchestrationService:
 
     async def update_session_context(self, *, booking_session_id: str, **changes) -> BookingSessionOutcome:
         allowed = {
+            "branch_id",
             "service_id",
             "urgency_type",
             "requested_date_type",

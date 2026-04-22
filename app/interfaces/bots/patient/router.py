@@ -82,6 +82,7 @@ class _PatientFlowState:
     booking_session_id: str = ""
     booking_mode: str = "new_booking_flow"
     reschedule_booking_id: str = ""
+    quick_booking_prefill: dict[str, str] | None = None
     care: _CareViewState | None = None
 
 
@@ -391,6 +392,7 @@ def make_router(
             booking_session_id=payload.get("booking_session_id", ""),
             booking_mode=payload.get("booking_mode", "new_booking_flow"),
             reschedule_booking_id=payload.get("reschedule_booking_id", ""),
+            quick_booking_prefill=dict(payload.get("quick_booking_prefill") or {}),
             care=care_state,
         )
 
@@ -403,6 +405,7 @@ def make_router(
                 "booking_session_id": state.booking_session_id,
                 "booking_mode": state.booking_mode,
                 "reschedule_booking_id": state.reschedule_booking_id,
+                "quick_booking_prefill": dict(state.quick_booking_prefill or {}),
                 "care": {
                     "selected_category": care_state.selected_category,
                     "category_page": care_state.category_page,
@@ -1566,6 +1569,37 @@ def make_router(
             keyboard=InlineKeyboardMarkup(inline_keyboard=buttons),
         )
 
+    async def _render_quick_booking_suggestion_panel(
+        message: Message | CallbackQuery,
+        *,
+        actor_id: int,
+        session_id: str,
+        prefill: dict[str, str],
+    ) -> None:
+        locale = _locale()
+        service_label = prefill.get("service_label") or i18n.t("patient.booking.review.value.missing", locale)
+        doctor_label = prefill.get("doctor_label") or i18n.t("patient.booking.review.value.missing", locale)
+        branch_label = prefill.get("branch_label") or i18n.t("patient.booking.review.value.missing", locale)
+        text = i18n.t("patient.booking.quick.panel", locale).format(
+            service=service_label,
+            doctor=doctor_label,
+            branch=branch_label,
+        )
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=i18n.t("patient.booking.quick.repeat", locale), callback_data=f"qbook:repeat:{session_id}")],
+                [InlineKeyboardButton(text=i18n.t("patient.booking.quick.same_doctor", locale), callback_data=f"qbook:repeat:{session_id}")],
+                [InlineKeyboardButton(text=i18n.t("patient.booking.quick.other", locale), callback_data=f"qbook:other:{session_id}")],
+            ]
+        )
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id=session_id,
+            text=text,
+            keyboard=keyboard,
+        )
+
     async def _render_recommendation_picker(
         message: Message | CallbackQuery,
         *,
@@ -1993,6 +2027,26 @@ def make_router(
         flow.booking_session_id = started.booking_session.booking_session_id
         flow.booking_mode = "new_booking_flow"
         flow.reschedule_booking_id = ""
+        flow.quick_booking_prefill = {}
+        if started.trusted_shortcut_applied and trusted_patient_id:
+            recent_prefill = await booking_flow.get_recent_booking_prefill(clinic_id=clinic_id, patient_id=trusted_patient_id)
+            if recent_prefill is not None:
+                flow.quick_booking_prefill = {
+                    "service_id": recent_prefill.service_id,
+                    "doctor_id": recent_prefill.doctor_id,
+                    "branch_id": recent_prefill.branch_id,
+                    "service_label": recent_prefill.service_label or "",
+                    "doctor_label": recent_prefill.doctor_label or "",
+                    "branch_label": recent_prefill.branch_label or "",
+                }
+                await _save_flow_state(actor_id, flow)
+                await _render_quick_booking_suggestion_panel(
+                    message,
+                    actor_id=actor_id,
+                    session_id=started.booking_session.booking_session_id,
+                    prefill=flow.quick_booking_prefill,
+                )
+                return
         await _save_flow_state(actor_id, flow)
         await _render_resume_panel(message, actor_id=actor_id, session_id=started.booking_session.booking_session_id, clinic_id=clinic_id)
 
@@ -2890,6 +2944,78 @@ def make_router(
             session_id=session.booking_session_id,
             clinic_id=session.clinic_id,
             branch_id=session.branch_id,
+        )
+
+    @router.callback_query(F.data.startswith("qbook:repeat:"))
+    async def quick_book_repeat(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            return
+        _, _, callback_session_id = callback.data.split(":", 2)
+        flow = await _load_flow_state(callback.from_user.id)
+        prefill = flow.quick_booking_prefill or {}
+        if flow.booking_session_id != callback_session_id or not prefill:
+            await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
+            return
+        if not await booking_flow.validate_active_session_callback(
+            clinic_id=clinic_id,
+            telegram_user_id=callback.from_user.id,
+            callback_session_id=callback_session_id,
+        ):
+            await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
+            return
+        required = ("service_id", "doctor_id", "branch_id")
+        if any(not prefill.get(key) for key in required):
+            flow.quick_booking_prefill = {}
+            await _save_flow_state(callback.from_user.id, flow)
+            await _render_service_panel(
+                callback,
+                actor_id=callback.from_user.id,
+                session_id=callback_session_id,
+                clinic_id=clinic_id,
+            )
+            return
+        updated = await booking_flow.apply_recent_booking_prefill(
+            booking_session_id=callback_session_id,
+            service_id=prefill["service_id"],
+            doctor_id=prefill["doctor_id"],
+            branch_id=prefill["branch_id"],
+        )
+        if updated is None:
+            await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
+            return
+        flow.quick_booking_prefill = {}
+        await _save_flow_state(callback.from_user.id, flow)
+        await _render_slot_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
+
+    @router.callback_query(F.data.startswith("qbook:other:"))
+    async def quick_book_other(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            return
+        _, _, callback_session_id = callback.data.split(":", 2)
+        flow = await _load_flow_state(callback.from_user.id)
+        if flow.booking_session_id != callback_session_id:
+            await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
+            return
+        if not await booking_flow.validate_active_session_callback(
+            clinic_id=clinic_id,
+            telegram_user_id=callback.from_user.id,
+            callback_session_id=callback_session_id,
+        ):
+            await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
+            return
+        flow.quick_booking_prefill = {}
+        await _save_flow_state(callback.from_user.id, flow)
+        await _render_service_panel(
+            callback,
+            actor_id=callback.from_user.id,
+            session_id=callback_session_id,
+            clinic_id=clinic_id,
         )
 
     @router.callback_query(F.data.startswith("care:repeat:"))
@@ -4045,6 +4171,7 @@ def make_router(
             flow = await _load_flow_state(actor_id)
             flow.booking_mode = "new_booking_flow"
             flow.reschedule_booking_id = ""
+            flow.quick_booking_prefill = {}
             await _save_flow_state(actor_id, flow)
             await _render_service_panel(message, actor_id=actor_id, session_id=session_id, clinic_id=clinic_id)
             return
@@ -4052,6 +4179,7 @@ def make_router(
             flow = await _load_flow_state(actor_id)
             flow.booking_mode = "new_booking_flow"
             flow.reschedule_booking_id = ""
+            flow.quick_booking_prefill = {}
             await _save_flow_state(actor_id, flow)
             await _render_doctor_pref_panel(
                 message,
@@ -4065,6 +4193,7 @@ def make_router(
             flow = await _load_flow_state(actor_id)
             flow.booking_mode = "new_booking_flow"
             flow.reschedule_booking_id = ""
+            flow.quick_booking_prefill = {}
             await _save_flow_state(actor_id, flow)
             await _render_slot_panel(message, actor_id=actor_id, session_id=session_id)
             return
@@ -4072,6 +4201,7 @@ def make_router(
             flow = await _load_flow_state(actor_id)
             flow.booking_mode = "new_booking_contact"
             flow.reschedule_booking_id = ""
+            flow.quick_booking_prefill = {}
             await _save_flow_state(actor_id, flow)
             contact_keyboard = ReplyKeyboardMarkup(
                 keyboard=[[KeyboardButton(text=i18n.t("patient.booking.contact.share", _locale()), request_contact=True)]],
@@ -4090,6 +4220,7 @@ def make_router(
             flow = await _load_flow_state(actor_id)
             flow.booking_mode = "new_booking_flow"
             flow.reschedule_booking_id = ""
+            flow.quick_booking_prefill = {}
             await _save_flow_state(actor_id, flow)
             await _render_review_finalize_panel(message, actor_id=actor_id, session_id=session_id)
             return

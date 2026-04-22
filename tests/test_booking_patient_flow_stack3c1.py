@@ -365,6 +365,68 @@ def test_start_or_resume_returning_patient_booking_keeps_existing_non_hydrated_a
     assert resumed.booking_session.resolved_patient_id is None
     assert resumed.booking_session.contact_phone_snapshot is None
 
+
+def test_get_recent_booking_prefill_returns_latest_relevant_pattern() -> None:
+    flow, repo, _ = _build_flow(finder_rows=[])
+    old_time = datetime(2026, 4, 10, 10, 0, tzinfo=timezone.utc)
+    new_time = datetime(2026, 4, 21, 10, 0, tzinfo=timezone.utc)
+    repo.bookings["bk_old"] = Booking(
+        booking_id="bk_old",
+        clinic_id="clinic_main",
+        branch_id="branch_1",
+        patient_id="pat_1",
+        doctor_id="doctor_1",
+        service_id="service_consult",
+        slot_id="slot_1",
+        booking_mode="patient_bot",
+        source_channel="telegram",
+        scheduled_start_at=old_time,
+        scheduled_end_at=old_time + timedelta(minutes=30),
+        status="confirmed",
+        reason_for_visit_short=None,
+        patient_note=None,
+        confirmation_required=True,
+        confirmed_at=None,
+        canceled_at=None,
+        checked_in_at=None,
+        in_service_at=None,
+        completed_at=None,
+        no_show_at=None,
+        created_at=old_time,
+        updated_at=old_time,
+    )
+    repo.bookings["bk_new"] = Booking(
+        **{**asdict(repo.bookings["bk_old"]), "booking_id": "bk_new", "scheduled_start_at": new_time, "scheduled_end_at": new_time + timedelta(minutes=30)}
+    )
+
+    prefill = asyncio.run(flow.get_recent_booking_prefill(clinic_id="clinic_main", patient_id="pat_1"))
+
+    assert prefill is not None
+    assert prefill.service_id == "service_consult"
+    assert prefill.doctor_id == "doctor_1"
+    assert prefill.branch_id == "branch_1"
+    assert prefill.doctor_label == "Dr One"
+
+
+def test_apply_recent_booking_prefill_sets_service_branch_and_specific_doctor() -> None:
+    flow, _, _ = _build_flow(finder_rows=[])
+    session = asyncio.run(flow.start_or_resume_session(clinic_id="clinic_main", telegram_user_id=999))
+
+    updated = asyncio.run(
+        flow.apply_recent_booking_prefill(
+            booking_session_id=session.booking_session_id,
+            service_id="service_consult",
+            doctor_id="doctor_1",
+            branch_id="branch_1",
+        )
+    )
+
+    assert updated is not None
+    assert updated.service_id == "service_consult"
+    assert updated.branch_id == "branch_1"
+    assert updated.doctor_preference_type == "specific"
+    assert updated.doctor_id == "doctor_1"
+
 def test_happy_path_with_no_match_creates_canonical_patient_and_finalizes() -> None:
     flow, repo, creator = _build_flow(finder_rows=[])
     session = asyncio.run(flow.start_or_resume_session(clinic_id="clinic_main", telegram_user_id=999))
