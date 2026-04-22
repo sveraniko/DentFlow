@@ -105,7 +105,7 @@
   "search.patient.exact": "Exact matches:",
   "search.patient.suggestions": "Suggestions:",
   "search.no_matches": "No matches",
-  "search.usage.patient": "Usage: /search_patient <query>",
+  "search.usage.patient": "Usage: /search_patient <query> (opens the admin patients list)",
   "search.usage.doctor": "Usage: /search_doctor <query>",
   "search.usage.service": "Usage: /search_service <query>",
   "voice.mode.patient.activated": "Voice patient search mode is active for {ttl}s. Send one voice message now.",

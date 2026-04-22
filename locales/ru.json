@@ -105,7 +105,7 @@
   "search.patient.exact": "Точные совпадения:",
   "search.patient.suggestions": "Подсказки:",
   "search.no_matches": "Совпадений нет",
-  "search.usage.patient": "Использование: /search_patient <запрос>",
+  "search.usage.patient": "Использование: /search_patient <запрос> (открывает список пациентов администратора)",
   "search.usage.doctor": "Использование: /search_doctor <запрос>",
   "search.usage.service": "Использование: /search_service <запрос>",
   "voice.mode.patient.activated": "Голосовой поиск пациента активирован на {ttl} сек. Отправьте одно голосовое сообщение.",

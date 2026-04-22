@@ -29,7 +29,7 @@ from app.application.voice import SpeechToTextService, VoiceSearchModeStore
 from app.common.i18n import I18nService
 from app.domain.access_identity.models import RoleCode
 from app.interfaces.bots.common import guard_roles, resolve_locale
-from app.interfaces.bots.search_handlers import run_doctor_search, run_patient_search, run_service_search
+from app.interfaces.bots.search_handlers import run_doctor_search, run_service_search
 from app.interfaces.bots.voice_search import attach_voice_search_handlers
 from app.interfaces.cards import CardCallbackCodec, CardRuntimeCoordinator
 from app.interfaces.cards import (
@@ -550,6 +550,7 @@ def make_router(
         clinic_id: str,
         locale: str,
         state: dict[str, str],
+        source_ref_prefix: str = "admin_patients",
     ) -> tuple[str, InlineKeyboardMarkup]:
         query = state.get("query", "").strip()
         lines = [i18n.t("admin.patients.title", locale)]
@@ -584,7 +585,7 @@ def make_router(
                         action=CardAction.OPEN,
                         page_or_index=f"patients_open:{token}",
                         source_context=SourceContext.ADMIN_PATIENTS,
-                        source_ref=f"admin_patients:{query}",
+                        source_ref=f"{source_ref_prefix}:{query}",
                         state_token=token,
                     ),
                 )
@@ -1365,15 +1366,20 @@ def make_router(
         if not query:
             await message.answer(i18n.t("search.usage.patient", locale))
             return
-        await message.answer(
-            await run_patient_search(
-                service=search_service,
-                i18n=i18n,
-                locale=locale,
-                clinic_id=actor_context.clinic_id,
-                query=query,
-            )
+        state = await _load_queue_state(
+            scope=admin_patients_scope,
+            actor_id=message.from_user.id,
+            default_state={"query": query, "state_token": "na"},
         )
+        state["query"] = query
+        text, keyboard = await _render_admin_patients(
+            actor_id=message.from_user.id,
+            clinic_id=actor_context.clinic_id,
+            locale=locale,
+            state=state,
+            source_ref_prefix="search_patient",
+        )
+        await message.answer(text, reply_markup=keyboard)
 
     @router.message(Command("search_doctor"))
     async def search_doctor(message: Message) -> None:
