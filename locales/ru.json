@@ -269,7 +269,7 @@
   "patient.care.product.media.gallery": "Галерея {index}/{total}",
   "patient.care.branch.prompt": "Выберите филиал выдачи:",
   "patient.care.branch.option": "{branch} · {status}",
-  "patient.care.order.result": "Резерв создан ✅\nТовар: {product}\nФилиал: {branch_id}\nЗаказ: {care_order_id}\nСтатус заказа: {status}\nСтатус резерва: {reservation_status}\nДальше: {next_step}",
+  "patient.care.order.result": "Резерв создан ✅\nТовар: {product}\nФилиал выдачи: {branch}\nСтатус: {status}\nДальше: {next_step}",
   "patient.care.order.next_step": "Клиника подготовит выдачу и при необходимости свяжется с вами.",
   "patient.care.orders.repeat.hint": "  /care_order_repeat {care_order_id}",
   "patient.care.orders.open.action": "Открыть · {care_order_id}",
@@ -546,5 +546,8 @@
   "patient.care.orders.current.label": "Текущий резерв / заказ",
   "patient.care.orders.history.label": "История",
   "patient.care.orders.history.empty": "Завершённых заказов пока нет.",
-  "patient.care.orders.empty.browse": "Перейти в каталог ухода"
+  "patient.care.orders.empty.browse": "Перейти в каталог ухода",
+  "patient.care.order.open_current.action": "Открыть текущий заказ",
+  "patient.care.order.open_orders.action": "Мои резервы / заказы",
+  "patient.care.order.open.denied": "Этот заказ недоступен или больше не открыт для вас."
 }

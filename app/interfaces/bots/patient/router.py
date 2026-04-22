@@ -305,6 +305,14 @@ def _resolve_status_label(*, status: str, locale: str, i18n: I18nService) -> str
     return status.replace("_", " ").strip().capitalize() or i18n.t("patient.booking.review.value.missing", locale)
 
 
+def _resolve_care_order_status_label(*, status: str, locale: str, i18n: I18nService) -> str:
+    key = f"care.order.status.{status}"
+    translated = i18n.t(key, locale)
+    if translated and translated != key:
+        return translated
+    return status.replace("_", " ").strip().capitalize() or i18n.t("patient.booking.review.value.missing", locale)
+
+
 def make_router(
     i18n: I18nService,
     booking_flow: BookingPatientFlowService,
@@ -988,12 +996,15 @@ def make_router(
             items=[(product, 1)],
         )
         await care_commerce_service.transition_order(care_order_id=order.care_order_id, to_status="confirmed")
-        reservation = await care_commerce_service.create_reservation(
+        await care_commerce_service.create_reservation(
             care_order_id=order.care_order_id,
             care_product_id=product.care_product_id,
             branch_id=branch_id,
             reserved_qty=1,
         )
+        branch = next((item for item in reference.list_branches(clinic_id) if item.branch_id == branch_id), None)
+        branch_label = branch.display_name if branch else branch_id
+        status_label = _resolve_care_order_status_label(status="confirmed", locale=locale, i18n=i18n)
         next_step = i18n.t("patient.care.order.next_step", locale)
         await _send_or_edit_panel(
             actor_id=actor_id,
@@ -1001,11 +1012,25 @@ def make_router(
             session_id="care",
             text=i18n.t("patient.care.order.result", locale).format(
                 product=i18n.t(product.title_key, locale),
-                branch_id=branch_id,
-                status="confirmed",
-                reservation_status=reservation.status,
-                care_order_id=order.care_order_id,
+                branch=branch_label,
+                status=status_label,
                 next_step=next_step,
+            ),
+            keyboard=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=i18n.t("patient.care.order.open_current.action", locale),
+                            callback_data=f"careo:open:{order.care_order_id}",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text=i18n.t("patient.care.order.open_orders.action", locale),
+                            callback_data="care:orders",
+                        )
+                    ],
+                ]
             ),
         )
 
@@ -2770,6 +2795,33 @@ def make_router(
             clinic_id=clinic_id,
             patient_id=patient_id,
             page=0,
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("careo:open:"))
+    async def care_order_open_callback(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data or care_commerce_service is None:
+            return
+        clinic_id = _primary_clinic_id()
+        patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
+        if clinic_id is None or patient_id is None:
+            await callback.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()), show_alert=True)
+            return
+        care_order_id = callback.data.split(":", 2)[2].strip()
+        if not care_order_id:
+            await callback.answer(i18n.t("patient.care.order.open.denied", _locale()), show_alert=True)
+            return
+        order = await care_commerce_service.get_order(care_order_id)
+        if order is None or order.patient_id != patient_id:
+            await callback.answer(i18n.t("patient.care.order.open.denied", _locale()), show_alert=True)
+            return
+        await _render_care_order_card(
+            callback,
+            actor_id=callback.from_user.id,
+            clinic_id=clinic_id,
+            patient_id=patient_id,
+            care_order_id=care_order_id,
+            mode=CardMode.COMPACT,
         )
         await callback.answer()
 

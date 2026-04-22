@@ -233,9 +233,28 @@ class _CareServiceStub:
         self.list_categories_calls = 0
         self.resolution_by_recommendation_id: dict[str, list[str]] = {"rec_latest": ["prod_1"]}
         self.patient_orders: list[SimpleNamespace] = []
+        self.products: dict[str, SimpleNamespace] = {
+            "prod_1": SimpleNamespace(
+                care_product_id="prod_1",
+                title_key="care.product.aftercare_brush.title",
+                status="active",
+                currency_code="GEL",
+                category="aftercare",
+                sku="AF-BRUSH",
+                price_amount=25,
+            )
+        }
+        self.availability: dict[tuple[str, str], SimpleNamespace] = {
+            ("branch_1", "prod_1"): SimpleNamespace(status="active", free_qty=3)
+        }
+        self.orders: dict[str, SimpleNamespace] = {}
+        self.order_items: dict[str, list[SimpleNamespace]] = {}
+        self.create_order_calls: list[dict[str, object]] = []
+        self.transition_calls: list[tuple[str, str]] = []
         self.repository = SimpleNamespace(
             list_order_items=self._list_order_items,
             get_product=self._get_product,
+            get_catalog_setting=self._get_catalog_setting,
         )
 
     async def list_catalog_categories(self, *, clinic_id: str):
@@ -246,19 +265,64 @@ class _CareServiceStub:
         return []
 
     async def list_patient_orders(self, *, clinic_id: str, patient_id: str):
-        return list(self.patient_orders)
+        rows = [row for row in self.orders.values() if row.patient_id == patient_id and row.clinic_id == clinic_id]
+        rows.sort(key=lambda row: row.updated_at, reverse=True)
+        return rows
 
     async def _list_order_items(self, care_order_id: str):
-        return []
+        return list(self.order_items.get(care_order_id, []))
 
     async def _get_product(self, care_product_id: str):
+        return self.products.get(care_product_id)
+
+    async def _get_catalog_setting(self, *, clinic_id: str, key: str):
         return None
+
+    async def get_product(self, care_product_id: str):
+        return self.products.get(care_product_id)
 
     async def resolve_product_content(self, *, clinic_id: str, product, locale: str, fallback_locale: str):  # noqa: ANN001
         return SimpleNamespace(title=None)
 
     async def get_branch_product_availability(self, *, branch_id: str, care_product_id: str):
-        return None
+        return self.availability.get((branch_id, care_product_id))
+
+    async def compute_free_qty(self, *, branch_id: str, care_product_id: str) -> int:
+        row = self.availability.get((branch_id, care_product_id))
+        return row.free_qty if row is not None else 0
+
+    async def create_order(self, **kwargs):  # noqa: ANN003
+        order_id = f"co_new_{len(self.create_order_calls) + 1}"
+        now = datetime(2026, 4, 22, 12, 0, tzinfo=timezone.utc)
+        order = SimpleNamespace(
+            care_order_id=order_id,
+            clinic_id=kwargs["clinic_id"],
+            patient_id=kwargs["patient_id"],
+            status="created",
+            total_amount=kwargs["items"][0][0].price_amount,
+            currency_code=kwargs["currency_code"],
+            pickup_branch_id=kwargs["pickup_branch_id"],
+            updated_at=now,
+        )
+        self.orders[order_id] = order
+        self.order_items[order_id] = [SimpleNamespace(care_product_id=kwargs["items"][0][0].care_product_id, quantity=1)]
+        self.create_order_calls.append(dict(kwargs))
+        return order
+
+    async def transition_order(self, *, care_order_id: str, to_status: str):
+        self.transition_calls.append((care_order_id, to_status))
+        order = self.orders[care_order_id]
+        order.status = to_status
+        order.updated_at = datetime(2026, 4, 22, 12, 5, tzinfo=timezone.utc)
+        return order
+
+    async def create_reservation(self, *, care_order_id: str, care_product_id: str, branch_id: str, reserved_qty: int):
+        row = self.availability[(branch_id, care_product_id)]
+        row.free_qty -= reserved_qty
+        return SimpleNamespace(status="created")
+
+    async def get_order(self, care_order_id: str):
+        return self.orders.get(care_order_id)
 
     async def resolve_recommendation_target_result(self, *, recommendation_id: str, **kwargs):  # noqa: ANN003
         product_ids = self.resolution_by_recommendation_id.get(recommendation_id, [])
@@ -595,6 +659,83 @@ def test_care_orders_empty_state_includes_browse_catalog_cta() -> None:
     assert "no care reserves or orders" in text
     actions = [button.callback_data for row in markup.inline_keyboard for button in row]
     assert "care:catalog" in actions
+
+
+
+def test_care_reserve_success_panel_includes_current_order_and_orders_ctas() -> None:
+    router, _, _, _, care_service = _build_router(with_recommendations=False, with_care=True)
+    assert care_service is not None
+    callback = _Callback(data="care:reserve:prod_1", user_id=1001)
+
+    asyncio.run(_handler(router, "care_reserve_pick", kind="callback")(callback))
+
+    text, markup = _latest_callback_panel(callback)
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "Reservation created ✅" in text
+    assert "Status: Confirmed" in text
+    assert "careo:open:co_new_1" in callbacks
+    assert "care:orders" in callbacks
+
+
+def test_recommendation_linked_reserve_uses_same_continuity_panel() -> None:
+    router, runtime, _, _, care_service = _build_router(with_recommendations=True, with_care=True)
+    assert care_service is not None
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={
+                "booking_session_id": "",
+                "booking_mode": "new_booking_contact",
+                "reschedule_booking_id": "",
+                "care": {
+                    "selected_category": None,
+                    "category_page": 0,
+                    "recommendation_id": "rec_latest",
+                    "recommendation_type": "aftercare",
+                    "recommendation_reason": "Post-procedure",
+                    "recommendation_page": 0,
+                    "recommendation_products": ["prod_1"],
+                    "recommendation_source_ref": "care.recommendation.rec_latest",
+                    "selected_branch_by_product": {},
+                    "product_page_by_category": {},
+                    "media_product_id": None,
+                    "media_index_by_product": {},
+                    "media_return_mode_by_product": {},
+                    "care_order_page": 0,
+                },
+            },
+        )
+    )
+    callback = _Callback(data="care:reserve:prod_1", user_id=1001)
+
+    asyncio.run(_handler(router, "care_reserve_pick", kind="callback")(callback))
+
+    _, markup = _latest_callback_panel(callback)
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "careo:open:co_new_1" in callbacks
+    assert "care:orders" in callbacks
+    assert care_service.create_order_calls
+    assert care_service.create_order_calls[-1]["recommendation_id"] == "rec_latest"
+
+
+def test_careo_open_callback_is_ownership_safe_and_reuses_canonical_detail() -> None:
+    repo = _RecommendationRepoStub(mapping={1001: "pat_1", 2002: "pat_other"})
+    router, _, _, _, care_service = _build_router(with_recommendations=False, with_care=True, recommendation_repository=repo)
+    assert care_service is not None
+    owner_callback = _Callback(data="care:reserve:prod_1", user_id=1001)
+
+    asyncio.run(_handler(router, "care_reserve_pick", kind="callback")(owner_callback))
+
+    open_callback = _Callback(data="careo:open:co_new_1", user_id=1001)
+    asyncio.run(_handler(router, "care_order_open_callback", kind="callback")(open_callback))
+    owner_text, _ = _latest_callback_panel(open_callback)
+    assert "Order co_new_1" in owner_text
+
+    foreign_callback = _Callback(data="careo:open:co_new_1", user_id=2002)
+    asyncio.run(_handler(router, "care_order_open_callback", kind="callback")(foreign_callback))
+    assert foreign_callback.answers
+    assert "no longer accessible" in foreign_callback.answers[-1]
 
 
 def test_home_hides_optional_actions_when_services_unavailable() -> None:

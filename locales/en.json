@@ -269,7 +269,7 @@
   "patient.care.product.media.gallery": "Gallery item {index}/{total}",
   "patient.care.branch.prompt": "Choose your pickup branch:",
   "patient.care.branch.option": "{branch} · {status}",
-  "patient.care.order.result": "Reservation created ✅\nProduct: {product}\nBranch: {branch_id}\nOrder: {care_order_id}\nOrder status: {status}\nReservation status: {reservation_status}\nNext step: {next_step}",
+  "patient.care.order.result": "Reservation created ✅\nProduct: {product}\nPickup branch: {branch}\nStatus: {status}\nNext: {next_step}",
   "patient.care.order.next_step": "Clinic will prepare your pickup and contact you if needed.",
   "patient.care.orders.repeat.hint": "  /care_order_repeat {care_order_id}",
   "patient.care.orders.open.action": "Open · {care_order_id}",
@@ -546,5 +546,8 @@
   "patient.care.orders.current.label": "Current reserve / order",
   "patient.care.orders.history.label": "History",
   "patient.care.orders.history.empty": "No past orders yet.",
-  "patient.care.orders.empty.browse": "Browse care catalog"
+  "patient.care.orders.empty.browse": "Browse care catalog",
+  "patient.care.order.open_current.action": "Open current order",
+  "patient.care.order.open_orders.action": "My reserves / orders",
+  "patient.care.order.open.denied": "This order is unavailable or no longer accessible."
 }
