@@ -57,11 +57,25 @@ class _Callback:
         self.from_user = SimpleNamespace(id=user_id)
         self.message = _CallbackMessage(message_id=message_id)
         self.answers: list[str] = []
+        self.answer_payloads: list[tuple[str, object | None]] = []
 
     async def answer(self, text: str = "", show_alert: bool = False, reply_markup=None) -> None:
+        self.answer_payloads.append((text, reply_markup))
         if text:
             self.answers.append(text)
         return SimpleNamespace(chat=self.chat, message_id=self.message.message_id)
+
+
+def _latest_callback_panel(callback: _Callback) -> tuple[str, object]:
+    if callback.bot.edits:
+        latest = callback.bot.edits[-1]
+        return latest["text"], latest["reply_markup"]
+    if callback.message.edits:
+        return callback.message.edits[-1]
+    for text, reply_markup in reversed(callback.answer_payloads):
+        if text or reply_markup is not None:
+            return text, reply_markup
+    raise AssertionError("expected edited panel")
 
 
 class _ReminderActions:
@@ -218,10 +232,33 @@ class _CareServiceStub:
     def __init__(self) -> None:
         self.list_categories_calls = 0
         self.resolution_by_recommendation_id: dict[str, list[str]] = {"rec_latest": ["prod_1"]}
+        self.patient_orders: list[SimpleNamespace] = []
+        self.repository = SimpleNamespace(
+            list_order_items=self._list_order_items,
+            get_product=self._get_product,
+        )
 
     async def list_catalog_categories(self, *, clinic_id: str):
         self.list_categories_calls += 1
+        return ["aftercare"]
+
+    async def list_catalog_products_by_category(self, *, clinic_id: str, category: str):
         return []
+
+    async def list_patient_orders(self, *, clinic_id: str, patient_id: str):
+        return list(self.patient_orders)
+
+    async def _list_order_items(self, care_order_id: str):
+        return []
+
+    async def _get_product(self, care_product_id: str):
+        return None
+
+    async def resolve_product_content(self, *, clinic_id: str, product, locale: str, fallback_locale: str):  # noqa: ANN001
+        return SimpleNamespace(title=None)
+
+    async def get_branch_product_availability(self, *, branch_id: str, care_product_id: str):
+        return None
 
     async def resolve_recommendation_target_result(self, *, recommendation_id: str, **kwargs):  # noqa: ANN003
         product_ids = self.resolution_by_recommendation_id.get(recommendation_id, [])
@@ -520,6 +557,44 @@ def test_care_command_and_home_callback_share_entry_when_available() -> None:
 
     assert care_service is not None
     assert care_service.list_categories_calls == 2
+
+
+def test_care_entry_surface_contains_callback_to_orders_panel() -> None:
+    router, _, _, _, _ = _build_router(with_recommendations=False, with_care=True)
+    callback = _Callback(data="phome:care", user_id=1001)
+
+    asyncio.run(_handler(router, "patient_home_care", kind="callback")(callback))
+
+    _, markup = _latest_callback_panel(callback)
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "care:orders" in callbacks
+
+
+def test_care_orders_command_and_callback_share_canonical_orders_surface() -> None:
+    router, _, _, _, care_service = _build_router(with_recommendations=False, with_care=True)
+    assert care_service is not None
+    message = _Message(text="/care_orders", user_id=1001)
+    callback = _Callback(data="care:orders", user_id=1001)
+
+    asyncio.run(_handler(router, "care_orders")(message))
+    asyncio.run(_handler(router, "care_orders_callback", kind="callback")(callback))
+
+    message_text, _ = message.answers[-1]
+    callback_text, _ = _latest_callback_panel(callback)
+    assert message_text == callback_text
+    assert "no care reserves or orders" in message_text
+
+
+def test_care_orders_empty_state_includes_browse_catalog_cta() -> None:
+    router, _, _, _, _ = _build_router(with_recommendations=False, with_care=True)
+    callback = _Callback(data="care:orders", user_id=1001)
+
+    asyncio.run(_handler(router, "care_orders_callback", kind="callback")(callback))
+
+    text, markup = _latest_callback_panel(callback)
+    assert "no care reserves or orders" in text
+    actions = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "care:catalog" in actions
 
 
 def test_home_hides_optional_actions_when_services_unavailable() -> None:

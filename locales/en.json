@@ -222,8 +222,8 @@
   "patient.care.order.create.usage": "Usage: /care_order_create <recommendation_id> <care_product_id> <pickup_branch_id>",
   "patient.care.order.product_not_linked": "This product is not linked to the selected recommendation.",
   "patient.care.order.created": "Care order created: {care_order_id} (status: {status}, pickup branch: {branch_id}).",
-  "patient.care.orders.title": "Your care orders:",
-  "patient.care.orders.empty": "You have no care orders yet.",
+  "patient.care.orders.title": "My care reserves and orders",
+  "patient.care.orders.empty": "You have no care reserves or orders yet.",
   "patient.care.orders.item": "• {care_order_id} · {status} · {amount} {currency} · branch {branch_id}",
   "admin.care.orders.title": "Pending care orders:",
   "admin.care.orders.empty": "No pending care orders.",
@@ -541,5 +541,10 @@
   "patient.booking.reschedule.complete.success": "Your booking was rescheduled successfully.",
   "patient.booking.reschedule.complete.slot_unavailable": "This time is no longer available. Please choose another slot.",
   "patient.booking.reschedule.complete.conflict": "This slot was just taken. Please choose another time.",
-  "patient.booking.reschedule.complete.unavailable": "We could not complete this reschedule right now. Please try another slot."
+  "patient.booking.reschedule.complete.unavailable": "We could not complete this reschedule right now. Please try another slot.",
+  "patient.care.orders.entry.action": "My reserves / orders",
+  "patient.care.orders.current.label": "Current reserve / order",
+  "patient.care.orders.history.label": "History",
+  "patient.care.orders.history.empty": "No past orders yet.",
+  "patient.care.orders.empty.browse": "Browse care catalog"
 }

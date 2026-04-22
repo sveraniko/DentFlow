@@ -1,9 +1,12 @@
 from pathlib import Path
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from app.common.i18n import I18nService
 from app.interfaces.bots.patient.router import (
     _CompactCareOrderRowCard,
     _compose_care_order_object_list_text,
+    _split_patient_orders_for_surface,
 )
 from app.interfaces.cards import (
     CareOrderCardAdapter,
@@ -215,3 +218,18 @@ def test_reserve_again_localization_stays_object_action_oriented() -> None:
     assert "Back to orders" in i18n.t("patient.care.orders.repeat.back_to_orders", "en")
     assert "Status: {status}" in i18n.t("patient.care.orders.repeat.result", "en")
     assert "Order {care_order_id}" in i18n.t("patient.care.orders.object.detail", "en")
+
+
+def test_patient_care_orders_surface_prioritizes_live_before_history() -> None:
+    now = datetime(2026, 4, 22, 12, 0, tzinfo=timezone.utc)
+    rows = [
+        SimpleNamespace(care_order_id="co_terminal", status="fulfilled", updated_at=now),
+        SimpleNamespace(care_order_id="co_live_new", status="ready_for_pickup", updated_at=now.replace(hour=13)),
+        SimpleNamespace(care_order_id="co_live_old", status="confirmed", updated_at=now.replace(hour=11)),
+        SimpleNamespace(care_order_id="co_canceled", status="canceled", updated_at=now.replace(hour=10)),
+    ]
+
+    live_rows, history_rows = _split_patient_orders_for_surface(rows)
+
+    assert [row.care_order_id for row in live_rows] == ["co_live_new", "co_live_old"]
+    assert [row.care_order_id for row in history_rows] == ["co_terminal", "co_canceled"]
