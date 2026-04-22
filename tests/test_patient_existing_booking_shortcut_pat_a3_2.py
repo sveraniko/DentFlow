@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.application.booking.orchestration_outcomes import OrchestrationSuccess
-from app.application.booking.telegram_flow import BookingResumePanel, ReturningPatientStartResult
+from app.application.booking.telegram_flow import BookingResumePanel, RecentBookingPrefill, ReturningPatientStartResult
 from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
 from app.common.i18n import I18nService
 from app.domain.booking import AvailabilitySlot, Booking, BookingSession
@@ -153,6 +153,8 @@ class _BookingFlowStub:
         self.request_reschedule_calls = 0
         self.start_or_resume_returning_calls = 0
         self.last_returning_kwargs: dict[str, object] | None = None
+        self.recent_prefill: RecentBookingPrefill | None = None
+        self.apply_prefill_calls = 0
 
     async def start_or_resume_returning_patient_booking(self, **kwargs):  # noqa: ANN003
         self.start_or_resume_returning_calls += 1
@@ -173,6 +175,22 @@ class _BookingFlowStub:
         self.session = session
         return ReturningPatientStartResult(booking_session=self.session, trusted_shortcut_applied=bool(trusted_patient_id and trusted_phone_snapshot))
 
+    async def get_recent_booking_prefill(self, **kwargs):  # noqa: ANN003
+        return self.recent_prefill
+
+    async def apply_recent_booking_prefill(self, **kwargs):  # noqa: ANN003
+        self.apply_prefill_calls += 1
+        self.session = BookingSession(
+            **{
+                **asdict(self.session),
+                "service_id": kwargs["service_id"],
+                "branch_id": kwargs["branch_id"],
+                "doctor_preference_type": "specific",
+                "doctor_id": kwargs["doctor_id"],
+            }
+        )
+        return self.session
+
     async def start_or_resume_existing_booking_session(self, **kwargs):  # noqa: ANN003
         self.start_or_resume_existing_calls += 1
         return self.session
@@ -191,6 +209,9 @@ class _BookingFlowStub:
         panel_key = "review_finalize" if self.session.selected_slot_id and self.session.contact_phone_snapshot and self.session.resolved_patient_id else "contact_collection"
         return BookingResumePanel(panel_key=panel_key, booking_session=self.session)
 
+    async def validate_active_session_callback(self, **kwargs):  # noqa: ANN003
+        return True
+
     async def start_existing_booking_control_for_booking(self, **kwargs):  # noqa: ANN003
         session = SimpleNamespace(booking_session_id="sess_rem_1")
         return SimpleNamespace(kind="ready", booking=self.booking, booking_session=session)
@@ -204,6 +225,12 @@ class _BookingFlowStub:
 
     async def get_availability_slot(self, *, slot_id: str):
         return self.slot if slot_id == self.slot.slot_id else None
+
+    def list_services(self, *, clinic_id: str):
+        return [SimpleNamespace(code="CONSULT", service_id="service_consult")]
+
+    async def list_slots_for_session(self, **kwargs):  # noqa: ANN003
+        return [self.slot]
 
     def build_booking_snapshot(self, **kwargs):  # noqa: ANN003
         from app.interfaces.cards import BookingRuntimeSnapshot
@@ -430,6 +457,14 @@ def test_contact_input_outside_contact_prompt_mode_is_ignored() -> None:
 
 def test_book_entry_uses_trusted_identity_and_phone_to_skip_contact_prompt() -> None:
     router, runtime, booking_flow, _ = _build_router(recommendation_repository=_RepoUniqueWithPhone())
+    booking_flow.recent_prefill = RecentBookingPrefill(
+        service_id="service_consult",
+        doctor_id="doctor_1",
+        branch_id="branch_1",
+        service_label="Consultation",
+        doctor_label="Dr One",
+        branch_label="Main Branch",
+    )
 
     message = _Message(text="/book", user_id=1001)
     asyncio.run(_handler(router, "book_entry")(message))
@@ -440,8 +475,54 @@ def test_book_entry_uses_trusted_identity_and_phone_to_skip_contact_prompt() -> 
     assert booking_flow.last_returning_kwargs.get("trusted_phone_snapshot") == "+15550101099"
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
     assert state["booking_mode"] == "new_booking_flow"
+    assert state["quick_booking_prefill"]["service_id"] == "service_consult"
     assert message.answers
-    assert "Review your booking before confirming" in message.answers[-1][0]
+    assert "Quick booking suggestion based on your recent visit" in message.answers[-1][0]
+
+
+def test_quick_book_repeat_prefills_session_and_opens_slot_selection() -> None:
+    router, runtime, booking_flow, _ = _build_router(recommendation_repository=_RepoUniqueWithPhone())
+    booking_flow.recent_prefill = RecentBookingPrefill(
+        service_id="service_consult",
+        doctor_id="doctor_1",
+        branch_id="branch_1",
+        service_label="Consultation",
+        doctor_label="Dr One",
+        branch_label="Main Branch",
+    )
+    message = _Message(text="/book", user_id=1001)
+    asyncio.run(_handler(router, "book_entry")(message))
+
+    callback = _Callback(data="qbook:repeat:sess_1", user_id=1001)
+    asyncio.run(_handler(router, "quick_book_repeat", kind="callback")(callback))
+
+    assert booking_flow.apply_prefill_calls == 1
+    assert callback.bot.edits
+    assert "Choose one of the nearest available slots" in callback.bot.edits[-1]["text"]
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["quick_booking_prefill"] == {}
+
+
+def test_quick_book_other_falls_back_to_service_selection() -> None:
+    router, runtime, booking_flow, _ = _build_router(recommendation_repository=_RepoUniqueWithPhone())
+    booking_flow.recent_prefill = RecentBookingPrefill(
+        service_id="service_consult",
+        doctor_id="doctor_1",
+        branch_id="branch_1",
+        service_label="Consultation",
+        doctor_label="Dr One",
+        branch_label="Main Branch",
+    )
+    message = _Message(text="/book", user_id=1001)
+    asyncio.run(_handler(router, "book_entry")(message))
+
+    callback = _Callback(data="qbook:other:sess_1", user_id=1001)
+    asyncio.run(_handler(router, "quick_book_other", kind="callback")(callback))
+
+    assert callback.bot.edits
+    assert "Choose a service to begin booking." in callback.bot.edits[-1]["text"]
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["quick_booking_prefill"] == {}
 
 
 def test_book_entry_with_trusted_identity_without_phone_falls_back_to_contact_prompt() -> None:
@@ -462,6 +543,14 @@ def test_book_entry_with_trusted_identity_without_phone_falls_back_to_contact_pr
 
 def test_phome_book_has_parity_with_book_for_trusted_identity_and_phone() -> None:
     router, runtime, booking_flow, _ = _build_router(recommendation_repository=_RepoUniqueWithPhone())
+    booking_flow.recent_prefill = RecentBookingPrefill(
+        service_id="service_consult",
+        doctor_id="doctor_1",
+        branch_id="branch_1",
+        service_label="Consultation",
+        doctor_label="Dr One",
+        branch_label="Main Branch",
+    )
 
     callback = _Callback(data="phome:book", user_id=1001)
     asyncio.run(_handler(router, "patient_home_book", kind="callback")(callback))
@@ -473,7 +562,7 @@ def test_phome_book_has_parity_with_book_for_trusted_identity_and_phone() -> Non
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
     assert state["booking_mode"] == "new_booking_flow"
     assert callback.answers
-    assert "Review your booking before confirming" in callback.answers[-1]
+    assert "Quick booking suggestion based on your recent visit" in callback.answers[-1]
 
 
 def test_book_entry_without_trusted_patient_falls_back_to_contact_prompt() -> None:

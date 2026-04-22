@@ -85,6 +85,16 @@ class ReturningPatientStartResult:
 
 
 @dataclass(slots=True, frozen=True)
+class RecentBookingPrefill:
+    service_id: str
+    doctor_id: str
+    branch_id: str
+    service_label: str | None = None
+    doctor_label: str | None = None
+    branch_label: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
 class ExistingBookingControlValidationResult:
     kind: str
     booking_session: BookingSession | None = None
@@ -175,6 +185,49 @@ class BookingPatientFlowService:
             return ReturningPatientStartResult(booking_session=attached.entity, trusted_shortcut_applied=False)
 
         return ReturningPatientStartResult(booking_session=hydrated.entity, trusted_shortcut_applied=True)
+
+    async def get_recent_booking_prefill(self, *, clinic_id: str, patient_id: str) -> RecentBookingPrefill | None:
+        bookings = await self.reads.list_bookings_by_patient(patient_id=patient_id)
+        relevant = [
+            row
+            for row in bookings
+            if row.clinic_id == clinic_id and row.service_id and row.doctor_id and row.branch_id and row.scheduled_start_at is not None
+        ]
+        if not relevant:
+            return None
+        latest = sorted(relevant, key=lambda row: row.scheduled_start_at, reverse=True)[0]
+        service = self.reference.get_service(clinic_id, latest.service_id)
+        doctor = self.reference.get_doctor(clinic_id, latest.doctor_id)
+        branch = self.reference.get_branch(clinic_id, latest.branch_id)
+        if service is None or doctor is None or branch is None or not doctor.public_booking_enabled:
+            return None
+        return RecentBookingPrefill(
+            service_id=latest.service_id,
+            doctor_id=latest.doctor_id,
+            branch_id=latest.branch_id,
+            service_label=service.code,
+            doctor_label=doctor.display_name,
+            branch_label=branch.display_name,
+        )
+
+    async def apply_recent_booking_prefill(
+        self,
+        *,
+        booking_session_id: str,
+        service_id: str,
+        doctor_id: str,
+        branch_id: str,
+    ) -> BookingSession | None:
+        updated = await self.orchestration.update_session_context(
+            booking_session_id=booking_session_id,
+            service_id=service_id,
+            branch_id=branch_id,
+            doctor_preference_type="specific",
+            doctor_id=doctor_id,
+        )
+        if not isinstance(updated, OrchestrationSuccess):
+            return None
+        return updated.entity
 
     async def start_or_resume_existing_booking_session(self, *, clinic_id: str, telegram_user_id: int) -> BookingSession:
         latest = await self._latest_active_session(

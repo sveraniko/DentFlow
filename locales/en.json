@@ -552,5 +552,9 @@
   "patient.care.orders.empty.browse": "Browse care catalog",
   "patient.care.order.open_current.action": "Open current order",
   "patient.care.order.open_orders.action": "My reserves / orders",
-  "patient.care.order.open.denied": "This order is unavailable or no longer accessible."
+  "patient.care.order.open.denied": "This order is unavailable or no longer accessible.",
+  "patient.booking.quick.panel": "Quick booking suggestion based on your recent visit:\nService: {service}\nDoctor: {doctor}\nBranch: {branch}",
+  "patient.booking.quick.repeat": "Repeat previous service",
+  "patient.booking.quick.same_doctor": "Use same doctor",
+  "patient.booking.quick.other": "Choose something else"
 }

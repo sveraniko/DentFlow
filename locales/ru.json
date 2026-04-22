@@ -552,5 +552,9 @@
   "patient.care.orders.empty.browse": "Перейти в каталог ухода",
   "patient.care.order.open_current.action": "Открыть текущий заказ",
   "patient.care.order.open_orders.action": "Мои резервы / заказы",
-  "patient.care.order.open.denied": "Этот заказ недоступен или больше не открыт для вас."
+  "patient.care.order.open.denied": "Этот заказ недоступен или больше не открыт для вас.",
+  "patient.booking.quick.panel": "Быстрая запись на основе последнего визита:\nУслуга: {service}\nВрач: {doctor}\nФилиал: {branch}",
+  "patient.booking.quick.repeat": "Повторить прошлую услугу",
+  "patient.booking.quick.same_doctor": "К тому же врачу",
+  "patient.booking.quick.other": "Выбрать другое"
 }
