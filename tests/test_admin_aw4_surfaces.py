@@ -21,8 +21,8 @@ from app.domain.access_identity.models import (
     TelegramBinding,
 )
 from app.interfaces.bots.admin.router import make_router
-from app.interfaces.cards import CardCallbackCodec, CardRuntimeCoordinator, CardRuntimeStateStore
-from app.interfaces.cards.models import SourceContext
+from app.interfaces.cards import CardCallback, CardCallbackCodec, CardRuntimeCoordinator, CardRuntimeStateStore
+from app.interfaces.cards.models import CardAction, CardMode, CardProfile, EntityType, SourceContext
 from app.interfaces.cards.runtime_state import InMemoryRedis
 
 
@@ -85,6 +85,7 @@ class _BookingFlow:
     def __init__(self) -> None:
         self._sessions: dict[str, SimpleNamespace] = {}
         self._issue_states: dict[tuple[str, str], str] = {}
+        self._bookings_by_patient: dict[str, list[SimpleNamespace]] = {"p1": [self._booking()]}
         self.reads = self
         self.orchestration = SimpleNamespace(
             confirm_booking=self._ok,
@@ -98,6 +99,9 @@ class _BookingFlow:
 
     async def get_booking(self, booking_id: str):
         return self._booking(booking_id=booking_id)
+
+    async def list_bookings_by_patient(self, *, patient_id: str):
+        return list(self._bookings_by_patient.get(patient_id, []))
 
     async def start_admin_reschedule_session(self, *, clinic_id: str, telegram_user_id: int, booking_id: str):
         session_id = f"sess_{booking_id}"
@@ -327,11 +331,12 @@ def _router():
     runtime = CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=InMemoryRedis()))
     codec = CardCallbackCodec(runtime=runtime)
     recovery = _ReminderRecovery()
+    booking_flow = _BookingFlow()
     return make_router(
         i18n,
         _access(),
         _Reference(),
-        _BookingFlow(),
+        booking_flow,
         search_service=_Search(),
         stt_service=SimpleNamespace(),
         voice_mode_store=SimpleNamespace(),
@@ -345,6 +350,42 @@ def _router():
         card_runtime=runtime,
         card_callback_codec=codec,
     ), codec, recovery
+
+
+def _router_with_flow():
+    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+    runtime = CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=InMemoryRedis()))
+    codec = CardCallbackCodec(runtime=runtime)
+    recovery = _ReminderRecovery()
+    booking_flow = _BookingFlow()
+    router = make_router(
+        i18n,
+        _access(),
+        _Reference(),
+        booking_flow,
+        search_service=_Search(),
+        stt_service=SimpleNamespace(),
+        voice_mode_store=SimpleNamespace(),
+        care_commerce_service=_CareService(),
+        admin_workdesk=_Workdesk(),
+        reminder_recovery=recovery,
+        default_locale="en",
+        max_voice_duration_sec=60,
+        max_voice_file_size_bytes=1024,
+        voice_mode_ttl_sec=30,
+        card_runtime=runtime,
+        card_callback_codec=codec,
+    )
+    return router, codec, recovery, booking_flow
+
+
+def _booking_button(markup, *, text: str) -> str:
+    return next(
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+        if button.text == text
+    )
 
 
 def _handler(router, name: str, kind: str = "message"):
@@ -368,6 +409,56 @@ def test_admin_patients_search_and_open_card() -> None:
     callback = _Callback(cb)
     asyncio.run(_handler(router, "admin_runtime_card_callback", kind="callback")(callback))
     assert any("Jane Roe" in row[0] for row in callback.message.edits)
+    panel_text, panel_markup = callback.message.edits[-1]
+    assert "Jane Roe" in panel_text
+    assert panel_markup is not None
+    bookings_cb = _booking_button(panel_markup, text="Open active booking")
+    open_booking = _Callback(bookings_cb)
+    asyncio.run(_handler(router, "admin_runtime_card_callback", kind="callback")(open_booking))
+    opened_text, opened_markup = open_booking.message.edits[-1]
+    assert "Jane Roe" in opened_text
+    assert "Consultation" in opened_text
+    assert opened_markup is not None
+
+
+def test_admin_patient_card_open_active_booking_no_match_is_bounded() -> None:
+    router, _, _, booking_flow = _router_with_flow()
+    msg = _Message("/admin_patients jane")
+    asyncio.run(_handler(router, "admin_patients")(msg))
+    open_patient_cb = msg.answers[-1][1].inline_keyboard[0][0].callback_data
+    open_patient = _Callback(open_patient_cb)
+    asyncio.run(_handler(router, "admin_runtime_card_callback", kind="callback")(open_patient))
+    assert open_patient.message.edits
+
+    booking_flow._bookings_by_patient["p1"] = []
+
+    panel_markup = open_patient.message.edits[-1][1]
+    bookings_cb = _booking_button(panel_markup, text="Open active booking")
+    request_open = _Callback(bookings_cb)
+    asyncio.run(_handler(router, "admin_runtime_card_callback", kind="callback")(request_open))
+    assert any("No active or upcoming booking found" in answer for answer in request_open.answers)
+
+
+def test_admin_patient_card_handcrafted_stale_booking_callback_is_bounded() -> None:
+    router, codec, _ = _router()
+    stale_cb = asyncio.run(
+        codec.encode(
+            CardCallback(
+                profile=CardProfile.PATIENT,
+                entity_type=EntityType.PATIENT,
+                entity_id="p1",
+                action=CardAction.BOOKINGS,
+                mode=CardMode.EXPANDED,
+                source_context=SourceContext.ADMIN_PATIENTS,
+                source_ref="admin_patients:jane",
+                page_or_index="open_patient",
+                state_token="stale",
+            )
+        )
+    )
+    callback = _Callback(stale_cb)
+    asyncio.run(_handler(router, "admin_runtime_card_callback", kind="callback")(callback))
+    assert any("outdated" in answer for answer in callback.answers)
 
 
 def test_admin_care_pickups_queue_and_action() -> None:
