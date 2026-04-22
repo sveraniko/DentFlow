@@ -245,3 +245,10 @@ def test_care_order_compact_object_uses_unified_card_grammar() -> None:
     assert expanded_shell.mode == CardMode.EXPANDED
     assert any("Timeline:" in line for line in expanded_shell.detail_lines)
     assert any(action.action == CardAction.BACK for action in expanded_shell.actions)
+
+
+def test_reserve_success_continuity_actions_are_localized() -> None:
+    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+    assert "Open current order" == i18n.t("patient.care.order.open_current.action", "en")
+    assert "My reserves / orders" == i18n.t("patient.care.order.open_orders.action", "en")
+    assert "Открыть текущий заказ" == i18n.t("patient.care.order.open_current.action", "ru")
