@@ -27,7 +27,7 @@ class _Message:
         self.from_user = SimpleNamespace(id=user_id)
         self.answers: list[str] = []
 
-    async def answer(self, text: str) -> None:
+    async def answer(self, text: str, reply_markup=None) -> None:
         self.answers.append(text)
 
 
@@ -114,7 +114,7 @@ def test_admin_search_doctor_and_service_stop_after_failed_guard() -> None:
         max_voice_file_size_bytes=2_000_000,
         voice_mode_ttl_sec=45,
     )
-    for command_name, text in [("search_doctor", "/search_doctor ortho"), ("search_service", "/search_service clean")]:
+    for command_name, text in [("search_doctor", "/search_doctor ortho"), ("search_service_handler", "/search_service clean")]:
         cb = _handler(router, command_name)
         message = _Message(text)
         asyncio.run(cb(message))

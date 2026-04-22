@@ -388,6 +388,18 @@ def _booking_button(markup, *, text: str) -> str:
     )
 
 
+def _booking_action_callback(markup, codec: CardCallbackCodec, *, page_or_index: str) -> str:
+    for row in markup.inline_keyboard:
+        for button in row:
+            cb = button.callback_data
+            if not cb:
+                continue
+            decoded = asyncio.run(codec.decode(cb))
+            if decoded.page_or_index == page_or_index:
+                return cb
+    raise AssertionError(page_or_index)
+
+
 def _handler(router, name: str, kind: str = "message"):
     handlers = router.message.handlers if kind == "message" else router.callback_query.handlers
     for h in handlers:
@@ -419,6 +431,117 @@ def test_admin_patients_search_and_open_card() -> None:
     assert "Jane Roe" in opened_text
     assert "Consultation" in opened_text
     assert opened_markup is not None
+
+
+def test_search_patient_is_harmonized_with_admin_patients_continuity() -> None:
+    router, codec, _ = _router()
+    admin_msg = _Message("/admin_patients jane")
+    asyncio.run(_handler(router, "admin_patients")(admin_msg))
+    admin_text, admin_keyboard = admin_msg.answers[-1]
+    search_msg = _Message("/search_patient jane")
+    asyncio.run(_handler(router, "search_patient")(search_msg))
+    search_text, search_keyboard = search_msg.answers[-1]
+    assert admin_text == search_text
+    assert search_keyboard is not None
+    search_open_cb = search_keyboard.inline_keyboard[0][0].callback_data
+    decoded = asyncio.run(codec.decode(search_open_cb))
+    assert decoded.source_context == SourceContext.ADMIN_PATIENTS
+    assert decoded.source_ref == "search_patient:jane"
+
+    callback = _Callback(search_open_cb)
+    asyncio.run(_handler(router, "admin_runtime_card_callback", kind="callback")(callback))
+    panel_text, panel_markup = callback.message.edits[-1]
+    assert "Jane Roe" in panel_text
+    assert panel_markup is not None
+
+
+def test_patient_origin_booking_back_and_actions_keep_patient_continuity() -> None:
+    router, codec, _ = _router()
+    msg = _Message("/search_patient jane")
+    asyncio.run(_handler(router, "search_patient")(msg))
+    open_patient_cb = msg.answers[-1][1].inline_keyboard[0][0].callback_data
+    open_patient = _Callback(open_patient_cb)
+    asyncio.run(_handler(router, "admin_runtime_card_callback", kind="callback")(open_patient))
+    patient_panel_text, patient_panel_markup = open_patient.message.edits[-1]
+    assert "Jane Roe" in patient_panel_text
+    assert patient_panel_markup is not None
+
+    open_booking_cb = _booking_button(patient_panel_markup, text="Open active booking")
+    open_booking = _Callback(open_booking_cb)
+    asyncio.run(_handler(router, "admin_runtime_card_callback", kind="callback")(open_booking))
+    booking_text, booking_markup = open_booking.message.edits[-1]
+    assert "Consultation" in booking_text
+    assert booking_markup is not None
+
+    for page_or_index in ("confirm", "cancel", "reschedule"):
+        action_cb = _booking_action_callback(booking_markup, codec, page_or_index=page_or_index)
+        decoded = asyncio.run(codec.decode(action_cb))
+        assert decoded.source_context == SourceContext.ADMIN_PATIENTS
+        assert decoded.source_ref == "search_patient:jane|patient:p1"
+        action = _Callback(action_cb)
+        asyncio.run(_handler(router, "admin_runtime_card_callback", kind="callback")(action))
+        action_text_out, action_markup_out = action.message.edits[-1]
+        assert "Jane Roe" in action_text_out
+        assert action_markup_out is not None
+
+    open_booking_decoded = asyncio.run(codec.decode(open_booking_cb))
+    checked_in_cb = asyncio.run(
+        codec.encode(
+            CardCallback(
+                profile=CardProfile.BOOKING,
+                entity_type=EntityType.BOOKING,
+                entity_id=open_booking_decoded.entity_id,
+                action=CardAction.CHECKED_IN,
+                mode=CardMode.EXPANDED,
+                source_context=open_booking_decoded.source_context,
+                source_ref=open_booking_decoded.source_ref,
+                page_or_index="checked_in",
+                state_token=open_booking_decoded.state_token,
+            )
+        )
+    )
+    checked_in = _Callback(checked_in_cb)
+    asyncio.run(_handler(router, "admin_runtime_card_callback", kind="callback")(checked_in))
+    checked_text, checked_markup = checked_in.message.edits[-1]
+    assert "Jane Roe" in checked_text
+    assert checked_markup is not None
+
+    back_cb = _booking_button(booking_markup, text="Back")
+    back = _Callback(back_cb)
+    asyncio.run(_handler(router, "admin_runtime_card_callback", kind="callback")(back))
+    back_panel_text, back_panel_markup = back.message.edits[-1]
+    assert "Jane Roe" in back_panel_text
+    assert back_panel_markup is not None
+
+    patient_back_cb = _booking_button(back_panel_markup, text="Back")
+    patient_back = _Callback(patient_back_cb)
+    asyncio.run(_handler(router, "admin_runtime_card_callback", kind="callback")(patient_back))
+    queue_text, queue_markup = patient_back.message.edits[-1]
+    assert "Patients" in queue_text
+    assert "Jane Roe" in queue_text
+    assert queue_markup is not None
+
+
+def test_patient_origin_booking_back_callback_stale_token_is_bounded() -> None:
+    router, codec, _ = _router()
+    stale_back_cb = asyncio.run(
+        codec.encode(
+            CardCallback(
+                profile=CardProfile.BOOKING,
+                entity_type=EntityType.BOOKING,
+                entity_id="b1",
+                action=CardAction.BACK,
+                mode=CardMode.EXPANDED,
+                source_context=SourceContext.ADMIN_PATIENTS,
+                source_ref="search_patient:jane|patient:p1",
+                page_or_index="patients_open:p1",
+                state_token="stale",
+            )
+        )
+    )
+    callback = _Callback(stale_back_cb)
+    asyncio.run(_handler(router, "admin_runtime_card_callback", kind="callback")(callback))
+    assert any("outdated" in answer for answer in callback.answers)
 
 
 def test_admin_patient_card_open_active_booking_no_match_is_bounded() -> None:
