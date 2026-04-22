@@ -112,6 +112,13 @@ class _BookingFlowStub:
     async def start_or_resume_session(self, **kwargs):  # noqa: ANN003
         return self.session
 
+    async def start_or_resume_returning_patient_booking(self, **kwargs):  # noqa: ANN003
+        session = await self.start_or_resume_session(**kwargs)
+        from types import SimpleNamespace
+
+        return SimpleNamespace(booking_session=session, trusted_shortcut_applied=False)
+
+
     async def determine_resume_panel(self, **kwargs):  # noqa: ANN003
         return BookingResumePanel(panel_key="contact_collection", booking_session=self.session)
 

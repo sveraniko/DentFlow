@@ -210,6 +210,27 @@ class DbRecommendationRepository:
         )
         return [str(row["patient_id"]) for row in rows]
 
+    async def find_primary_phone_by_patient(self, *, clinic_id: str, patient_id: str) -> str | None:
+        row = await _fetch_one(
+            self._db_config,
+            """
+            SELECT p.contact_value
+            FROM core_patient.patient_contacts p
+            JOIN core_patient.patients cp ON cp.patient_id=p.patient_id
+            WHERE cp.clinic_id=:clinic_id
+              AND p.patient_id=:patient_id
+              AND p.contact_type='phone'
+              AND p.is_active=TRUE
+            ORDER BY p.is_primary DESC, p.updated_at DESC, p.created_at DESC
+            LIMIT 1
+            """,
+            {"clinic_id": clinic_id, "patient_id": patient_id},
+        )
+        if row is None:
+            return None
+        value = str(row.get("contact_value") or "").strip()
+        return value or None
+
     async def find_telegram_user_ids_by_patient(self, *, clinic_id: str, patient_id: str) -> list[int]:
         rows = await _fetch_all(
             self._db_config,

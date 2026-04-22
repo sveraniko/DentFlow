@@ -142,6 +142,13 @@ class _BookingFlowStub:
         self.start_or_resume_session_calls += 1
         return SimpleNamespace(booking_session_id="sess_new_booking_1")
 
+    async def start_or_resume_returning_patient_booking(self, **kwargs):  # noqa: ANN003
+        session = await self.start_or_resume_session(**kwargs)
+        from types import SimpleNamespace
+
+        return SimpleNamespace(booking_session=session, trusted_shortcut_applied=False)
+
+
     async def start_or_resume_existing_booking_session(self, **kwargs):  # noqa: ANN003
         self.start_or_resume_existing_booking_calls += 1
         return SimpleNamespace(booking_session_id="sess_existing_lookup_1")
