@@ -277,6 +277,94 @@ def test_start_or_resume_returning_patient_booking_without_phone_keeps_default_s
     assert started.booking_session.resolved_patient_id is None
     assert started.booking_session.contact_phone_snapshot is None
 
+
+def test_start_or_resume_returning_patient_booking_keeps_existing_hydrated_active_session_unchanged() -> None:
+    flow, repo, _ = _build_flow(finder_rows=[])
+    now = datetime(2026, 4, 22, 12, 0, tzinfo=timezone.utc)
+    existing = BookingSession(
+        booking_session_id="sess_active_1",
+        clinic_id="clinic_main",
+        branch_id="branch_1",
+        telegram_user_id=999,
+        resolved_patient_id="pat_existing",
+        status="in_progress",
+        route_type="service_first",
+        service_id="service_consult",
+        urgency_type=None,
+        requested_date_type=None,
+        requested_date=None,
+        time_window=None,
+        doctor_preference_type="any",
+        doctor_id=None,
+        doctor_code_raw=None,
+        selected_slot_id="slot_1",
+        selected_hold_id=None,
+        contact_phone_snapshot="+15550101111",
+        notes=None,
+        expires_at=now + timedelta(hours=1),
+        created_at=now,
+        updated_at=now,
+    )
+    repo.sessions[existing.booking_session_id] = existing
+
+    resumed = asyncio.run(
+        flow.start_or_resume_returning_patient_booking(
+            clinic_id="clinic_main",
+            telegram_user_id=999,
+            trusted_patient_id="pat_trusted_new",
+            trusted_phone_snapshot="+15550102222",
+        )
+    )
+
+    assert resumed.trusted_shortcut_applied is False
+    assert resumed.booking_session.booking_session_id == "sess_active_1"
+    assert resumed.booking_session.resolved_patient_id == "pat_existing"
+    assert resumed.booking_session.contact_phone_snapshot == "+15550101111"
+
+
+def test_start_or_resume_returning_patient_booking_keeps_existing_non_hydrated_active_session_unchanged() -> None:
+    flow, repo, _ = _build_flow(finder_rows=[])
+    now = datetime(2026, 4, 22, 12, 0, tzinfo=timezone.utc)
+    existing = BookingSession(
+        booking_session_id="sess_active_2",
+        clinic_id="clinic_main",
+        branch_id="branch_1",
+        telegram_user_id=999,
+        resolved_patient_id=None,
+        status="awaiting_contact_confirmation",
+        route_type="service_first",
+        service_id="service_consult",
+        urgency_type=None,
+        requested_date_type=None,
+        requested_date=None,
+        time_window=None,
+        doctor_preference_type="any",
+        doctor_id=None,
+        doctor_code_raw=None,
+        selected_slot_id="slot_1",
+        selected_hold_id=None,
+        contact_phone_snapshot=None,
+        notes=None,
+        expires_at=now + timedelta(hours=1),
+        created_at=now,
+        updated_at=now,
+    )
+    repo.sessions[existing.booking_session_id] = existing
+
+    resumed = asyncio.run(
+        flow.start_or_resume_returning_patient_booking(
+            clinic_id="clinic_main",
+            telegram_user_id=999,
+            trusted_patient_id="pat_trusted_new",
+            trusted_phone_snapshot="+15550102222",
+        )
+    )
+
+    assert resumed.trusted_shortcut_applied is False
+    assert resumed.booking_session.booking_session_id == "sess_active_2"
+    assert resumed.booking_session.resolved_patient_id is None
+    assert resumed.booking_session.contact_phone_snapshot is None
+
 def test_happy_path_with_no_match_creates_canonical_patient_and_finalizes() -> None:
     flow, repo, creator = _build_flow(finder_rows=[])
     session = asyncio.run(flow.start_or_resume_session(clinic_id="clinic_main", telegram_user_id=999))

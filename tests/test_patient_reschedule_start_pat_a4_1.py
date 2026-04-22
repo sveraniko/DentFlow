@@ -113,6 +113,7 @@ class _BookingFlowStub:
         self.start_patient_reschedule_calls = 0
         self.start_existing_booking_calls = 0
         self.start_or_resume_session_calls = 0
+        self.start_or_resume_returning_calls = 0
         self.start_or_resume_existing_booking_calls = 0
         self.allowed_route_type_checks: list[frozenset[str] | None] = []
         self.reschedule_validation_ok = True
@@ -143,6 +144,7 @@ class _BookingFlowStub:
         return SimpleNamespace(booking_session_id="sess_new_booking_1")
 
     async def start_or_resume_returning_patient_booking(self, **kwargs):  # noqa: ANN003
+        self.start_or_resume_returning_calls += 1
         session = await self.start_or_resume_session(**kwargs)
         from types import SimpleNamespace
 
@@ -360,6 +362,7 @@ def test_active_reschedule_session_resume_from_book_returns_to_reschedule_panel(
     asyncio.run(_handler(router, "book_entry", kind="message")(message))
 
     assert flow.start_or_resume_session_calls == 0
+    assert flow.start_or_resume_returning_calls == 0
     assert message.answers
     assert "Reschedule mode started." in message.answers[-1][0]
 

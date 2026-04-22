@@ -459,6 +459,39 @@ def test_book_entry_with_trusted_identity_without_phone_falls_back_to_contact_pr
     assert message.answers
     assert "Share your phone contact or type the number in chat." in message.answers[-1][0]
 
+
+def test_phome_book_has_parity_with_book_for_trusted_identity_and_phone() -> None:
+    router, runtime, booking_flow, _ = _build_router(recommendation_repository=_RepoUniqueWithPhone())
+
+    callback = _Callback(data="phome:book", user_id=1001)
+    asyncio.run(_handler(router, "patient_home_book", kind="callback")(callback))
+
+    assert booking_flow.start_or_resume_returning_calls == 1
+    assert booking_flow.last_returning_kwargs is not None
+    assert booking_flow.last_returning_kwargs.get("trusted_patient_id") == "pat_1"
+    assert booking_flow.last_returning_kwargs.get("trusted_phone_snapshot") == "+15550101099"
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "new_booking_flow"
+    assert callback.answers
+    assert "Review your booking before confirming" in callback.answers[-1]
+
+
+def test_book_entry_without_trusted_patient_falls_back_to_contact_prompt() -> None:
+    router, runtime, booking_flow, _ = _build_router(recommendation_repository=None)
+
+    message = _Message(text="/book", user_id=1001)
+    asyncio.run(_handler(router, "book_entry")(message))
+
+    assert booking_flow.start_or_resume_returning_calls == 1
+    assert booking_flow.last_returning_kwargs is not None
+    assert booking_flow.last_returning_kwargs.get("trusted_patient_id") is None
+    assert booking_flow.last_returning_kwargs.get("trusted_phone_snapshot") is None
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "new_booking_contact"
+    assert message.answers
+    assert "Share your phone contact or type the number in chat." in message.answers[-1][0]
+
+
 def test_pat_a3_2_no_migration_directories_present() -> None:
     assert not Path("migrations").exists()
     assert not Path("alembic").exists()
