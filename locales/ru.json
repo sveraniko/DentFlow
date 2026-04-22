@@ -324,6 +324,7 @@
   "staff.linked.care_order.reservation.active": "Резерв активен",
   "staff.linked.care_order.reservation.none": "Активного резерва нет",
   "staff.linked.care_order.more_items": "+ещё {count}",
+  "staff.linked.care_order.open_pickup": "Открыть обработку выдачи",
   "patient.care.products.manual_target_invalid": "Рекомендованный товар сейчас недоступен.\nВы можете вернуться к рекомендации: /recommendation_open {recommendation_id}\nИли открыть каталог ухода: /care",
   "patient.care.availability.in": "Есть",
   "patient.care.availability.low": "Мало",

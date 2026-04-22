@@ -324,6 +324,7 @@
   "staff.linked.care_order.reservation.active": "Reservation active",
   "staff.linked.care_order.reservation.none": "No active reservation",
   "staff.linked.care_order.more_items": "+{count} more",
+  "staff.linked.care_order.open_pickup": "Open pickup handling",
   "patient.care.products.manual_target_invalid": "This recommended item is currently unavailable.\nYou can return to recommendation details: /recommendation_open {recommendation_id}\nOr open care catalog: /care",
   "patient.care.availability.in": "In stock",
   "patient.care.availability.low": "Low stock",

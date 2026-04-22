@@ -1088,6 +1088,62 @@ def make_router(
         )
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
+    def _linked_care_order_pickup_applicable(*, care_order) -> bool:
+        status = str(getattr(care_order, "status", "") or "")
+        return bool(getattr(care_order, "care_order_id", None)) and status in {"paid", "ready_for_pickup", "issued"}
+
+    async def _ensure_linked_pickup_bridge_token(*, actor_id: int, care_order_id: str) -> str:
+        state = await _load_queue_state(
+            scope=admin_care_pickups_scope,
+            actor_id=actor_id,
+            default_state={"status": "ready_for_pickup", "state_token": "na"},
+        )
+        token = f"linked-{actor_id}-{care_order_id}"
+        state["state_token"] = token
+        await _save_queue_state(scope=admin_care_pickups_scope, actor_id=actor_id, state=state)
+        return token
+
+    async def _admin_linked_care_order_keyboard(*, booking, locale: str, actor_id: int) -> InlineKeyboardMarkup:
+        rows: list[list[InlineKeyboardButton]] = [
+            [
+                InlineKeyboardButton(
+                    text=i18n.t("card.booking.action.patient", locale),
+                    callback_data=await _encode_booking_callback(
+                        booking_id=booking.booking_id,
+                        action=CardAction.OPEN_PATIENT,
+                        page_or_index="open_patient",
+                    ),
+                )
+            ]
+        ]
+        linked_order = await _resolve_latest_linked_care_order(booking=booking)
+        if linked_order is not None and _linked_care_order_pickup_applicable(care_order=linked_order):
+            bridge_token = await _ensure_linked_pickup_bridge_token(
+                actor_id=actor_id,
+                care_order_id=linked_order.care_order_id,
+            )
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("staff.linked.care_order.open_pickup", locale),
+                        callback_data=f"aw4cp:open:{linked_order.care_order_id}:{bridge_token}",
+                    )
+                ]
+            )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=i18n.t("common.back", locale),
+                    callback_data=await _encode_booking_callback(
+                        booking_id=booking.booking_id,
+                        action=CardAction.OPEN,
+                        page_or_index="open_booking",
+                    ),
+                )
+            ]
+        )
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
     def _simple_back_keyboard(*, locale: str, callback_data: str) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
             inline_keyboard=[
@@ -2790,7 +2846,11 @@ def make_router(
         elif decoded.page_or_index == "open_care_order":
             await callback.message.edit_text(
                 await _render_linked_care_order_panel(booking=booking, locale=locale),
-                reply_markup=await _admin_linked_back_keyboard(booking_id=booking.booking_id, locale=locale),
+                reply_markup=await _admin_linked_care_order_keyboard(
+                    booking=booking,
+                    locale=locale,
+                    actor_id=callback.from_user.id,
+                ),
             )
             return
         if decoded.action == CardAction.BACK and decoded.source_context == SourceContext.ADMIN_TODAY and decoded.page_or_index.startswith("today_open:"):
