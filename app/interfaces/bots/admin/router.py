@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, Inli
 from app.application.admin.workdesk import AdminWorkdeskReadService
 
 from app.application.access import AccessResolver
+from app.application.booking.orchestration_outcomes import ConflictOutcome, OrchestrationSuccess, SlotUnavailableOutcome
 from app.application.care_commerce import CareCommerceService
 from app.application.booking.telegram_flow import BookingPatientFlowService
 from app.application.communication import ReminderRecoveryService
@@ -114,6 +115,7 @@ def make_router(
     admin_patients_scope = "admin_patients_state"
     admin_care_pickups_scope = "admin_care_pickups_state"
     admin_issues_scope = "admin_issues_state"
+    admin_reschedule_control_scope = "admin_reschedule_control"
     patient_builder = PatientRuntimeViewBuilder()
     export_document_type = "043_card_export"
     delivery_service = artifact_delivery or GeneratedArtifactDeliveryService()
@@ -210,6 +212,23 @@ def make_router(
             return
         await card_runtime.bind_actor_session_state(scope=scope, actor_id=actor_id, payload=state)
 
+    async def _load_admin_reschedule_control(*, actor_id: int) -> dict[str, str]:
+        if card_runtime is None:
+            return {"booking_id": "", "session_id": "", "state_token": "na"}
+        state = await card_runtime.resolve_actor_session_state(scope=admin_reschedule_control_scope, actor_id=actor_id)
+        if not state:
+            return {"booking_id": "", "session_id": "", "state_token": "na"}
+        return {
+            "booking_id": str(state.get("booking_id") or ""),
+            "session_id": str(state.get("session_id") or ""),
+            "state_token": str(state.get("state_token") or "na"),
+        }
+
+    async def _save_admin_reschedule_control(*, actor_id: int, state: dict[str, str]) -> None:
+        if card_runtime is None:
+            return
+        await card_runtime.bind_actor_session_state(scope=admin_reschedule_control_scope, actor_id=actor_id, payload=state)
+
     async def _load_admin_today_state(*, actor_id: int) -> dict[str, str]:
         if card_runtime is None:
             return {"branch_id": "-", "doctor_id": "-", "status": "all", "page": "1", "state_token": "na"}
@@ -284,7 +303,11 @@ def make_router(
                         source_ref=f"admin_confirmations:{state.get('focus', 'all')}",
                         state_token=token,
                     ),
-                )
+                ),
+                InlineKeyboardButton(
+                    text=i18n.t("admin.reschedule.start.cta", locale),
+                    callback_data=f"aresch:start:{row.booking_id}",
+                ),
             ]
             for row in rows[:8]
         ]
@@ -335,7 +358,11 @@ def make_router(
                         source_ref="admin_reschedules",
                         state_token=token,
                     ),
-                )
+                ),
+                InlineKeyboardButton(
+                    text=i18n.t("admin.reschedule.start.cta", locale),
+                    callback_data=f"aresch:start:{row.booking_id}",
+                ),
             ]
             for row in rows[:8]
         ]
@@ -936,6 +963,70 @@ def make_router(
             ]
         )
 
+    async def _render_admin_reschedule_slot_panel(
+        *,
+        callback: CallbackQuery,
+        actor_id: int,
+        clinic_id: str,
+        locale: str,
+        state: dict[str, str],
+        alert_key: str | None = None,
+    ) -> None:
+        session_id = state.get("session_id", "")
+        if not session_id:
+            await callback.answer(i18n.t("admin.reschedule.start.unavailable", locale), show_alert=True)
+            return
+        if not await booking_flow.validate_active_session_callback(
+            clinic_id=clinic_id,
+            telegram_user_id=actor_id,
+            callback_session_id=session_id,
+            allowed_route_types=frozenset({"reschedule_booking_control"}),
+        ):
+            await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+            return
+        slots = await booking_flow.list_slots_for_session(booking_session_id=session_id)
+        lines = [i18n.t("admin.reschedule.slot.prompt", locale)]
+        if alert_key:
+            lines.insert(0, i18n.t(alert_key, locale))
+        if not slots:
+            lines.append(i18n.t("patient.booking.slot.empty", locale))
+            await callback.message.edit_text("\n\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=[]))
+            return
+        rows = []
+        for slot in slots[:6]:
+            label = slot.start_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            rows.append([InlineKeyboardButton(text=label, callback_data=f"aresch:slot:{session_id}:{slot.slot_id}")])
+        await callback.message.edit_text("\n\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+    async def _render_admin_reschedule_review_panel(
+        *,
+        callback: CallbackQuery,
+        actor_id: int,
+        locale: str,
+        state: dict[str, str],
+    ) -> None:
+        booking_id = state.get("booking_id", "")
+        session_id = state.get("session_id", "")
+        booking = await booking_flow.reads.get_booking(booking_id)
+        session = await booking_flow.get_booking_session(booking_session_id=session_id)
+        if booking is None or session is None or not session.selected_slot_id:
+            await callback.answer(i18n.t("admin.reschedule.start.unavailable", locale), show_alert=True)
+            return
+        selected_slot = await booking_flow.get_availability_slot(slot_id=session.selected_slot_id)
+        current_time = booking.scheduled_start_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        new_time = selected_slot.start_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if selected_slot else "-"
+        text = i18n.t("admin.reschedule.review.panel", locale).format(
+            booking_id=booking.booking_id,
+            current_time=current_time,
+            new_time=new_time,
+        )
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=i18n.t("admin.reschedule.review.confirm", locale), callback_data=f"aresch:confirm:{session_id}")]
+            ]
+        )
+        await callback.message.edit_text(text, reply_markup=keyboard)
+
     async def _admin_booking_keyboard(
         *,
         booking,
@@ -953,6 +1044,8 @@ def make_router(
         if booking.status not in {"completed", "canceled", "no_show"}:
             rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.reschedule", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.RESCHEDULE, page_or_index="reschedule", source_context=source_context, source_ref=source_ref, state_token=state_token))])
             rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.cancel", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.CANCEL, page_or_index="cancel", source_context=source_context, source_ref=source_ref, state_token=state_token))])
+        if booking.status == "reschedule_requested":
+            rows.append([InlineKeyboardButton(text=i18n.t("admin.reschedule.start.cta", locale), callback_data=f"aresch:start:{booking.booking_id}")])
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.patient", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.OPEN_PATIENT, page_or_index="open_patient", source_context=source_context, source_ref=source_ref, state_token=state_token))])
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.chart", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.OPEN_CHART, page_or_index="open_chart", source_context=source_context, source_ref=source_ref, state_token=state_token))])
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.recommendation", locale), callback_data=await _encode_booking_callback(booking_id=booking.booking_id, action=CardAction.OPEN_RECOMMENDATION, page_or_index="open_recommendation", source_context=source_context, source_ref=source_ref, state_token=state_token))])
@@ -2139,6 +2232,143 @@ def make_router(
                 state=state,
             )
             await callback.message.edit_text(text, reply_markup=keyboard)
+
+    @router.callback_query(F.data.startswith("aresch:start:"))
+    async def admin_reschedule_start(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        actor_context = access_resolver.resolve_actor_context(callback.from_user.id)
+        if actor_context is None:
+            return
+        locale = await resolve_locale(callback, access_resolver=access_resolver, fallback_locale=default_locale, clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id))
+        _, _, booking_id = callback.data.split(":", 2)
+        booking = await booking_flow.reads.get_booking(booking_id)
+        if booking is None or booking.clinic_id != actor_context.clinic_id or booking.status != "reschedule_requested":
+            await callback.answer(i18n.t("admin.reschedule.start.unavailable", locale), show_alert=True)
+            return
+        started = await booking_flow.start_admin_reschedule_session(
+            clinic_id=actor_context.clinic_id,
+            telegram_user_id=callback.from_user.id,
+            booking_id=booking_id,
+        )
+        if started.kind != "ready" or started.booking_session is None:
+            await callback.answer(i18n.t("admin.reschedule.start.unavailable", locale), show_alert=True)
+            return
+        control = {
+            "booking_id": booking_id,
+            "session_id": started.booking_session.booking_session_id,
+            "state_token": f"{callback.from_user.id}-{started.booking_session.booking_session_id}-{booking_id}",
+        }
+        await _save_admin_reschedule_control(actor_id=callback.from_user.id, state=control)
+        await callback.answer(i18n.t("admin.reschedule.start.ok", locale))
+        await _render_admin_reschedule_slot_panel(
+            callback=callback,
+            actor_id=callback.from_user.id,
+            clinic_id=actor_context.clinic_id,
+            locale=locale,
+            state=control,
+        )
+
+    @router.callback_query(F.data.startswith("aresch:slot:"))
+    async def admin_reschedule_select_slot(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        actor_context = access_resolver.resolve_actor_context(callback.from_user.id)
+        if actor_context is None:
+            return
+        locale = await resolve_locale(callback, access_resolver=access_resolver, fallback_locale=default_locale, clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id))
+        _, _, callback_session_id, slot_id = callback.data.split(":", 3)
+        control = await _load_admin_reschedule_control(actor_id=callback.from_user.id)
+        if control.get("session_id") != callback_session_id:
+            await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+            return
+        if not await booking_flow.validate_active_session_callback(
+            clinic_id=actor_context.clinic_id,
+            telegram_user_id=callback.from_user.id,
+            callback_session_id=callback_session_id,
+            allowed_route_types=frozenset({"reschedule_booking_control"}),
+        ):
+            await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+            return
+        selected = await booking_flow.select_slot(booking_session_id=callback_session_id, slot_id=slot_id)
+        if isinstance(selected, (SlotUnavailableOutcome, ConflictOutcome)):
+            await callback.answer(i18n.t("admin.reschedule.complete.slot_unavailable", locale), show_alert=True)
+            await _render_admin_reschedule_slot_panel(
+                callback=callback,
+                actor_id=callback.from_user.id,
+                clinic_id=actor_context.clinic_id,
+                locale=locale,
+                state=control,
+                alert_key="admin.reschedule.complete.slot_unavailable",
+            )
+            return
+        if not isinstance(selected, OrchestrationSuccess):
+            await callback.answer(i18n.t("admin.reschedule.start.unavailable", locale), show_alert=True)
+            return
+        await _render_admin_reschedule_review_panel(
+            callback=callback,
+            actor_id=callback.from_user.id,
+            locale=locale,
+            state=control,
+        )
+
+    @router.callback_query(F.data.startswith("aresch:confirm:"))
+    async def admin_reschedule_confirm(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        actor_context = access_resolver.resolve_actor_context(callback.from_user.id)
+        if actor_context is None:
+            return
+        locale = await resolve_locale(callback, access_resolver=access_resolver, fallback_locale=default_locale, clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id))
+        _, _, callback_session_id = callback.data.split(":", 2)
+        control = await _load_admin_reschedule_control(actor_id=callback.from_user.id)
+        if control.get("session_id") != callback_session_id:
+            await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+            return
+        if not await booking_flow.validate_active_session_callback(
+            clinic_id=actor_context.clinic_id,
+            telegram_user_id=callback.from_user.id,
+            callback_session_id=callback_session_id,
+            allowed_route_types=frozenset({"reschedule_booking_control"}),
+        ):
+            await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+            return
+        completed = await booking_flow.complete_admin_reschedule_from_session(
+            clinic_id=actor_context.clinic_id,
+            telegram_user_id=callback.from_user.id,
+            callback_session_id=callback_session_id,
+            source_booking_id=control.get("booking_id", ""),
+        )
+        if isinstance(completed, (SlotUnavailableOutcome, ConflictOutcome)):
+            await callback.answer(i18n.t("admin.reschedule.complete.slot_unavailable", locale), show_alert=True)
+            await _render_admin_reschedule_slot_panel(
+                callback=callback,
+                actor_id=callback.from_user.id,
+                clinic_id=actor_context.clinic_id,
+                locale=locale,
+                state=control,
+                alert_key="admin.reschedule.complete.slot_unavailable",
+            )
+            return
+        if not isinstance(completed, OrchestrationSuccess):
+            await callback.answer(i18n.t("admin.reschedule.complete.unavailable", locale), show_alert=True)
+            await _render_admin_reschedule_review_panel(
+                callback=callback,
+                actor_id=callback.from_user.id,
+                locale=locale,
+                state=control,
+            )
+            return
+        await _save_admin_reschedule_control(
+            actor_id=callback.from_user.id,
+            state={"booking_id": "", "session_id": "", "state_token": "na"},
+        )
+        await callback.answer(i18n.t("admin.reschedule.complete.success", locale))
+        booking = completed.entity
+        await callback.message.edit_text(
+            _render_admin_booking_panel(booking=booking, locale=locale),
+            reply_markup=await _admin_booking_keyboard(booking=booking, locale=locale),
+        )
 
     @router.callback_query(F.data.startswith("c2|"))
     async def admin_runtime_card_callback(callback: CallbackQuery) -> None:

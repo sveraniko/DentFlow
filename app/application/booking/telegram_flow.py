@@ -632,6 +632,52 @@ class BookingPatientFlowService:
         callback_session_id: str,
         source_booking_id: str,
     ):
+        return await self._complete_reschedule_from_session(
+            clinic_id=clinic_id,
+            telegram_user_id=telegram_user_id,
+            callback_session_id=callback_session_id,
+            source_booking_id=source_booking_id,
+            reason_code="patient_reschedule_completed",
+        )
+
+    async def start_admin_reschedule_session(
+        self,
+        *,
+        clinic_id: str,
+        telegram_user_id: int,
+        booking_id: str,
+    ) -> ExistingBookingControlStartResult:
+        return await self.start_patient_reschedule_session(
+            clinic_id=clinic_id,
+            telegram_user_id=telegram_user_id,
+            booking_id=booking_id,
+        )
+
+    async def complete_admin_reschedule_from_session(
+        self,
+        *,
+        clinic_id: str,
+        telegram_user_id: int,
+        callback_session_id: str,
+        source_booking_id: str,
+    ):
+        return await self._complete_reschedule_from_session(
+            clinic_id=clinic_id,
+            telegram_user_id=telegram_user_id,
+            callback_session_id=callback_session_id,
+            source_booking_id=source_booking_id,
+            reason_code="admin_reschedule_completed",
+        )
+
+    async def _complete_reschedule_from_session(
+        self,
+        *,
+        clinic_id: str,
+        telegram_user_id: int,
+        callback_session_id: str,
+        source_booking_id: str,
+        reason_code: str,
+    ):
         session = await self.reads.get_booking_session(callback_session_id)
         if session is None:
             return InvalidStateOutcome(kind="invalid_state", reason="session_missing")
@@ -661,7 +707,7 @@ class BookingPatientFlowService:
         return await self.orchestration.complete_booking_reschedule_from_session(
             booking_id=source_booking_id,
             booking_session_id=callback_session_id,
-            reason_code="patient_reschedule_completed",
+            reason_code=reason_code,
         )
 
     async def confirm_existing_booking(self, *, clinic_id: str, telegram_user_id: int, callback_session_id: str, booking_id: str):

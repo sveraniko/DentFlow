@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from app.application.access import AccessResolver, InMemoryAccessRepository
 from app.application.admin.workdesk import CarePickupQueueRow, OpsIssueQueueRow, WaitlistQueueRow
+from app.application.booking.orchestration_outcomes import OrchestrationSuccess
 from app.application.search.models import PatientSearchResponse, PatientSearchResult, SearchResultOrigin
 from app.common.i18n import I18nService
 from app.domain.access_identity.models import (
@@ -61,6 +62,9 @@ class _Reference:
     def get_service(self, clinic_id: str, service_id: str):
         return None
 
+    def get_branch(self, clinic_id: str, branch_id: str):
+        return SimpleNamespace(display_name="Main")
+
 
 class _Search:
     async def search_patients(self, query):
@@ -79,6 +83,7 @@ class _Search:
 
 class _BookingFlow:
     def __init__(self) -> None:
+        self._sessions: dict[str, SimpleNamespace] = {}
         self.reads = self
         self.orchestration = SimpleNamespace(
             confirm_booking=self._ok,
@@ -92,6 +97,36 @@ class _BookingFlow:
 
     async def get_booking(self, booking_id: str):
         return self._booking(booking_id=booking_id)
+
+    async def start_admin_reschedule_session(self, *, clinic_id: str, telegram_user_id: int, booking_id: str):
+        session_id = f"sess_{booking_id}"
+        self._sessions[session_id] = SimpleNamespace(
+            booking_session_id=session_id,
+            clinic_id=clinic_id,
+            telegram_user_id=telegram_user_id,
+            route_type="reschedule_booking_control",
+            selected_slot_id=None,
+        )
+        return SimpleNamespace(kind="ready", booking_session=self._sessions[session_id])
+
+    async def validate_active_session_callback(self, **kwargs):
+        return kwargs.get("callback_session_id") in self._sessions
+
+    async def list_slots_for_session(self, *, booking_session_id: str):
+        return [SimpleNamespace(slot_id="slot_ok", start_at=datetime(2026, 4, 21, 11, 0, tzinfo=timezone.utc))]
+
+    async def select_slot(self, *, booking_session_id: str, slot_id: str):
+        self._sessions[booking_session_id].selected_slot_id = slot_id
+        return OrchestrationSuccess(kind="success", entity=self._sessions[booking_session_id])
+
+    async def get_booking_session(self, *, booking_session_id: str):
+        return self._sessions.get(booking_session_id)
+
+    async def get_availability_slot(self, *, slot_id: str):
+        return SimpleNamespace(slot_id=slot_id, start_at=datetime(2026, 4, 21, 11, 0, tzinfo=timezone.utc))
+
+    async def complete_admin_reschedule_from_session(self, **kwargs):
+        return OrchestrationSuccess(kind="success", entity=self._booking(status="confirmed"))
 
     def build_booking_snapshot(self, **kwargs):
         booking = kwargs["booking"]
@@ -225,9 +260,9 @@ class _Workdesk:
 
 class _CareService:
     async def get_order(self, care_order_id: str):
-        return SimpleNamespace(care_order_id=care_order_id, patient_id="p1", status="ready_for_pickup")
+        return SimpleNamespace(care_order_id=care_order_id, patient_id="p1", status="ready_for_pickup", pickup_branch_id="br1")
 
-    async def apply_admin_order_action(self, *, care_order_id: str, action: str):
+    async def apply_admin_order_action(self, *, care_order_id: str, action: str, **kwargs):
         return SimpleNamespace(care_order_id=care_order_id, status="fulfilled")
 
 
