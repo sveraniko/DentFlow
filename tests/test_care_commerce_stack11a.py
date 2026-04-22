@@ -16,6 +16,33 @@ from app.domain.care_commerce import BranchProductAvailability, CareOrder, CareO
 from app.domain.recommendations import Recommendation
 
 
+@dataclass
+class _FakePickupReadyDelivery:
+    status: str = "delivered"
+    calls: list[dict[str, str | None]] | None = None
+
+    async def deliver_pickup_ready_if_possible(
+        self,
+        *,
+        clinic_id: str,
+        patient_id: str,
+        care_order_id: str,
+        locale: str = "en",
+        pickup_branch_label: str | None = None,
+    ):
+        self.calls = list(self.calls or [])
+        self.calls.append(
+            {
+                "clinic_id": clinic_id,
+                "patient_id": patient_id,
+                "care_order_id": care_order_id,
+                "locale": locale,
+                "pickup_branch_label": pickup_branch_label,
+            }
+        )
+        return type("DeliveryResult", (), {"status": self.status, "care_order_id": care_order_id})()
+
+
 class InMemoryCareRepo:
     def __init__(self) -> None:
         self.products: dict[str, CareProduct] = {}
@@ -288,7 +315,8 @@ def test_reservation_stock_changes_on_release_and_consume() -> None:
 
 def test_ready_issue_cancel_admin_flow_is_branch_aware_and_stock_backed() -> None:
     repo = InMemoryCareRepo()
-    service = CareCommerceService(repo)
+    delivery = _FakePickupReadyDelivery()
+    service = CareCommerceService(repo, patient_order_delivery=delivery)
     product = asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-1", title_key="care.product.aftercare_brush.title", description_key=None, category="hygiene", price_amount=1000, currency_code="RUB", status="active"))
     asyncio.run(service.set_branch_product_availability(clinic_id="c1", branch_id="b1", care_product_id=product.care_product_id, available_qty=2, reserved_qty=0))
 
@@ -299,6 +327,8 @@ def test_ready_issue_cancel_admin_flow_is_branch_aware_and_stock_backed() -> Non
     reservations = asyncio.run(service.repository.list_reservations_for_order(care_order_id=order.care_order_id))
     assert ready and ready.status == "ready_for_pickup"
     assert reservations and reservations[0].branch_id == "b1"
+    assert delivery.calls is not None and len(delivery.calls) == 1
+    assert delivery.calls[0]["care_order_id"] == order.care_order_id
 
     issued = asyncio.run(service.apply_admin_order_action(care_order_id=order.care_order_id, action="issue"))
     consumed = asyncio.run(service.repository.list_reservations_for_order(care_order_id=order.care_order_id))
@@ -306,6 +336,22 @@ def test_ready_issue_cancel_admin_flow_is_branch_aware_and_stock_backed() -> Non
     assert issued and issued.status == "issued"
     assert all(row.status == "consumed" for row in consumed)
     assert availability and availability.available_qty == 0 and availability.reserved_qty == 0
+    assert delivery.calls is not None and len(delivery.calls) == 1
+
+
+def test_ready_delivery_skip_does_not_block_ready_transition() -> None:
+    repo = InMemoryCareRepo()
+    delivery = _FakePickupReadyDelivery(status="skipped_no_binding")
+    service = CareCommerceService(repo, patient_order_delivery=delivery)
+    product = asyncio.run(service.create_or_update_product(clinic_id="c1", sku="SKU-1", title_key="care.product.aftercare_brush.title", description_key=None, category="hygiene", price_amount=1000, currency_code="RUB", status="active"))
+    asyncio.run(service.set_branch_product_availability(clinic_id="c1", branch_id="b1", care_product_id=product.care_product_id, available_qty=1, reserved_qty=0))
+    order = asyncio.run(service.create_order(clinic_id="c1", patient_id="p1", payment_mode="pay_at_pickup", currency_code="RUB", pickup_branch_id="b1", recommendation_id="r1", booking_id=None, items=[(product, 1)]))
+    asyncio.run(service.transition_order(care_order_id=order.care_order_id, to_status="confirmed"))
+
+    ready = asyncio.run(service.apply_admin_order_action(care_order_id=order.care_order_id, action="ready", locale_hint="ru"))
+
+    assert ready is not None and ready.status == "ready_for_pickup"
+    assert delivery.calls is not None and delivery.calls[0]["locale"] == "ru"
 
 
 def test_ready_action_fails_when_stock_is_insufficient() -> None:

@@ -94,6 +94,34 @@ class AiogramTelegramPatientRecommendationSender:
             await bot.session.close()
 
 
+@dataclass(slots=True)
+class AiogramTelegramPatientCareOrderSender:
+    bot_token: str
+
+    async def send_patient_care_pickup_ready_delivery(
+        self,
+        *,
+        telegram_user_id: int,
+        text: str,
+        button_text: str,
+        callback_data: str,
+    ) -> None:
+        from aiogram import Bot
+        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+        bot = Bot(token=self.bot_token)
+        try:
+            await bot.send_message(
+                chat_id=telegram_user_id,
+                text=text,
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[[InlineKeyboardButton(text=button_text, callback_data=callback_data)]]
+                ),
+            )
+        finally:
+            await bot.session.close()
+
+
 def _build_actions_markup(actions: tuple[ReminderActionButton, ...]) -> "InlineKeyboardMarkup | None":
     if not actions:
         return None

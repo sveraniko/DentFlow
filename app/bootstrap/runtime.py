@@ -21,7 +21,7 @@ from app.application.booking import (
     WaitlistService,
 )
 from app.application.clinic_reference import ClinicReferenceService
-from app.application.care_commerce import CareCommerceService
+from app.application.care_commerce import CareCommerceService, PatientCareOrderDeliveryService
 from app.application.owner import OwnerAnalyticsService
 from app.application.clinical import ClinicalChartService
 from app.application.communication import BookingReminderPlanner, BookingReminderService, ReminderActionService
@@ -65,7 +65,7 @@ from app.infrastructure.cache import build_card_runtime_redis
 from app.infrastructure.speech.disabled_provider import DisabledSpeechToTextProvider
 from app.infrastructure.speech.fake_provider import FakeSpeechToTextProvider
 from app.infrastructure.speech.openai_provider import OpenAITranscriptionConfig, OpenAISpeechToTextProvider
-from app.infrastructure.communication import AiogramTelegramPatientRecommendationSender
+from app.infrastructure.communication import AiogramTelegramPatientCareOrderSender, AiogramTelegramPatientRecommendationSender
 from app.interfaces.cards import CardCallbackCodec, CardRuntimeCoordinator, CardRuntimeStateStore
 from app.interfaces.bots.admin.router import make_router as make_admin_router
 from app.interfaces.bots.doctor.router import make_router as make_doctor_router
@@ -125,7 +125,15 @@ class RuntimeRegistry:
             sender=AiogramTelegramPatientRecommendationSender(self.settings.telegram.patient_bot_token),
             i18n=self.i18n,
         )
-        self.care_commerce_service = CareCommerceService(self.care_commerce_repository)
+        self.patient_care_order_delivery_service = PatientCareOrderDeliveryService(
+            binding_reader=self.recommendation_repository,
+            sender=AiogramTelegramPatientCareOrderSender(self.settings.telegram.patient_bot_token),
+            i18n=self.i18n,
+        )
+        self.care_commerce_service = CareCommerceService(
+            self.care_commerce_repository,
+            patient_order_delivery=self.patient_care_order_delivery_service,
+        )
         self.policy_resolver = PolicyResolver(self.policy_repository)
         self.booking_session_service = BookingSessionService(self.booking_repository)
         self.availability_slot_service = AvailabilitySlotService(self.booking_repository)
