@@ -218,6 +218,42 @@ def make_router(
             ]
         )
 
+    async def _render_doctor_encounter_panel(
+        *,
+        doctor_id: str,
+        patient_id: str,
+        encounter,
+        locale: str,
+        booking_detail=None,
+    ) -> str:
+        detail = booking_detail
+        if detail is None:
+            bookings = await booking_service.list_by_patient(patient_id=patient_id) if booking_service else []
+            for row in sorted(bookings, key=lambda item: item.scheduled_start_at, reverse=True):
+                if row.doctor_id != doctor_id:
+                    continue
+                detail = await operations.get_booking_detail(doctor_id=doctor_id, booking_id=row.booking_id)
+                if detail is not None:
+                    break
+        patient_display = patient_id
+        booking_context = i18n.t("doctor.encounter.panel.booking_context.missing", locale)
+        if detail is not None:
+            patient_display = detail.patient_card.display_name
+            booking_context = i18n.t("doctor.encounter.panel.booking_context", locale).format(
+                booking_id=detail.booking_id,
+                booking_time=detail.scheduled_label,
+            )
+        else:
+            patient_card = await operations.build_patient_quick_card(patient_id=patient_id, doctor_id=doctor_id)
+            if patient_card is not None:
+                patient_display = patient_card.display_name
+        return i18n.t("doctor.encounter.panel", locale).format(
+            encounter_id=encounter.encounter_id,
+            encounter_status=encounter.status,
+            patient_display=patient_display,
+            booking_context=booking_context,
+        )
+
     async def _doctor_queue_keyboard(*, rows, locale: str) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
             inline_keyboard=[
@@ -697,7 +733,18 @@ def make_router(
         if encounter is None:
             await message.answer(i18n.t("doctor.encounter.open.denied_or_missing", locale))
             return
-        await message.answer(i18n.t("doctor.encounter.open.ok", locale).format(encounter_id=encounter.encounter_id, status=encounter.status))
+        booking_detail = None
+        if booking_id:
+            booking_detail = await operations.get_booking_detail(doctor_id=doctor_id, booking_id=booking_id)
+        await message.answer(
+            await _render_doctor_encounter_panel(
+                doctor_id=doctor_id,
+                patient_id=patient_id,
+                encounter=encounter,
+                locale=locale,
+                booking_detail=booking_detail,
+            )
+        )
 
     @router.message(Command("encounter_note"))
     async def encounter_note(message: Message) -> None:
@@ -945,10 +992,12 @@ def make_router(
                 await callback.answer(i18n.t("doctor.encounter.handoff.unavailable", locale), show_alert=True)
             else:
                 await callback.message.edit_text(
-                    i18n.t("doctor.encounter.handoff.card", locale).format(
-                        booking_id=detail.booking_id,
-                        encounter_id=encounter.encounter_id,
-                        status=encounter.status,
+                    await _render_doctor_encounter_panel(
+                        doctor_id=doctor_id,
+                        patient_id=detail.patient_card.patient_id,
+                        encounter=encounter,
+                        locale=locale,
+                        booking_detail=detail,
                     ),
                     reply_markup=await _doctor_linked_back_keyboard(booking_id=detail.booking_id, locale=locale),
                 )

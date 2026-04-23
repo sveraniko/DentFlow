@@ -46,6 +46,16 @@ class _Callback:
         self.answers.append(text)
 
 
+class _CommandMessage:
+    def __init__(self, text: str, *, user_id: int) -> None:
+        self.text = text
+        self.from_user = SimpleNamespace(id=user_id)
+        self.answers: list[tuple[str, object | None]] = []
+
+    async def answer(self, text: str, reply_markup=None) -> None:
+        self.answers.append((text, reply_markup))
+
+
 class _AdminReference:
     def get_clinic(self, clinic_id: str):
         return SimpleNamespace(default_locale="en")
@@ -562,8 +572,10 @@ def test_doctor_in_service_hands_off_into_encounter_context() -> None:
     in_service_callback = _Callback(in_service_data, user_id=702)
     asyncio.run(callback_handler(in_service_callback))
     text, kb = in_service_callback.message.edits[-1]
-    assert "moved to in service" in text
-    assert "Encounter enc_b1 is in_progress." in text
+    assert "Encounter context" in text
+    assert "Encounter: enc_b1" in text
+    assert "Patient: Jane Roe" in text
+    assert "Booking: b1 ·" in text
     assert kb.inline_keyboard[0][0].text == "Back"
 
 
@@ -573,3 +585,15 @@ def test_doctor_legacy_booking_callback_is_bounded() -> None:
     stale_callback = _Callback("doctorbk:unknown:b1", user_id=702)
     asyncio.run(callback_handler(stale_callback))
     assert stale_callback.answers and "outdated" in stale_callback.answers[0].lower()
+
+
+def test_encounter_open_command_uses_canonical_encounter_panel() -> None:
+    router, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service())
+    handler = _handler(router, "encounter_open", kind="message")
+    message = _CommandMessage("/encounter_open p1 b1", user_id=702)
+    asyncio.run(handler(message))
+    text, _ = message.answers[-1]
+    assert "Encounter context" in text
+    assert "Encounter: enc_b1" in text
+    assert "Patient: Jane Roe" in text
+    assert "Booking: b1 ·" in text
