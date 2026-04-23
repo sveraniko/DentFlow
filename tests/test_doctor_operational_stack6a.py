@@ -98,8 +98,9 @@ class _Message:
         self.from_user = SimpleNamespace(id=user_id)
         self.answers: list[str] = []
 
-    async def answer(self, text: str) -> None:
+    async def answer(self, text: str, reply_markup=None) -> None:
         self.answers.append(text)
+        self.reply_markup = reply_markup
 
 
 class _SearchStub:
@@ -242,7 +243,25 @@ def test_identity_safety_for_missing_profile_and_wrong_role() -> None:
 
 def test_doctor_router_today_queue_empty_and_patient_open_search_path() -> None:
     i18n = I18nService(locales_path=Path("locales"), default_locale="en")
-    ops = _ops([_booking("b1", patient_id="pat1", doctor_id="d1", minutes=60, status="confirmed")])
+    now = datetime.now(timezone.utc)
+    live_booking = Booking(
+        booking_id="b_live",
+        clinic_id="c1",
+        branch_id="b1",
+        patient_id="pat1",
+        doctor_id="d1",
+        service_id="svc1",
+        slot_id=None,
+        booking_mode="admin",
+        source_channel="telegram",
+        scheduled_start_at=now + timedelta(minutes=30),
+        scheduled_end_at=now + timedelta(minutes=60),
+        status="confirmed",
+        confirmation_required=True,
+        created_at=now - timedelta(days=1),
+        updated_at=now - timedelta(days=1),
+    )
+    ops = _ops([live_booking])
     router = make_doctor_router(
         i18n=i18n,
         access_resolver=ops.access_resolver,
@@ -263,6 +282,8 @@ def test_doctor_router_today_queue_empty_and_patient_open_search_path() -> None:
     m1 = _Message("/today_queue")
     asyncio.run(today_handler(m1))
     assert m1.answers and "Today's queue" in m1.answers[0]
+    assert m1.reply_markup is not None
+    assert m1.reply_markup.inline_keyboard[0][0].callback_data.startswith("doctorbk:open_booking:")
 
     patient_handler = next(h.callback for h in router.message.handlers if h.callback.__name__ == "patient_open")
     m2 = _Message("/patient_open pat1")

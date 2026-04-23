@@ -226,6 +226,14 @@ class _Orchestration:
         return SimpleNamespace(kind="success", entity=SimpleNamespace(booking_id=booking_id, status="completed"))
 
 
+class _ClinicalService:
+    async def open_or_get_chart(self, *, patient_id: str, clinic_id: str, primary_doctor_id: str):
+        return SimpleNamespace(chart_id=f"chart_{patient_id}")
+
+    async def open_or_get_encounter(self, *, chart_id: str, doctor_id: str, booking_id: str | None = None):
+        return SimpleNamespace(encounter_id=f"enc_{booking_id or chart_id}", status="in_progress")
+
+
 def _access(role: RoleCode, *, user_id: int) -> AccessResolver:
     repo = InMemoryAccessRepository()
     now = datetime(2026, 4, 20, tzinfo=timezone.utc)
@@ -419,7 +427,7 @@ def _doctor_router(*, recommendation_rows: list[Recommendation], care_service: _
         booking_orchestration=_Orchestration(),
         reference_service=_DoctorReference(),
         patient_reader=_PatientReader(),
-        clinical_service=SimpleNamespace(),
+        clinical_service=_ClinicalService(),
         recommendation_service=_RecommendationService(recommendation_rows),
         care_commerce_service=care_service,
         default_locale="en",
@@ -543,3 +551,25 @@ def test_doctor_linked_opens_render_panels_and_missing_state() -> None:
     assert "No booking-linked care order found for this booking." in order_text
     assert "care_order :: patient=" not in order_text
     assert order_kb.inline_keyboard[0][0].text == "Back"
+
+
+def test_doctor_in_service_hands_off_into_encounter_context() -> None:
+    router, codec = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service())
+    callback_handler = _handler(router, "doctor_runtime_booking_callback")
+    in_service_data = asyncio.run(
+        codec.encode(_booking_callback_payload(page_or_index="in_service", booking_id="b1", source_context=SourceContext.DOCTOR_QUEUE))
+    )
+    in_service_callback = _Callback(in_service_data, user_id=702)
+    asyncio.run(callback_handler(in_service_callback))
+    text, kb = in_service_callback.message.edits[-1]
+    assert "moved to in service" in text
+    assert "Encounter enc_b1 is in_progress." in text
+    assert kb.inline_keyboard[0][0].text == "Back"
+
+
+def test_doctor_legacy_booking_callback_is_bounded() -> None:
+    router, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service())
+    callback_handler = _handler(router, "doctor_runtime_booking_callback_legacy")
+    stale_callback = _Callback("doctorbk:unknown:b1", user_id=702)
+    asyncio.run(callback_handler(stale_callback))
+    assert stale_callback.answers and "outdated" in stale_callback.answers[0].lower()

@@ -218,6 +218,26 @@ def make_router(
             ]
         )
 
+    async def _doctor_queue_keyboard(*, rows, locale: str) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("doctor.queue.open_booking_cta", locale).format(
+                            time=row.scheduled_label,
+                            patient=row.patient_display_name,
+                        ),
+                        callback_data=await _encode_booking_callback(
+                            booking_id=row.booking_id,
+                            action=CardAction.OPEN,
+                            page_or_index="open_booking",
+                        ),
+                    )
+                ]
+                for row in rows
+            ]
+        )
+
     def _select_latest_recommendation(rows: list[object]) -> object | None:
         if not rows:
             return None
@@ -828,8 +848,8 @@ def make_router(
         lines = [i18n.t("doctor.queue.title", locale)]
         for row in rows:
             lines.append(f"• {row.scheduled_label} · {row.patient_display_name} · {row.service_label}")
-            lines.append(f"  {i18n.t(f'booking.status.{row.booking_status}', locale)} · /booking_open {row.booking_id}")
-        await message.answer("\n".join(lines))
+            lines.append(f"  {i18n.t(f'booking.status.{row.booking_status}', locale)}")
+        await message.answer("\n".join(lines), reply_markup=await _doctor_queue_keyboard(rows=rows, locale=locale))
 
     @router.message(Command("next_patient"))
     async def next_patient(message: Message) -> None:
@@ -911,7 +931,28 @@ def make_router(
             await callback.answer(i18n.t("doctor.booking.open.missing", locale), show_alert=True)
             return
         if decoded.page_or_index == "in_service":
-            await operations.apply_booking_action(doctor_id=doctor_id, booking_id=detail.booking_id, action="in_service")
+            result = await operations.apply_booking_action(doctor_id=doctor_id, booking_id=detail.booking_id, action="in_service")
+            if result.kind != "success":
+                await callback.answer(i18n.t("doctor.booking.action.invalid", locale), show_alert=True)
+                return
+            encounter = await operations.open_or_get_encounter(
+                doctor_id=doctor_id,
+                clinic_id=clinic_id,
+                patient_id=detail.patient_card.patient_id,
+                booking_id=detail.booking_id,
+            )
+            if encounter is None:
+                await callback.answer(i18n.t("doctor.encounter.handoff.unavailable", locale), show_alert=True)
+            else:
+                await callback.message.edit_text(
+                    i18n.t("doctor.encounter.handoff.card", locale).format(
+                        booking_id=detail.booking_id,
+                        encounter_id=encounter.encounter_id,
+                        status=encounter.status,
+                    ),
+                    reply_markup=await _doctor_linked_back_keyboard(booking_id=detail.booking_id, locale=locale),
+                )
+                return
             detail = await operations.get_booking_detail(doctor_id=doctor_id, booking_id=detail.booking_id)
         elif decoded.page_or_index == "complete":
             await operations.apply_booking_action(doctor_id=doctor_id, booking_id=detail.booking_id, action="completed")
@@ -974,6 +1015,35 @@ def make_router(
         if shell is None:
             return
         await callback.message.edit_text(CardShellRenderer.to_panel(shell).text, reply_markup=await _doctor_booking_keyboard(detail=detail, locale=locale))
+
+    @router.callback_query(F.data.startswith("doctorbk:"))
+    async def doctor_runtime_booking_callback_legacy(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        locale = await resolve_locale(callback, access_resolver=access_resolver, fallback_locale=default_locale)
+        doctor_id, _, _ = await _resolve_doctor_context(callback)
+        if doctor_id is None or operations is None:
+            return
+        parts = callback.data.split(":", maxsplit=2)
+        if len(parts) != 3:
+            await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+            return
+        _, page_or_index, booking_id = parts
+        if page_or_index not in {"open_booking", "in_service", "complete", "open_patient", "open_chart", "open_recommendation", "open_care_order"}:
+            await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
+            return
+        shell = await operations.get_booking_detail(doctor_id=doctor_id, booking_id=booking_id)
+        if shell is None:
+            await callback.answer(i18n.t("doctor.booking.open.missing", locale), show_alert=True)
+            return
+        card = await _doctor_booking_shell(detail=shell, locale=locale)
+        if card is None:
+            await callback.answer(i18n.t("doctor.booking.open.missing", locale), show_alert=True)
+            return
+        await callback.message.edit_text(
+            CardShellRenderer.to_panel(card).text,
+            reply_markup=await _doctor_booking_keyboard(detail=shell, locale=locale),
+        )
 
     @router.message(Command("patient_open"))
     async def patient_open(message: Message) -> None:
