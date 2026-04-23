@@ -576,5 +576,8 @@
   "patient.booking.quick.repeat": "Repeat previous service",
   "patient.booking.quick.same_doctor": "Use same doctor",
   "patient.booking.quick.same_doctor.fallback": "Got it — choose a service and we'll keep your doctor preference.",
-  "patient.booking.quick.other": "Choose something else"
+  "patient.booking.quick.other": "Choose something else",
+  "doctor.queue.open_booking_cta": "Open {time} · {patient}",
+  "doctor.encounter.handoff.card": "Booking {booking_id} moved to in service.\nEncounter {encounter_id} is {status}.",
+  "doctor.encounter.handoff.unavailable": "Booking moved to in service, but encounter context could not be opened."
 }

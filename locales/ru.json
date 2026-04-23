@@ -576,5 +576,8 @@
   "patient.booking.quick.repeat": "Повторить прошлую услугу",
   "patient.booking.quick.same_doctor": "К тому же врачу",
   "patient.booking.quick.same_doctor.fallback": "Поняли — выберите услугу, и мы сохраним выбор этого врача.",
-  "patient.booking.quick.other": "Выбрать другое"
+  "patient.booking.quick.other": "Выбрать другое",
+  "doctor.queue.open_booking_cta": "Открыть {time} · {patient}",
+  "doctor.encounter.handoff.card": "Запись {booking_id} переведена в in_service.\nПрием {encounter_id} в статусе {status}.",
+  "doctor.encounter.handoff.unavailable": "Запись переведена в in_service, но открыть контекст приема не удалось."
 }
