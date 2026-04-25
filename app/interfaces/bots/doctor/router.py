@@ -1737,14 +1737,7 @@ def make_router(
             )
         )
 
-    @router.message(F.text)
-    async def doctor_encounter_quick_note_capture(message: Message) -> None:
-        if not message.from_user or not message.text or message.text.startswith("/"):
-            return
-        locale = await resolve_locale(message, access_resolver=access_resolver, fallback_locale=default_locale)
-        pending = _pop_pending_note(user_id=message.from_user.id)
-        if pending is None:
-            return
+    async def _capture_pending_quick_note_text(*, message: Message, locale: str, pending: _PendingEncounterNote) -> None:
         if operations is None:
             _clear_pending_note(user_id=message.from_user.id)
             await message.answer(i18n.t("doctor.encounter.quick_note.unavailable", locale))
@@ -1782,14 +1775,7 @@ def make_router(
             ),
         )
 
-    @router.message(F.text)
-    async def doctor_encounter_recommendation_capture(message: Message) -> None:
-        if not message.from_user or not message.text or message.text.startswith("/"):
-            return
-        locale = await resolve_locale(message, access_resolver=access_resolver, fallback_locale=default_locale)
-        pending = _pop_pending_recommendation(user_id=message.from_user.id)
-        if pending is None:
-            return
+    async def _capture_pending_recommendation_text(*, message: Message, locale: str, pending: _PendingEncounterRecommendation) -> None:
         if operations is None:
             _clear_pending_recommendation(user_id=message.from_user.id)
             await message.answer(i18n.t("doctor.recommend.context.unavailable", locale))
@@ -1873,5 +1859,26 @@ def make_router(
                 locale=locale,
             ),
         )
+
+    @router.message(F.text)
+    async def doctor_pending_text_capture(message: Message) -> None:
+        if not message.from_user or not message.text or message.text.startswith("/"):
+            return
+        locale = await resolve_locale(message, access_resolver=access_resolver, fallback_locale=default_locale)
+        pending = _pop_pending_note(user_id=message.from_user.id)
+        pending_recommendation = _pop_pending_recommendation(user_id=message.from_user.id)
+        if pending and pending_recommendation:
+            if pending_recommendation.created_at > pending.created_at:
+                _clear_pending_note(user_id=message.from_user.id)
+                pending = None
+            else:
+                _clear_pending_recommendation(user_id=message.from_user.id)
+                pending_recommendation = None
+        if pending:
+            await _capture_pending_quick_note_text(message=message, locale=locale, pending=pending)
+            return
+        if pending_recommendation:
+            await _capture_pending_recommendation_text(message=message, locale=locale, pending=pending_recommendation)
+            return
 
     return router
