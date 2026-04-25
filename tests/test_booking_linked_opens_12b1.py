@@ -208,11 +208,20 @@ class _CareRepo:
     async def get_order(self, care_order_id: str):
         return next((row for row in self.orders if row.care_order_id == care_order_id), None)
 
+    async def get_product_by_code(self, *, clinic_id: str, target_code: str):
+        if clinic_id != "c1":
+            return None
+        for row in self.products.values():
+            if row.sku == target_code:
+                return row
+        return None
+
 
 class _CareService:
     def __init__(self, repo: _CareRepo) -> None:
         self.repository = repo
         self._repo = repo
+        self.manual_targets: list[dict[str, str]] = []
 
     async def list_patient_orders(self, *, clinic_id: str, patient_id: str):
         return [row for row in self._repo.orders if row.clinic_id == clinic_id and row.patient_id == patient_id]
@@ -222,6 +231,27 @@ class _CareService:
 
     async def get_order(self, care_order_id: str):
         return await self._repo.get_order(care_order_id)
+
+    async def list_catalog_products_by_category(self, *, clinic_id: str, category: str):
+        if clinic_id != "c1":
+            return []
+        return [row for row in self._repo.products.values() if row.category == category and row.status == "active"]
+
+    async def set_manual_recommendation_target(
+        self,
+        *,
+        recommendation_id: str,
+        target_kind: str,
+        target_code: str,
+        justification_text: str | None = None,
+    ) -> None:
+        self.manual_targets.append(
+            {
+                "recommendation_id": recommendation_id,
+                "target_kind": target_kind,
+                "target_code": target_code,
+            }
+        )
 
 
 class _DoctorBookingService:
@@ -737,9 +767,10 @@ def test_doctor_quick_note_malformed_type_callback_is_bounded() -> None:
 
 def test_doctor_recommendation_type_and_capture_flow_calls_issue_and_returns_context() -> None:
     clinical = _ClinicalService()
+    care_service = _build_care_service()
     router, _, _, recommendation_service = _doctor_router(
         recommendation_rows=[],
-        care_service=_build_empty_care_service(),
+        care_service=care_service,
         clinical_service=clinical,
         booking_status="in_service",
     )
@@ -755,7 +786,13 @@ def test_doctor_recommendation_type_and_capture_flow_calls_issue_and_returns_con
     type_callback = _Callback("drec:type:enc_b1:aftercare:b1", user_id=702)
     asyncio.run(type_handler(type_callback))
     type_text, _ = type_callback.message.edits[-1]
-    assert "Send recommendation as" in type_text
+    assert "Choose recommendation target option" in type_text
+
+    target_none_handler = _handler(router, "doctor_encounter_recommendation_target_mode")
+    target_none_callback = _Callback("drec:target:none:enc_b1:b1", user_id=702)
+    asyncio.run(target_none_handler(target_none_callback))
+    target_none_text, _ = target_none_callback.message.edits[-1]
+    assert "Send recommendation as" in target_none_text
 
     text_message = _CommandMessage("Aftercare | Use a soft brush and avoid hard food for 48h.", user_id=702)
     asyncio.run(capture_handler(text_message))
@@ -767,10 +804,119 @@ def test_doctor_recommendation_type_and_capture_flow_calls_issue_and_returns_con
     assert issued_payload["body_text"] == "Use a soft brush and avoid hard food for 48h."
     assert issued_payload["booking_id"] == "b1"
     assert issued_payload["encounter_id"] == "enc_b1"
+    assert care_service.manual_targets == []
     final_text, final_kb = text_message.answers[-1]
     assert "Recommendation saved." in final_text
     assert "Encounter context" in final_text
     assert [row[0].text for row in final_kb.inline_keyboard] == ["Issue recommendation", "Add quick note", "Back to booking"]
+
+
+def test_doctor_recommendation_target_path_accepts_valid_product_target_and_persists_target() -> None:
+    clinical = _ClinicalService()
+    care_service = _build_care_service()
+    router, _, _, recommendation_service = _doctor_router(
+        recommendation_rows=[],
+        care_service=care_service,
+        clinical_service=clinical,
+        booking_status="in_service",
+    )
+    type_handler = _handler(router, "doctor_encounter_recommendation_type")
+    target_mode_handler = _handler(router, "doctor_encounter_recommendation_target_mode")
+    capture_handler = _handler(router, "doctor_encounter_recommendation_capture", kind="message")
+
+    type_callback = _Callback("drec:type:enc_b1:aftercare:b1", user_id=702)
+    asyncio.run(type_handler(type_callback))
+    target_mode_callback = _Callback("drec:target:link:enc_b1:b1", user_id=702)
+    asyncio.run(target_mode_handler(target_mode_callback))
+    target_prompt_text, _ = target_mode_callback.message.edits[-1]
+    assert "product:<code> or category:<code>" in target_prompt_text
+
+    target_message = _CommandMessage("product:Post-op gel", user_id=702)
+    asyncio.run(capture_handler(target_message))
+    assert "Target saved: product:Post-op gel" in target_message.answers[0][0]
+
+    text_message = _CommandMessage("Aftercare | Product-targeted body.", user_id=702)
+    asyncio.run(capture_handler(text_message))
+    assert recommendation_service.created
+    assert care_service.manual_targets
+    assert care_service.manual_targets[-1]["target_kind"] == "product"
+    assert care_service.manual_targets[-1]["target_code"] == "Post-op gel"
+
+
+def test_doctor_recommendation_target_path_accepts_valid_category_target() -> None:
+    care_service = _build_care_service()
+    router, _, _, _ = _doctor_router(
+        recommendation_rows=[],
+        care_service=care_service,
+        booking_status="in_service",
+    )
+    type_handler = _handler(router, "doctor_encounter_recommendation_type")
+    target_mode_handler = _handler(router, "doctor_encounter_recommendation_target_mode")
+    capture_handler = _handler(router, "doctor_encounter_recommendation_capture", kind="message")
+
+    asyncio.run(type_handler(_Callback("drec:type:enc_b1:aftercare:b1", user_id=702)))
+    asyncio.run(target_mode_handler(_Callback("drec:target:link:enc_b1:b1", user_id=702)))
+    target_message = _CommandMessage("category:hygiene", user_id=702)
+    asyncio.run(capture_handler(target_message))
+    assert "Target saved: category:hygiene" in target_message.answers[0][0]
+
+
+def test_doctor_recommendation_target_invalid_is_bounded_and_does_not_crash() -> None:
+    router, _, _, recommendation_service = _doctor_router(
+        recommendation_rows=[],
+        care_service=_build_empty_care_service(),
+        booking_status="in_service",
+    )
+    type_handler = _handler(router, "doctor_encounter_recommendation_type")
+    target_mode_handler = _handler(router, "doctor_encounter_recommendation_target_mode")
+    capture_handler = _handler(router, "doctor_encounter_recommendation_capture", kind="message")
+
+    asyncio.run(type_handler(_Callback("drec:type:enc_b1:aftercare:b1", user_id=702)))
+    asyncio.run(target_mode_handler(_Callback("drec:target:link:enc_b1:b1", user_id=702)))
+    bad_target = _CommandMessage("product:missing", user_id=702)
+    asyncio.run(capture_handler(bad_target))
+    assert recommendation_service.created == []
+    assert "Target not found." in bad_target.answers[-1][0]
+
+
+def test_doctor_recommendation_malformed_target_callback_is_bounded() -> None:
+    router, _, _, _ = _doctor_router(
+        recommendation_rows=[],
+        care_service=_build_empty_care_service(),
+        booking_status="in_service",
+    )
+    handler = _handler(router, "doctor_encounter_recommendation_target_mode")
+    callback = _Callback("drec:target:oops", user_id=702)
+    asyncio.run(handler(callback))
+    assert callback.answers and "unavailable" in callback.answers[0].lower()
+
+
+def test_doctor_recommendation_malformed_type_callback_is_bounded() -> None:
+    router, _, _, _ = _doctor_router(
+        recommendation_rows=[],
+        care_service=_build_empty_care_service(),
+        booking_status="in_service",
+    )
+    handler = _handler(router, "doctor_encounter_recommendation_type")
+    callback = _Callback("drec:type:enc_b1:badtype:b1", user_id=702)
+    asyncio.run(handler(callback))
+    assert callback.answers and "unavailable" in callback.answers[0].lower()
+
+
+def test_doctor_recommendation_cancel_clears_pending_context() -> None:
+    router, _, _, recommendation_service = _doctor_router(
+        recommendation_rows=[],
+        care_service=_build_empty_care_service(),
+        booking_status="in_service",
+    )
+    type_handler = _handler(router, "doctor_encounter_recommendation_type")
+    cancel_handler = _handler(router, "doctor_encounter_recommendation_cancel")
+    capture_handler = _handler(router, "doctor_encounter_recommendation_capture", kind="message")
+
+    asyncio.run(type_handler(_Callback("drec:type:enc_b1:aftercare:b1", user_id=702)))
+    asyncio.run(cancel_handler(_Callback("drec:cancel:enc_b1:b1", user_id=702)))
+    asyncio.run(capture_handler(_CommandMessage("Aftercare | should not capture", user_id=702)))
+    assert recommendation_service.created == []
 
 
 def test_doctor_recommendation_text_without_pending_context_is_not_captured() -> None:
@@ -793,9 +939,11 @@ def test_doctor_recommendation_capture_rejects_malformed_title_body() -> None:
         booking_status="in_service",
     )
     type_handler = _handler(router, "doctor_encounter_recommendation_type")
+    target_mode_handler = _handler(router, "doctor_encounter_recommendation_target_mode")
     capture_handler = _handler(router, "doctor_encounter_recommendation_capture", kind="message")
     type_callback = _Callback("drec:type:enc_b1:aftercare:b1", user_id=702)
     asyncio.run(type_handler(type_callback))
+    asyncio.run(target_mode_handler(_Callback("drec:target:none:enc_b1:b1", user_id=702)))
     malformed = _CommandMessage("bad format without separator", user_id=702)
     asyncio.run(capture_handler(malformed))
     assert recommendation_service.created == []
