@@ -726,7 +726,7 @@ def test_doctor_quick_note_type_and_capture_flow_calls_add_note_and_returns_cont
     router, _, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service(), clinical_service=clinical, booking_status="in_service")
     start_handler = _handler(router, "doctor_encounter_quick_note_start")
     type_handler = _handler(router, "doctor_encounter_quick_note_type")
-    capture_handler = _handler(router, "doctor_encounter_quick_note_capture", kind="message")
+    capture_handler = _handler(router, "doctor_pending_text_capture", kind="message")
 
     start_callback = _Callback("dnote:start:enc_b1:b1", user_id=702)
     asyncio.run(start_handler(start_callback))
@@ -750,11 +750,28 @@ def test_doctor_quick_note_type_and_capture_flow_calls_add_note_and_returns_cont
 def test_doctor_quick_note_text_without_pending_context_is_not_captured() -> None:
     clinical = _ClinicalService()
     router, _, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service(), clinical_service=clinical, booking_status="in_service")
-    capture_handler = _handler(router, "doctor_encounter_quick_note_capture", kind="message")
+    capture_handler = _handler(router, "doctor_pending_text_capture", kind="message")
     message = _CommandMessage("Random plain message", user_id=702)
     asyncio.run(capture_handler(message))
     assert clinical.saved_notes == []
     assert message.answers == []
+
+
+def test_doctor_pending_text_dispatcher_ignores_slash_commands() -> None:
+    clinical = _ClinicalService()
+    router, _, _, recommendation_service = _doctor_router(
+        recommendation_rows=[],
+        care_service=_build_empty_care_service(),
+        clinical_service=clinical,
+        booking_status="in_service",
+    )
+    type_handler = _handler(router, "doctor_encounter_quick_note_type")
+    capture_handler = _handler(router, "doctor_pending_text_capture", kind="message")
+
+    asyncio.run(type_handler(_Callback("dnote:type:enc_b1:treatment:b1", user_id=702)))
+    asyncio.run(capture_handler(_CommandMessage("/recommend_issue p1 aftercare b1 title|body", user_id=702)))
+    assert clinical.saved_notes == []
+    assert recommendation_service.created == []
 
 
 def test_doctor_quick_note_malformed_type_callback_is_bounded() -> None:
@@ -776,7 +793,7 @@ def test_doctor_recommendation_type_and_capture_flow_calls_issue_and_returns_con
     )
     start_handler = _handler(router, "doctor_encounter_recommendation_start")
     type_handler = _handler(router, "doctor_encounter_recommendation_type")
-    capture_handler = _handler(router, "doctor_encounter_recommendation_capture", kind="message")
+    capture_handler = _handler(router, "doctor_pending_text_capture", kind="message")
 
     start_callback = _Callback("drec:start:enc_b1:b1", user_id=702)
     asyncio.run(start_handler(start_callback))
@@ -822,7 +839,7 @@ def test_doctor_recommendation_target_path_accepts_valid_product_target_and_pers
     )
     type_handler = _handler(router, "doctor_encounter_recommendation_type")
     target_mode_handler = _handler(router, "doctor_encounter_recommendation_target_mode")
-    capture_handler = _handler(router, "doctor_encounter_recommendation_capture", kind="message")
+    capture_handler = _handler(router, "doctor_pending_text_capture", kind="message")
 
     type_callback = _Callback("drec:type:enc_b1:aftercare:b1", user_id=702)
     asyncio.run(type_handler(type_callback))
@@ -852,7 +869,7 @@ def test_doctor_recommendation_target_path_accepts_valid_category_target() -> No
     )
     type_handler = _handler(router, "doctor_encounter_recommendation_type")
     target_mode_handler = _handler(router, "doctor_encounter_recommendation_target_mode")
-    capture_handler = _handler(router, "doctor_encounter_recommendation_capture", kind="message")
+    capture_handler = _handler(router, "doctor_pending_text_capture", kind="message")
 
     asyncio.run(type_handler(_Callback("drec:type:enc_b1:aftercare:b1", user_id=702)))
     asyncio.run(target_mode_handler(_Callback("drec:target:link:enc_b1:b1", user_id=702)))
@@ -869,7 +886,7 @@ def test_doctor_recommendation_target_invalid_is_bounded_and_does_not_crash() ->
     )
     type_handler = _handler(router, "doctor_encounter_recommendation_type")
     target_mode_handler = _handler(router, "doctor_encounter_recommendation_target_mode")
-    capture_handler = _handler(router, "doctor_encounter_recommendation_capture", kind="message")
+    capture_handler = _handler(router, "doctor_pending_text_capture", kind="message")
 
     asyncio.run(type_handler(_Callback("drec:type:enc_b1:aftercare:b1", user_id=702)))
     asyncio.run(target_mode_handler(_Callback("drec:target:link:enc_b1:b1", user_id=702)))
@@ -911,7 +928,7 @@ def test_doctor_recommendation_cancel_clears_pending_context() -> None:
     )
     type_handler = _handler(router, "doctor_encounter_recommendation_type")
     cancel_handler = _handler(router, "doctor_encounter_recommendation_cancel")
-    capture_handler = _handler(router, "doctor_encounter_recommendation_capture", kind="message")
+    capture_handler = _handler(router, "doctor_pending_text_capture", kind="message")
 
     asyncio.run(type_handler(_Callback("drec:type:enc_b1:aftercare:b1", user_id=702)))
     asyncio.run(cancel_handler(_Callback("drec:cancel:enc_b1:b1", user_id=702)))
@@ -925,11 +942,35 @@ def test_doctor_recommendation_text_without_pending_context_is_not_captured() ->
         care_service=_build_empty_care_service(),
         booking_status="in_service",
     )
-    capture_handler = _handler(router, "doctor_encounter_recommendation_capture", kind="message")
+    capture_handler = _handler(router, "doctor_pending_text_capture", kind="message")
     message = _CommandMessage("Some free text message", user_id=702)
     asyncio.run(capture_handler(message))
     assert recommendation_service.created == []
     assert message.answers == []
+
+
+def test_doctor_pending_text_dispatcher_handles_ambiguous_pending_state_by_newest_context() -> None:
+    clinical = _ClinicalService()
+    care_service = _build_care_service()
+    router, _, _, recommendation_service = _doctor_router(
+        recommendation_rows=[],
+        care_service=care_service,
+        clinical_service=clinical,
+        booking_status="in_service",
+    )
+    note_type_handler = _handler(router, "doctor_encounter_quick_note_type")
+    recommendation_type_handler = _handler(router, "doctor_encounter_recommendation_type")
+    target_mode_handler = _handler(router, "doctor_encounter_recommendation_target_mode")
+    capture_handler = _handler(router, "doctor_pending_text_capture", kind="message")
+
+    asyncio.run(note_type_handler(_Callback("dnote:type:enc_b1:treatment:b1", user_id=702)))
+    asyncio.run(recommendation_type_handler(_Callback("drec:type:enc_b1:aftercare:b1", user_id=702)))
+    asyncio.run(target_mode_handler(_Callback("drec:target:none:enc_b1:b1", user_id=702)))
+    asyncio.run(capture_handler(_CommandMessage("Aftercare | Newer recommendation wins.", user_id=702)))
+
+    assert clinical.saved_notes == []
+    assert recommendation_service.created
+    assert recommendation_service.created[-1]["title"] == "Aftercare"
 
 
 def test_doctor_recommendation_capture_rejects_malformed_title_body() -> None:
@@ -940,7 +981,7 @@ def test_doctor_recommendation_capture_rejects_malformed_title_body() -> None:
     )
     type_handler = _handler(router, "doctor_encounter_recommendation_type")
     target_mode_handler = _handler(router, "doctor_encounter_recommendation_target_mode")
-    capture_handler = _handler(router, "doctor_encounter_recommendation_capture", kind="message")
+    capture_handler = _handler(router, "doctor_pending_text_capture", kind="message")
     type_callback = _Callback("drec:type:enc_b1:aftercare:b1", user_id=702)
     asyncio.run(type_handler(type_callback))
     asyncio.run(target_mode_handler(_Callback("drec:target:none:enc_b1:b1", user_id=702)))
@@ -972,3 +1013,10 @@ def test_doctor_encounter_note_command_fallback_still_works() -> None:
     asyncio.run(handler(message))
     assert clinical.saved_notes == [("enc_b1", "other", "legacy command note")]
     assert "Encounter note saved" in message.answers[-1][0]
+
+
+def test_doc_a2c_contains_no_new_migration_artifacts() -> None:
+    migrations_root = Path("migrations")
+    if not migrations_root.exists():
+        return
+    assert not any("doc_a2c" in path.name.lower() for path in migrations_root.rglob("*"))
