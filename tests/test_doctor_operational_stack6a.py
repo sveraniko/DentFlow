@@ -393,3 +393,33 @@ def test_today_queue_timezone_fallbacks_clinic_then_default() -> None:
     ops.app_default_timezone = "UTC"
     rows2 = asyncio.run(ops.list_today_queue(doctor_id="d1", now=datetime(2026, 4, 17, 0, 30, tzinfo=timezone.utc)))
     assert rows2
+
+
+def test_complete_encounter_enforces_ownership_and_closes_active_encounter() -> None:
+    class _ClinicalRepo:
+        async def get_encounter(self, encounter_id: str):
+            if encounter_id == "enc_ok":
+                return SimpleNamespace(encounter_id=encounter_id, doctor_id="d1", status="in_progress")
+            if encounter_id == "enc_closed":
+                return SimpleNamespace(encounter_id=encounter_id, doctor_id="d1", status="closed")
+            return SimpleNamespace(encounter_id=encounter_id, doctor_id="d2", status="in_progress")
+
+    class _ClinicalService:
+        def __init__(self) -> None:
+            self.repository = _ClinicalRepo()
+            self.closed: list[str] = []
+
+        async def close_encounter(self, encounter_id: str):
+            self.closed.append(encounter_id)
+            return SimpleNamespace(encounter_id=encounter_id, doctor_id="d1", status="closed")
+
+    ops = _ops([_booking("b1", patient_id="pat1", doctor_id="d1", minutes=60, status="in_service")])
+    clinical = _ClinicalService()
+    ops.clinical_service = clinical
+    closed = asyncio.run(ops.complete_encounter(doctor_id="d1", encounter_id="enc_ok"))
+    assert closed is not None and closed.status == "closed"
+    already_closed = asyncio.run(ops.complete_encounter(doctor_id="d1", encounter_id="enc_closed"))
+    assert already_closed is not None and already_closed.status == "closed"
+    denied = asyncio.run(ops.complete_encounter(doctor_id="d1", encounter_id="enc_foreign"))
+    assert denied is None
+    assert clinical.closed == ["enc_ok"]

@@ -308,23 +308,32 @@ class _Orchestration:
 
 class _ClinicalService:
     class _Repo:
+        def __init__(self, status: str) -> None:
+            self.status = status
+
         async def get_encounter(self, encounter_id: str):
             booking_id = encounter_id.replace("enc_", "", 1)
-            return SimpleNamespace(encounter_id=encounter_id, doctor_id="d1", patient_id="p1", booking_id=booking_id, status="in_progress")
+            return SimpleNamespace(encounter_id=encounter_id, doctor_id="d1", patient_id="p1", booking_id=booking_id, status=self.status)
 
-    def __init__(self) -> None:
-        self.repository = self._Repo()
+    def __init__(self, *, encounter_status: str = "in_progress") -> None:
+        self.repository = self._Repo(encounter_status)
+        self.encounter_status = encounter_status
         self.saved_notes: list[tuple[str, str, str]] = []
+        self.closed_encounters: list[str] = []
 
     async def open_or_get_chart(self, *, patient_id: str, clinic_id: str, primary_doctor_id: str):
         return SimpleNamespace(chart_id=f"chart_{patient_id}")
 
     async def open_or_get_encounter(self, *, chart_id: str, doctor_id: str, booking_id: str | None = None):
-        return SimpleNamespace(encounter_id=f"enc_{booking_id or chart_id}", status="in_progress", doctor_id=doctor_id, patient_id="p1")
+        return SimpleNamespace(encounter_id=f"enc_{booking_id or chart_id}", status=self.encounter_status, doctor_id=doctor_id, patient_id="p1")
 
     async def add_encounter_note(self, *, encounter_id: str, note_type: str, note_text: str):
         self.saved_notes.append((encounter_id, note_type, note_text))
         return SimpleNamespace(encounter_note_id=f"note_{len(self.saved_notes)}")
+
+    async def close_encounter(self, encounter_id: str):
+        self.closed_encounters.append(encounter_id)
+        return SimpleNamespace(encounter_id=encounter_id, doctor_id="d1", patient_id="p1", booking_id="b1", status="closed")
 
 
 def _access(role: RoleCode, *, user_id: int) -> AccessResolver:
@@ -667,7 +676,7 @@ def test_doctor_in_service_hands_off_into_encounter_context() -> None:
     assert "Encounter: enc_b1" in text
     assert "Patient: Jane Roe" in text
     assert "Booking: b1 ·" in text
-    assert [row[0].text for row in kb.inline_keyboard] == ["Issue recommendation", "Add quick note", "Back to booking"]
+    assert [row[0].text for row in kb.inline_keyboard] == ["Complete encounter", "Issue recommendation", "Add quick note", "Back to booking"]
 
 
 def test_doctor_legacy_booking_callback_is_bounded() -> None:
@@ -688,7 +697,82 @@ def test_encounter_open_command_uses_canonical_encounter_panel() -> None:
     assert "Encounter: enc_b1" in text
     assert "Patient: Jane Roe" in text
     assert "Booking: b1 ·" in text
-    assert [row[0].text for row in kb.inline_keyboard] == ["Issue recommendation", "Add quick note", "Back to booking"]
+    assert [row[0].text for row in kb.inline_keyboard] == ["Complete encounter", "Issue recommendation", "Add quick note", "Back to booking"]
+
+
+def test_completed_encounter_hides_completion_and_contextual_actions() -> None:
+    clinical = _ClinicalService(encounter_status="closed")
+    router, _, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service(), clinical_service=clinical)
+    handler = _handler(router, "encounter_open", kind="message")
+    message = _CommandMessage("/encounter_open p1 b1", user_id=702)
+    asyncio.run(handler(message))
+    _, kb = message.answers[-1]
+    assert [row[0].text for row in kb.inline_keyboard] == ["Back to booking"]
+
+
+def test_encounter_complete_click_shows_confirmation_prompt() -> None:
+    router, _, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service(), booking_status="in_service")
+    handler = _handler(router, "doctor_encounter_complete_start")
+    callback = _Callback("denc:complete:enc_b1:b1", user_id=702)
+    asyncio.run(handler(callback))
+    text, kb = callback.message.edits[-1]
+    assert "Complete this encounter?" in text
+    assert [row[0].text for row in kb.inline_keyboard] == ["Confirm", "Back"]
+
+
+def test_encounter_complete_confirm_closes_and_returns_to_booking_continuity() -> None:
+    clinical = _ClinicalService()
+    router, _, clinical_service, _ = _doctor_router(
+        recommendation_rows=[],
+        care_service=_build_empty_care_service(),
+        clinical_service=clinical,
+        booking_status="in_service",
+    )
+    handler = _handler(router, "doctor_encounter_complete_confirm")
+    callback = _Callback("denc:complete_confirm:enc_b1:b1", user_id=702)
+    asyncio.run(handler(callback))
+    assert clinical_service.closed_encounters == ["enc_b1"]
+    text, kb = callback.message.edits[-1]
+    assert "Encounter completed." in text
+    assert "[In service]" in text
+    actions = [row[0].text for row in kb.inline_keyboard]
+    assert "Add quick note" in actions
+    assert "Issue recommendation" in actions
+
+
+def test_encounter_complete_abort_returns_to_encounter_context_without_mutation() -> None:
+    clinical = _ClinicalService()
+    router, _, clinical_service, _ = _doctor_router(
+        recommendation_rows=[],
+        care_service=_build_empty_care_service(),
+        clinical_service=clinical,
+        booking_status="in_service",
+    )
+    handler = _handler(router, "doctor_encounter_complete_abort")
+    callback = _Callback("denc:complete_abort:enc_b1:b1", user_id=702)
+    asyncio.run(handler(callback))
+    assert clinical_service.closed_encounters == []
+    text, kb = callback.message.edits[-1]
+    assert "Encounter context" in text
+    assert [row[0].text for row in kb.inline_keyboard] == ["Complete encounter", "Issue recommendation", "Add quick note", "Back to booking"]
+
+
+def test_encounter_complete_stale_or_terminal_callbacks_are_bounded() -> None:
+    clinical = _ClinicalService(encounter_status="closed")
+    router, _, _, _ = _doctor_router(
+        recommendation_rows=[],
+        care_service=_build_empty_care_service(),
+        clinical_service=clinical,
+        booking_status="in_service",
+    )
+    confirm_handler = _handler(router, "doctor_encounter_complete_confirm")
+    malformed_handler = _handler(router, "doctor_encounter_complete_start")
+    terminal_callback = _Callback("denc:complete_confirm:enc_b1:b1", user_id=702)
+    asyncio.run(confirm_handler(terminal_callback))
+    assert terminal_callback.answers and "unavailable" in terminal_callback.answers[0].lower()
+    malformed_callback = _Callback("denc:complete:oops", user_id=702)
+    asyncio.run(malformed_handler(malformed_callback))
+    assert malformed_callback.answers and "unavailable" in malformed_callback.answers[0].lower()
 
 
 def test_doctor_booking_panel_add_quick_note_cta_only_for_in_service() -> None:
@@ -744,7 +828,7 @@ def test_doctor_quick_note_type_and_capture_flow_calls_add_note_and_returns_cont
     final_text, final_kb = text_message.answers[-1]
     assert "Note saved." in final_text
     assert "Encounter context" in final_text
-    assert [row[0].text for row in final_kb.inline_keyboard] == ["Issue recommendation", "Add quick note", "Back to booking"]
+    assert [row[0].text for row in final_kb.inline_keyboard] == ["Complete encounter", "Issue recommendation", "Add quick note", "Back to booking"]
 
 
 def test_doctor_quick_note_text_without_pending_context_is_not_captured() -> None:
@@ -825,7 +909,7 @@ def test_doctor_recommendation_type_and_capture_flow_calls_issue_and_returns_con
     final_text, final_kb = text_message.answers[-1]
     assert "Recommendation saved." in final_text
     assert "Encounter context" in final_text
-    assert [row[0].text for row in final_kb.inline_keyboard] == ["Issue recommendation", "Add quick note", "Back to booking"]
+    assert [row[0].text for row in final_kb.inline_keyboard] == ["Complete encounter", "Issue recommendation", "Add quick note", "Back to booking"]
 
 
 def test_doctor_recommendation_target_path_accepts_valid_product_target_and_persists_target() -> None:
@@ -1020,3 +1104,10 @@ def test_doc_a2c_contains_no_new_migration_artifacts() -> None:
     if not migrations_root.exists():
         return
     assert not any("doc_a2c" in path.name.lower() for path in migrations_root.rglob("*"))
+
+
+def test_doc_a3a_contains_no_new_migration_artifacts() -> None:
+    migrations_root = Path("migrations")
+    if not migrations_root.exists():
+        return
+    assert not any("doc_a3a" in path.name.lower() for path in migrations_root.rglob("*"))
