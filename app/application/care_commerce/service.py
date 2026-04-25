@@ -228,7 +228,7 @@ class CareCommerceService:
         target_code: str,
         justification_text: str | None = None,
     ) -> None:
-        if target_kind not in {"product", "set"}:
+        if target_kind not in {"product", "set", "category"}:
             raise ValueError("unsupported_target_kind")
         await self.repository.upsert_manual_recommendation_target(
             recommendation_id=recommendation_id,
@@ -369,6 +369,24 @@ class CareCommerceService:
                     source_kind=source_kind,
                 )
             ]
+        if target_kind == "category":
+            products = await self.list_catalog_products_by_category(clinic_id=clinic_id, category=target_code)
+            resolved: list[ResolvedRecommendationProduct] = []
+            for index, product in enumerate(products):
+                if product.status != "active":
+                    continue
+                resolved.append(
+                    ResolvedRecommendationProduct(
+                        recommendation_id=recommendation_id,
+                        care_product_id=product.care_product_id,
+                        product=product,
+                        relevance_rank=relevance_rank + index,
+                        quantity=1,
+                        explanation_text=link_justification,
+                        source_kind=source_kind,
+                    )
+                )
+            return resolved
         if target_kind != "set":
             return []
         rec_set = await self.repository.get_recommendation_set(clinic_id=clinic_id, set_code=target_code)
