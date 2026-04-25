@@ -85,6 +85,16 @@ def make_router(
         patient_id: str | None
         created_at: datetime
 
+    @dataclass(slots=True)
+    class _PendingEncounterRecommendation:
+        doctor_id: str
+        clinic_id: str
+        patient_id: str
+        encounter_id: str
+        booking_id: str | None
+        recommendation_type: str
+        created_at: datetime
+
     search_backend = search_service
     router = build_role_router(
         role_key="doctor",
@@ -129,8 +139,18 @@ def make_router(
     export_document_type = "043_card_export"
     delivery_service = artifact_delivery or GeneratedArtifactDeliveryService()
     pending_notes_by_user: dict[int, _PendingEncounterNote] = {}
+    pending_recommendations_by_user: dict[int, _PendingEncounterRecommendation] = {}
     pending_note_ttl = timedelta(minutes=10)
+    pending_recommendation_ttl = timedelta(minutes=10)
     allowed_quick_note_types = ("observation", "treatment", "follow_up", "other")
+    allowed_recommendation_types = ("hygiene", "aftercare", "follow_up", "medication", "other")
+    recommendation_type_map = {
+        "hygiene": "hygiene_support",
+        "aftercare": "aftercare",
+        "follow_up": "follow_up",
+        "medication": "next_step",
+        "other": "general_guidance",
+    }
 
     def _doc_status_label(*, status: str, locale: str) -> str:
         translated = i18n.t(f"document.status.{status}", locale)
@@ -211,6 +231,18 @@ def make_router(
         if detail.booking_status == "in_service":
             rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.complete", locale), callback_data=await _encode_booking_callback(booking_id=detail.booking_id, action=CardAction.COMPLETE, page_or_index="complete"))])
             rows.append([InlineKeyboardButton(text=i18n.t("doctor.encounter.quick_note.add", locale), callback_data=await _encode_booking_callback(booking_id=detail.booking_id, action=CardAction.OPEN, page_or_index="add_quick_note"))])
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("doctor.recommend.context.issue", locale),
+                        callback_data=await _encode_booking_callback(
+                            booking_id=detail.booking_id,
+                            action=CardAction.OPEN,
+                            page_or_index="add_recommendation",
+                        ),
+                    )
+                ]
+            )
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.patient", locale), callback_data=await _encode_booking_callback(booking_id=detail.booking_id, action=CardAction.OPEN_PATIENT, page_or_index="open_patient"))])
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.chart", locale), callback_data=await _encode_booking_callback(booking_id=detail.booking_id, action=CardAction.OPEN_CHART, page_or_index="open_chart"))])
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.recommendation", locale), callback_data=await _encode_booking_callback(booking_id=detail.booking_id, action=CardAction.OPEN_RECOMMENDATION, page_or_index="open_recommendation"))])
@@ -237,10 +269,16 @@ def make_router(
         rows: list[list[InlineKeyboardButton]] = [
             [
                 InlineKeyboardButton(
+                    text=i18n.t("doctor.recommend.context.issue", locale),
+                    callback_data=f"drec:start:{encounter_id}:{booking_id or '-'}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text=i18n.t("doctor.encounter.quick_note.add", locale),
                     callback_data=f"dnote:start:{encounter_id}:{booking_id or '-'}",
                 )
-            ]
+            ],
         ]
         if booking_id:
             rows.append(
@@ -269,6 +307,18 @@ def make_router(
     def _clear_pending_note(*, user_id: int) -> None:
         pending_notes_by_user.pop(user_id, None)
 
+    def _pop_pending_recommendation(*, user_id: int) -> _PendingEncounterRecommendation | None:
+        ctx = pending_recommendations_by_user.get(user_id)
+        if ctx is None:
+            return None
+        if datetime.now(timezone.utc) - ctx.created_at > pending_recommendation_ttl:
+            pending_recommendations_by_user.pop(user_id, None)
+            return None
+        return ctx
+
+    def _clear_pending_recommendation(*, user_id: int) -> None:
+        pending_recommendations_by_user.pop(user_id, None)
+
     async def _resolve_owned_encounter(*, doctor_id: str, encounter_id: str):
         if operations is None or operations.clinical_service is None:
             return None
@@ -289,6 +339,27 @@ def make_router(
             for note_type in allowed_quick_note_types
         ]
         rows.append([InlineKeyboardButton(text=i18n.t("doctor.encounter.quick_note.cancel", locale), callback_data=f"dnote:cancel:{encounter_id}:{booking_token}")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def _recommendation_type_keyboard(*, encounter_id: str, booking_id: str | None, locale: str) -> InlineKeyboardMarkup:
+        booking_token = booking_id or "-"
+        rows = [
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(f"doctor.recommend.context.type.{recommendation_type}", locale),
+                    callback_data=f"drec:type:{encounter_id}:{recommendation_type}:{booking_token}",
+                )
+            ]
+            for recommendation_type in allowed_recommendation_types
+        ]
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=i18n.t("doctor.recommend.context.cancel", locale),
+                    callback_data=f"drec:cancel:{encounter_id}:{booking_token}",
+                )
+            ]
+        )
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
     async def _render_doctor_encounter_panel(
@@ -1153,6 +1224,24 @@ def make_router(
                 reply_markup=_quick_note_type_keyboard(encounter_id=encounter.encounter_id, booking_id=detail.booking_id, locale=locale),
             )
             return
+        elif decoded.page_or_index == "add_recommendation":
+            if detail.booking_status != "in_service":
+                await callback.answer(i18n.t("doctor.recommend.context.unavailable", locale), show_alert=True)
+                return
+            encounter = await operations.open_or_get_encounter(
+                doctor_id=doctor_id,
+                clinic_id=clinic_id,
+                patient_id=detail.patient_card.patient_id,
+                booking_id=detail.booking_id,
+            )
+            if encounter is None:
+                await callback.answer(i18n.t("doctor.recommend.context.unavailable", locale), show_alert=True)
+                return
+            await callback.message.edit_text(
+                i18n.t("doctor.recommend.context.choose_type", locale),
+                reply_markup=_recommendation_type_keyboard(encounter_id=encounter.encounter_id, booking_id=detail.booking_id, locale=locale),
+            )
+            return
         if detail is None:
             await callback.answer(i18n.t("doctor.booking.open.missing", locale), show_alert=True)
             return
@@ -1174,7 +1263,7 @@ def make_router(
             await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
             return
         _, page_or_index, booking_id = parts
-        if page_or_index not in {"open_booking", "in_service", "complete", "open_patient", "open_chart", "open_recommendation", "open_care_order", "add_quick_note"}:
+        if page_or_index not in {"open_booking", "in_service", "complete", "open_patient", "open_chart", "open_recommendation", "open_care_order", "add_quick_note", "add_recommendation"}:
             await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
             return
         shell = await operations.get_booking_detail(doctor_id=doctor_id, booking_id=booking_id)
@@ -1197,6 +1286,24 @@ def make_router(
             await callback.message.edit_text(
                 i18n.t("doctor.encounter.quick_note.choose_type", locale),
                 reply_markup=_quick_note_type_keyboard(encounter_id=encounter.encounter_id, booking_id=shell.booking_id, locale=locale),
+            )
+            return
+        if page_or_index == "add_recommendation":
+            if shell.booking_status != "in_service":
+                await callback.answer(i18n.t("doctor.recommend.context.unavailable", locale), show_alert=True)
+                return
+            encounter = await operations.open_or_get_encounter(
+                doctor_id=doctor_id,
+                clinic_id=clinic_id,
+                patient_id=shell.patient_card.patient_id,
+                booking_id=shell.booking_id,
+            )
+            if encounter is None:
+                await callback.answer(i18n.t("doctor.recommend.context.unavailable", locale), show_alert=True)
+                return
+            await callback.message.edit_text(
+                i18n.t("doctor.recommend.context.choose_type", locale),
+                reply_markup=_recommendation_type_keyboard(encounter_id=encounter.encounter_id, booking_id=shell.booking_id, locale=locale),
             )
             return
         card = await _doctor_booking_shell(detail=shell, locale=locale)
@@ -1284,6 +1391,84 @@ def make_router(
         locale = await resolve_locale(callback, access_resolver=access_resolver, fallback_locale=default_locale)
         _clear_pending_note(user_id=callback.from_user.id)
         await callback.answer(i18n.t("doctor.encounter.quick_note.canceled", locale), show_alert=True)
+
+    @router.callback_query(F.data.startswith("drec:start:"))
+    async def doctor_encounter_recommendation_start(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        locale = await resolve_locale(callback, access_resolver=access_resolver, fallback_locale=default_locale)
+        doctor_id, _, _ = await _resolve_doctor_context(callback)
+        if doctor_id is None:
+            return
+        parts = callback.data.split(":", maxsplit=3)
+        if len(parts) != 4:
+            await callback.answer(i18n.t("doctor.recommend.context.unavailable", locale), show_alert=True)
+            return
+        encounter_id = parts[2].strip()
+        booking_id = None if parts[3].strip() in {"", "-"} else parts[3].strip()
+        encounter = await _resolve_owned_encounter(doctor_id=doctor_id, encounter_id=encounter_id)
+        if encounter is None:
+            _clear_pending_recommendation(user_id=callback.from_user.id)
+            await callback.answer(i18n.t("doctor.recommend.context.unavailable", locale), show_alert=True)
+            return
+        await callback.message.edit_text(
+            i18n.t("doctor.recommend.context.choose_type", locale),
+            reply_markup=_recommendation_type_keyboard(encounter_id=encounter_id, booking_id=booking_id, locale=locale),
+        )
+
+    @router.callback_query(F.data.startswith("drec:type:"))
+    async def doctor_encounter_recommendation_type(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        locale = await resolve_locale(callback, access_resolver=access_resolver, fallback_locale=default_locale)
+        doctor_id, _, clinic_id = await _resolve_doctor_context(callback)
+        if doctor_id is None or clinic_id is None:
+            return
+        parts = callback.data.split(":", maxsplit=4)
+        if len(parts) != 5:
+            await callback.answer(i18n.t("doctor.recommend.context.unavailable", locale), show_alert=True)
+            return
+        encounter_id = parts[2].strip()
+        recommendation_type = parts[3].strip()
+        booking_id = None if parts[4].strip() in {"", "-"} else parts[4].strip()
+        if recommendation_type not in allowed_recommendation_types:
+            await callback.answer(i18n.t("doctor.recommend.context.unavailable", locale), show_alert=True)
+            return
+        encounter = await _resolve_owned_encounter(doctor_id=doctor_id, encounter_id=encounter_id)
+        if encounter is None:
+            _clear_pending_recommendation(user_id=callback.from_user.id)
+            await callback.answer(i18n.t("doctor.recommend.context.unavailable", locale), show_alert=True)
+            return
+        pending_recommendations_by_user[callback.from_user.id] = _PendingEncounterRecommendation(
+            doctor_id=doctor_id,
+            clinic_id=clinic_id,
+            patient_id=getattr(encounter, "patient_id", ""),
+            encounter_id=encounter_id,
+            booking_id=booking_id,
+            recommendation_type=recommendation_type_map[recommendation_type],
+            created_at=datetime.now(timezone.utc),
+        )
+        await callback.message.edit_text(
+            i18n.t("doctor.recommend.context.send_text", locale),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=i18n.t("doctor.recommend.context.cancel", locale),
+                            callback_data=f"drec:cancel:{encounter_id}:{booking_id or '-'}",
+                        )
+                    ]
+                ]
+            ),
+        )
+
+    @router.callback_query(F.data.startswith("drec:cancel:"))
+    async def doctor_encounter_recommendation_cancel(callback: CallbackQuery) -> None:
+        if not callback.from_user:
+            return
+        locale = await resolve_locale(callback, access_resolver=access_resolver, fallback_locale=default_locale)
+        _clear_pending_recommendation(user_id=callback.from_user.id)
+        await callback.answer(i18n.t("doctor.recommend.context.canceled", locale), show_alert=True)
 
     @router.message(Command("patient_open"))
     async def patient_open(message: Message) -> None:
@@ -1461,6 +1646,69 @@ def make_router(
         )
         await message.answer(
             f"{i18n.t('doctor.encounter.quick_note.saved', locale)}\n\n{panel}",
+            reply_markup=await _doctor_encounter_keyboard(
+                encounter_id=pending.encounter_id,
+                booking_id=pending.booking_id,
+                locale=locale,
+            ),
+        )
+
+    @router.message(F.text)
+    async def doctor_encounter_recommendation_capture(message: Message) -> None:
+        if not message.from_user or not message.text or message.text.startswith("/"):
+            return
+        locale = await resolve_locale(message, access_resolver=access_resolver, fallback_locale=default_locale)
+        pending = _pop_pending_recommendation(user_id=message.from_user.id)
+        if pending is None:
+            return
+        if operations is None:
+            _clear_pending_recommendation(user_id=message.from_user.id)
+            await message.answer(i18n.t("doctor.recommend.context.unavailable", locale))
+            return
+        if "|" not in message.text:
+            await message.answer(i18n.t("doctor.recommend.context.invalid_format", locale))
+            return
+        title, body = [part.strip() for part in message.text.split("|", 1)]
+        if not title or not body:
+            await message.answer(i18n.t("doctor.recommend.context.invalid_format", locale))
+            return
+        try:
+            recommendation = await operations.issue_recommendation(
+                doctor_id=pending.doctor_id,
+                clinic_id=pending.clinic_id,
+                patient_id=pending.patient_id,
+                recommendation_type=pending.recommendation_type,
+                title=title,
+                body_text=body,
+                booking_id=pending.booking_id,
+                encounter_id=pending.encounter_id,
+                target_kind=None,
+                target_code=None,
+            )
+        except ValueError:
+            _clear_pending_recommendation(user_id=message.from_user.id)
+            await message.answer(i18n.t("doctor.recommend.context.unavailable", locale))
+            return
+        _clear_pending_recommendation(user_id=message.from_user.id)
+        if recommendation is None:
+            await message.answer(i18n.t("doctor.recommend.context.unavailable", locale))
+            return
+        encounter = await _resolve_owned_encounter(doctor_id=pending.doctor_id, encounter_id=pending.encounter_id)
+        if encounter is None:
+            await message.answer(i18n.t("doctor.recommend.context.saved", locale))
+            return
+        booking_detail = None
+        if pending.booking_id:
+            booking_detail = await operations.get_booking_detail(doctor_id=pending.doctor_id, booking_id=pending.booking_id)
+        panel = await _render_doctor_encounter_panel(
+            doctor_id=pending.doctor_id,
+            patient_id=pending.patient_id or getattr(encounter, "patient_id", ""),
+            encounter=encounter,
+            locale=locale,
+            booking_detail=booking_detail,
+        )
+        await message.answer(
+            f"{i18n.t('doctor.recommend.context.saved', locale)}\n\n{panel}",
             reply_markup=await _doctor_encounter_keyboard(
                 encounter_id=pending.encounter_id,
                 booking_id=pending.booking_id,
