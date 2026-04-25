@@ -188,6 +188,9 @@ class _CareService:
 
 
 class _DoctorBookingService:
+    def __init__(self, *, status: str = "confirmed") -> None:
+        self.status = status
+
     async def load_booking(self, booking_id: str):
         return SimpleNamespace(
             booking_id="b1",
@@ -196,7 +199,7 @@ class _DoctorBookingService:
             doctor_id="d1",
             branch_id="br1",
             service_id="s1",
-            status="confirmed",
+            status=self.status,
             source_channel="telegram",
             scheduled_start_at=datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc),
         )
@@ -209,7 +212,7 @@ class _DoctorBookingService:
                 booking_id="b1",
                 doctor_id="d1",
                 scheduled_start_at=datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc),
-                status="confirmed",
+                status=self.status,
             )
         ]
 
@@ -237,11 +240,24 @@ class _Orchestration:
 
 
 class _ClinicalService:
+    class _Repo:
+        async def get_encounter(self, encounter_id: str):
+            booking_id = encounter_id.replace("enc_", "", 1)
+            return SimpleNamespace(encounter_id=encounter_id, doctor_id="d1", patient_id="p1", booking_id=booking_id, status="in_progress")
+
+    def __init__(self) -> None:
+        self.repository = self._Repo()
+        self.saved_notes: list[tuple[str, str, str]] = []
+
     async def open_or_get_chart(self, *, patient_id: str, clinic_id: str, primary_doctor_id: str):
         return SimpleNamespace(chart_id=f"chart_{patient_id}")
 
     async def open_or_get_encounter(self, *, chart_id: str, doctor_id: str, booking_id: str | None = None):
-        return SimpleNamespace(encounter_id=f"enc_{booking_id or chart_id}", status="in_progress")
+        return SimpleNamespace(encounter_id=f"enc_{booking_id or chart_id}", status="in_progress", doctor_id=doctor_id, patient_id="p1")
+
+    async def add_encounter_note(self, *, encounter_id: str, note_type: str, note_text: str):
+        self.saved_notes.append((encounter_id, note_type, note_text))
+        return SimpleNamespace(encounter_note_id=f"note_{len(self.saved_notes)}")
 
 
 def _access(role: RoleCode, *, user_id: int) -> AccessResolver:
@@ -422,22 +438,29 @@ def _admin_router(*, recommendation_rows: list[Recommendation], care_service: _C
     return router, codec
 
 
-def _doctor_router(*, recommendation_rows: list[Recommendation], care_service: _CareService):
+def _doctor_router(
+    *,
+    recommendation_rows: list[Recommendation],
+    care_service: _CareService,
+    clinical_service: _ClinicalService | None = None,
+    booking_status: str = "confirmed",
+):
     i18n = I18nService(Path("locales"), default_locale="en")
     runtime = CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=InMemoryRedis()))
     codec = CardCallbackCodec(runtime=runtime)
+    clinical = clinical_service or _ClinicalService()
     router = make_doctor_router(
         i18n=i18n,
         access_resolver=_access(RoleCode.DOCTOR, user_id=702),
         search_service=SimpleNamespace(),
         stt_service=SimpleNamespace(),
         voice_mode_store=SimpleNamespace(),
-        booking_service=_DoctorBookingService(),
+        booking_service=_DoctorBookingService(status=booking_status),
         booking_state_service=_BookingState(),
         booking_orchestration=_Orchestration(),
         reference_service=_DoctorReference(),
         patient_reader=_PatientReader(),
-        clinical_service=_ClinicalService(),
+        clinical_service=clinical,
         recommendation_service=_RecommendationService(recommendation_rows),
         care_commerce_service=care_service,
         default_locale="en",
@@ -447,7 +470,7 @@ def _doctor_router(*, recommendation_rows: list[Recommendation], care_service: _
         card_runtime=runtime,
         card_callback_codec=codec,
     )
-    return router, codec
+    return router, codec, clinical
 
 
 def _booking_callback_payload(*, page_or_index: str, booking_id: str, source_context: SourceContext) -> CardCallback:
@@ -542,7 +565,7 @@ def test_admin_linked_recommendation_hides_care_order_cta_when_absent_and_manual
 
 
 def test_doctor_linked_opens_render_panels_and_missing_state() -> None:
-    router, codec = _doctor_router(recommendation_rows=[], care_service=_build_care_service())
+    router, codec, _ = _doctor_router(recommendation_rows=[], care_service=_build_care_service())
     callback_handler = _handler(router, "doctor_runtime_booking_callback")
     rec_data = asyncio.run(codec.encode(_booking_callback_payload(page_or_index="open_recommendation", booking_id="b1", source_context=SourceContext.DOCTOR_QUEUE)))
     rec_callback = _Callback(rec_data, user_id=702)
@@ -552,7 +575,7 @@ def test_doctor_linked_opens_render_panels_and_missing_state() -> None:
     assert rec_kb.inline_keyboard[0][0].text == "Back"
     assert rec_text.strip() != "-"
 
-    router2, codec2 = _doctor_router(recommendation_rows=_build_recommendation_rows(), care_service=_build_empty_care_service())
+    router2, codec2, _ = _doctor_router(recommendation_rows=_build_recommendation_rows(), care_service=_build_empty_care_service())
     callback_handler2 = _handler(router2, "doctor_runtime_booking_callback")
     order_data = asyncio.run(codec2.encode(_booking_callback_payload(page_or_index="open_care_order", booking_id="b1", source_context=SourceContext.DOCTOR_QUEUE)))
     order_callback = _Callback(order_data, user_id=702)
@@ -564,7 +587,7 @@ def test_doctor_linked_opens_render_panels_and_missing_state() -> None:
 
 
 def test_doctor_in_service_hands_off_into_encounter_context() -> None:
-    router, codec = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service())
+    router, codec, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service())
     callback_handler = _handler(router, "doctor_runtime_booking_callback")
     in_service_data = asyncio.run(
         codec.encode(_booking_callback_payload(page_or_index="in_service", booking_id="b1", source_context=SourceContext.DOCTOR_QUEUE))
@@ -576,11 +599,11 @@ def test_doctor_in_service_hands_off_into_encounter_context() -> None:
     assert "Encounter: enc_b1" in text
     assert "Patient: Jane Roe" in text
     assert "Booking: b1 ·" in text
-    assert kb.inline_keyboard[0][0].text == "Back"
+    assert [row[0].text for row in kb.inline_keyboard] == ["Add quick note", "Back to booking"]
 
 
 def test_doctor_legacy_booking_callback_is_bounded() -> None:
-    router, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service())
+    router, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service())
     callback_handler = _handler(router, "doctor_runtime_booking_callback_legacy")
     stale_callback = _Callback("doctorbk:unknown:b1", user_id=702)
     asyncio.run(callback_handler(stale_callback))
@@ -588,12 +611,93 @@ def test_doctor_legacy_booking_callback_is_bounded() -> None:
 
 
 def test_encounter_open_command_uses_canonical_encounter_panel() -> None:
-    router, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service())
+    router, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service())
     handler = _handler(router, "encounter_open", kind="message")
     message = _CommandMessage("/encounter_open p1 b1", user_id=702)
     asyncio.run(handler(message))
-    text, _ = message.answers[-1]
+    text, kb = message.answers[-1]
     assert "Encounter context" in text
     assert "Encounter: enc_b1" in text
     assert "Patient: Jane Roe" in text
     assert "Booking: b1 ·" in text
+    assert [row[0].text for row in kb.inline_keyboard] == ["Add quick note", "Back to booking"]
+
+
+def test_doctor_booking_panel_add_quick_note_cta_only_for_in_service() -> None:
+    router_in_service, codec, _ = _doctor_router(
+        recommendation_rows=[],
+        care_service=_build_empty_care_service(),
+        booking_status="in_service",
+    )
+    callback_handler = _handler(router_in_service, "doctor_runtime_booking_callback")
+    open_data = asyncio.run(codec.encode(_booking_callback_payload(page_or_index="open_booking", booking_id="b1", source_context=SourceContext.DOCTOR_QUEUE)))
+    open_callback = _Callback(open_data, user_id=702)
+    asyncio.run(callback_handler(open_callback))
+    _, kb = open_callback.message.edits[-1]
+    assert "Add quick note" in [row[0].text for row in kb.inline_keyboard]
+
+    router_confirmed, codec2, _ = _doctor_router(
+        recommendation_rows=[],
+        care_service=_build_empty_care_service(),
+        booking_status="confirmed",
+    )
+    callback_handler2 = _handler(router_confirmed, "doctor_runtime_booking_callback")
+    open_data2 = asyncio.run(codec2.encode(_booking_callback_payload(page_or_index="open_booking", booking_id="b1", source_context=SourceContext.DOCTOR_QUEUE)))
+    open_callback2 = _Callback(open_data2, user_id=702)
+    asyncio.run(callback_handler2(open_callback2))
+    _, kb2 = open_callback2.message.edits[-1]
+    assert "Add quick note" not in [row[0].text for row in kb2.inline_keyboard]
+
+
+def test_doctor_quick_note_type_and_capture_flow_calls_add_note_and_returns_context() -> None:
+    clinical = _ClinicalService()
+    router, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service(), clinical_service=clinical, booking_status="in_service")
+    start_handler = _handler(router, "doctor_encounter_quick_note_start")
+    type_handler = _handler(router, "doctor_encounter_quick_note_type")
+    capture_handler = _handler(router, "doctor_encounter_quick_note_capture", kind="message")
+
+    start_callback = _Callback("dnote:start:enc_b1:b1", user_id=702)
+    asyncio.run(start_handler(start_callback))
+    start_text, _ = start_callback.message.edits[-1]
+    assert "Choose note type" in start_text
+
+    type_callback = _Callback("dnote:type:enc_b1:treatment:b1", user_id=702)
+    asyncio.run(type_handler(type_callback))
+    type_text, _ = type_callback.message.edits[-1]
+    assert "Send note text" in type_text
+
+    text_message = _CommandMessage("Patient is stable after treatment.", user_id=702)
+    asyncio.run(capture_handler(text_message))
+    assert clinical.saved_notes == [("enc_b1", "treatment", "Patient is stable after treatment.")]
+    final_text, final_kb = text_message.answers[-1]
+    assert "Note saved." in final_text
+    assert "Encounter context" in final_text
+    assert [row[0].text for row in final_kb.inline_keyboard] == ["Add quick note", "Back to booking"]
+
+
+def test_doctor_quick_note_text_without_pending_context_is_not_captured() -> None:
+    clinical = _ClinicalService()
+    router, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service(), clinical_service=clinical, booking_status="in_service")
+    capture_handler = _handler(router, "doctor_encounter_quick_note_capture", kind="message")
+    message = _CommandMessage("Random plain message", user_id=702)
+    asyncio.run(capture_handler(message))
+    assert clinical.saved_notes == []
+    assert message.answers == []
+
+
+def test_doctor_quick_note_malformed_type_callback_is_bounded() -> None:
+    router, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service(), booking_status="in_service")
+    handler = _handler(router, "doctor_encounter_quick_note_type")
+    callback = _Callback("dnote:type:enc_b1:badtype:b1", user_id=702)
+    asyncio.run(handler(callback))
+    assert callback.answers and "unavailable" in callback.answers[0].lower()
+
+
+def test_doctor_encounter_note_command_fallback_still_works() -> None:
+    clinical = _ClinicalService()
+    router, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service(), clinical_service=clinical)
+    handler = _handler(router, "encounter_note", kind="message")
+    message = _CommandMessage("/encounter_note enc_b1 other legacy command note", user_id=702)
+    asyncio.run(handler(message))
+    assert clinical.saved_notes == [("enc_b1", "other", "legacy command note")]
+    assert "Encounter note saved" in message.answers[-1][0]

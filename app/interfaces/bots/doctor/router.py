@@ -1,4 +1,6 @@
 import json
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -74,6 +76,15 @@ def make_router(
     card_runtime: CardRuntimeCoordinator | None = None,
     card_callback_codec: CardCallbackCodec | None = None,
 ) -> Router:
+    @dataclass(slots=True)
+    class _PendingEncounterNote:
+        doctor_id: str
+        encounter_id: str
+        note_type: str
+        booking_id: str | None
+        patient_id: str | None
+        created_at: datetime
+
     search_backend = search_service
     router = build_role_router(
         role_key="doctor",
@@ -117,6 +128,9 @@ def make_router(
     care_order_builder = CareOrderRuntimeViewBuilder()
     export_document_type = "043_card_export"
     delivery_service = artifact_delivery or GeneratedArtifactDeliveryService()
+    pending_notes_by_user: dict[int, _PendingEncounterNote] = {}
+    pending_note_ttl = timedelta(minutes=10)
+    allowed_quick_note_types = ("observation", "treatment", "follow_up", "other")
 
     def _doc_status_label(*, status: str, locale: str) -> str:
         translated = i18n.t(f"document.status.{status}", locale)
@@ -196,6 +210,7 @@ def make_router(
             rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.in_service", locale), callback_data=await _encode_booking_callback(booking_id=detail.booking_id, action=CardAction.IN_SERVICE, page_or_index="in_service"))])
         if detail.booking_status == "in_service":
             rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.complete", locale), callback_data=await _encode_booking_callback(booking_id=detail.booking_id, action=CardAction.COMPLETE, page_or_index="complete"))])
+            rows.append([InlineKeyboardButton(text=i18n.t("doctor.encounter.quick_note.add", locale), callback_data=await _encode_booking_callback(booking_id=detail.booking_id, action=CardAction.OPEN, page_or_index="add_quick_note"))])
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.patient", locale), callback_data=await _encode_booking_callback(booking_id=detail.booking_id, action=CardAction.OPEN_PATIENT, page_or_index="open_patient"))])
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.chart", locale), callback_data=await _encode_booking_callback(booking_id=detail.booking_id, action=CardAction.OPEN_CHART, page_or_index="open_chart"))])
         rows.append([InlineKeyboardButton(text=i18n.t("card.booking.action.recommendation", locale), callback_data=await _encode_booking_callback(booking_id=detail.booking_id, action=CardAction.OPEN_RECOMMENDATION, page_or_index="open_recommendation"))])
@@ -217,6 +232,64 @@ def make_router(
                 ]
             ]
         )
+
+    async def _doctor_encounter_keyboard(*, encounter_id: str, booking_id: str | None, locale: str) -> InlineKeyboardMarkup:
+        rows: list[list[InlineKeyboardButton]] = [
+            [
+                InlineKeyboardButton(
+                    text=i18n.t("doctor.encounter.quick_note.add", locale),
+                    callback_data=f"dnote:start:{encounter_id}:{booking_id or '-'}",
+                )
+            ]
+        ]
+        if booking_id:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("doctor.encounter.back_to_booking", locale),
+                        callback_data=await _encode_booking_callback(
+                            booking_id=booking_id,
+                            action=CardAction.OPEN,
+                            page_or_index="open_booking",
+                        ),
+                    )
+                ]
+            )
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def _pop_pending_note(*, user_id: int) -> _PendingEncounterNote | None:
+        ctx = pending_notes_by_user.get(user_id)
+        if ctx is None:
+            return None
+        if datetime.now(timezone.utc) - ctx.created_at > pending_note_ttl:
+            pending_notes_by_user.pop(user_id, None)
+            return None
+        return ctx
+
+    def _clear_pending_note(*, user_id: int) -> None:
+        pending_notes_by_user.pop(user_id, None)
+
+    async def _resolve_owned_encounter(*, doctor_id: str, encounter_id: str):
+        if operations is None or operations.clinical_service is None:
+            return None
+        encounter = await operations.clinical_service.repository.get_encounter(encounter_id)
+        if encounter is None or encounter.doctor_id != doctor_id:
+            return None
+        return encounter
+
+    def _quick_note_type_keyboard(*, encounter_id: str, booking_id: str | None, locale: str) -> InlineKeyboardMarkup:
+        booking_token = booking_id or "-"
+        rows = [
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(f"doctor.encounter.quick_note.type.{note_type}", locale),
+                    callback_data=f"dnote:type:{encounter_id}:{note_type}:{booking_token}",
+                )
+            ]
+            for note_type in allowed_quick_note_types
+        ]
+        rows.append([InlineKeyboardButton(text=i18n.t("doctor.encounter.quick_note.cancel", locale), callback_data=f"dnote:cancel:{encounter_id}:{booking_token}")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
 
     async def _render_doctor_encounter_panel(
         *,
@@ -743,7 +816,8 @@ def make_router(
                 encounter=encounter,
                 locale=locale,
                 booking_detail=booking_detail,
-            )
+            ),
+            reply_markup=await _doctor_encounter_keyboard(encounter_id=encounter.encounter_id, booking_id=booking_id, locale=locale),
         )
 
     @router.message(Command("encounter_note"))
@@ -999,7 +1073,11 @@ def make_router(
                         locale=locale,
                         booking_detail=detail,
                     ),
-                    reply_markup=await _doctor_linked_back_keyboard(booking_id=detail.booking_id, locale=locale),
+                    reply_markup=await _doctor_encounter_keyboard(
+                        encounter_id=encounter.encounter_id,
+                        booking_id=detail.booking_id,
+                        locale=locale,
+                    ),
                 )
                 return
             detail = await operations.get_booking_detail(doctor_id=doctor_id, booking_id=detail.booking_id)
@@ -1057,6 +1135,24 @@ def make_router(
                 reply_markup=await _doctor_linked_back_keyboard(booking_id=detail.booking_id, locale=locale),
             )
             return
+        elif decoded.page_or_index == "add_quick_note":
+            if detail.booking_status != "in_service":
+                await callback.answer(i18n.t("doctor.encounter.quick_note.unavailable", locale), show_alert=True)
+                return
+            encounter = await operations.open_or_get_encounter(
+                doctor_id=doctor_id,
+                clinic_id=clinic_id,
+                patient_id=detail.patient_card.patient_id,
+                booking_id=detail.booking_id,
+            )
+            if encounter is None:
+                await callback.answer(i18n.t("doctor.encounter.quick_note.unavailable", locale), show_alert=True)
+                return
+            await callback.message.edit_text(
+                i18n.t("doctor.encounter.quick_note.choose_type", locale),
+                reply_markup=_quick_note_type_keyboard(encounter_id=encounter.encounter_id, booking_id=detail.booking_id, locale=locale),
+            )
+            return
         if detail is None:
             await callback.answer(i18n.t("doctor.booking.open.missing", locale), show_alert=True)
             return
@@ -1070,20 +1166,38 @@ def make_router(
         if not callback.from_user or not callback.data:
             return
         locale = await resolve_locale(callback, access_resolver=access_resolver, fallback_locale=default_locale)
-        doctor_id, _, _ = await _resolve_doctor_context(callback)
-        if doctor_id is None or operations is None:
+        doctor_id, _, clinic_id = await _resolve_doctor_context(callback)
+        if doctor_id is None or clinic_id is None or operations is None:
             return
         parts = callback.data.split(":", maxsplit=2)
         if len(parts) != 3:
             await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
             return
         _, page_or_index, booking_id = parts
-        if page_or_index not in {"open_booking", "in_service", "complete", "open_patient", "open_chart", "open_recommendation", "open_care_order"}:
+        if page_or_index not in {"open_booking", "in_service", "complete", "open_patient", "open_chart", "open_recommendation", "open_care_order", "add_quick_note"}:
             await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
             return
         shell = await operations.get_booking_detail(doctor_id=doctor_id, booking_id=booking_id)
         if shell is None:
             await callback.answer(i18n.t("doctor.booking.open.missing", locale), show_alert=True)
+            return
+        if page_or_index == "add_quick_note":
+            if shell.booking_status != "in_service":
+                await callback.answer(i18n.t("doctor.encounter.quick_note.unavailable", locale), show_alert=True)
+                return
+            encounter = await operations.open_or_get_encounter(
+                doctor_id=doctor_id,
+                clinic_id=clinic_id,
+                patient_id=shell.patient_card.patient_id,
+                booking_id=shell.booking_id,
+            )
+            if encounter is None:
+                await callback.answer(i18n.t("doctor.encounter.quick_note.unavailable", locale), show_alert=True)
+                return
+            await callback.message.edit_text(
+                i18n.t("doctor.encounter.quick_note.choose_type", locale),
+                reply_markup=_quick_note_type_keyboard(encounter_id=encounter.encounter_id, booking_id=shell.booking_id, locale=locale),
+            )
             return
         card = await _doctor_booking_shell(detail=shell, locale=locale)
         if card is None:
@@ -1093,6 +1207,83 @@ def make_router(
             CardShellRenderer.to_panel(card).text,
             reply_markup=await _doctor_booking_keyboard(detail=shell, locale=locale),
         )
+
+    @router.callback_query(F.data.startswith("dnote:start:"))
+    async def doctor_encounter_quick_note_start(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        locale = await resolve_locale(callback, access_resolver=access_resolver, fallback_locale=default_locale)
+        doctor_id, _, _ = await _resolve_doctor_context(callback)
+        if doctor_id is None:
+            return
+        parts = callback.data.split(":", maxsplit=3)
+        if len(parts) != 4:
+            await callback.answer(i18n.t("doctor.encounter.quick_note.unavailable", locale), show_alert=True)
+            return
+        encounter_id = parts[2].strip()
+        booking_id = None if parts[3].strip() in {"", "-"} else parts[3].strip()
+        encounter = await _resolve_owned_encounter(doctor_id=doctor_id, encounter_id=encounter_id)
+        if encounter is None:
+            _clear_pending_note(user_id=callback.from_user.id)
+            await callback.answer(i18n.t("doctor.encounter.quick_note.unavailable", locale), show_alert=True)
+            return
+        await callback.message.edit_text(
+            i18n.t("doctor.encounter.quick_note.choose_type", locale),
+            reply_markup=_quick_note_type_keyboard(encounter_id=encounter_id, booking_id=booking_id, locale=locale),
+        )
+
+    @router.callback_query(F.data.startswith("dnote:type:"))
+    async def doctor_encounter_quick_note_type(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        locale = await resolve_locale(callback, access_resolver=access_resolver, fallback_locale=default_locale)
+        doctor_id, _, _ = await _resolve_doctor_context(callback)
+        if doctor_id is None:
+            return
+        parts = callback.data.split(":", maxsplit=4)
+        if len(parts) != 5:
+            await callback.answer(i18n.t("doctor.encounter.quick_note.unavailable", locale), show_alert=True)
+            return
+        encounter_id = parts[2].strip()
+        note_type = parts[3].strip()
+        booking_id = None if parts[4].strip() in {"", "-"} else parts[4].strip()
+        if note_type not in allowed_quick_note_types:
+            await callback.answer(i18n.t("doctor.encounter.quick_note.unavailable", locale), show_alert=True)
+            return
+        encounter = await _resolve_owned_encounter(doctor_id=doctor_id, encounter_id=encounter_id)
+        if encounter is None:
+            _clear_pending_note(user_id=callback.from_user.id)
+            await callback.answer(i18n.t("doctor.encounter.quick_note.unavailable", locale), show_alert=True)
+            return
+        pending_notes_by_user[callback.from_user.id] = _PendingEncounterNote(
+            doctor_id=doctor_id,
+            encounter_id=encounter_id,
+            note_type=note_type,
+            booking_id=booking_id,
+            patient_id=getattr(encounter, "patient_id", None),
+            created_at=datetime.now(timezone.utc),
+        )
+        await callback.message.edit_text(
+            i18n.t("doctor.encounter.quick_note.send_text", locale),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=i18n.t("doctor.encounter.quick_note.cancel", locale),
+                            callback_data=f"dnote:cancel:{encounter_id}:{booking_id or '-'}",
+                        )
+                    ]
+                ]
+            ),
+        )
+
+    @router.callback_query(F.data.startswith("dnote:cancel:"))
+    async def doctor_encounter_quick_note_cancel(callback: CallbackQuery) -> None:
+        if not callback.from_user:
+            return
+        locale = await resolve_locale(callback, access_resolver=access_resolver, fallback_locale=default_locale)
+        _clear_pending_note(user_id=callback.from_user.id)
+        await callback.answer(i18n.t("doctor.encounter.quick_note.canceled", locale), show_alert=True)
 
     @router.message(Command("patient_open"))
     async def patient_open(message: Message) -> None:
@@ -1230,6 +1421,51 @@ def make_router(
                 clinic_id=actor.clinic_id,
                 query=query,
             )
+        )
+
+    @router.message(F.text)
+    async def doctor_encounter_quick_note_capture(message: Message) -> None:
+        if not message.from_user or not message.text or message.text.startswith("/"):
+            return
+        locale = await resolve_locale(message, access_resolver=access_resolver, fallback_locale=default_locale)
+        pending = _pop_pending_note(user_id=message.from_user.id)
+        if pending is None:
+            return
+        if operations is None:
+            _clear_pending_note(user_id=message.from_user.id)
+            await message.answer(i18n.t("doctor.encounter.quick_note.unavailable", locale))
+            return
+        note = await operations.add_encounter_note(
+            doctor_id=pending.doctor_id,
+            encounter_id=pending.encounter_id,
+            note_type=pending.note_type,
+            note_text=message.text.strip(),
+        )
+        _clear_pending_note(user_id=message.from_user.id)
+        if note is None:
+            await message.answer(i18n.t("doctor.encounter.quick_note.unavailable", locale))
+            return
+        encounter = await _resolve_owned_encounter(doctor_id=pending.doctor_id, encounter_id=pending.encounter_id)
+        if encounter is None:
+            await message.answer(i18n.t("doctor.encounter.quick_note.saved", locale))
+            return
+        booking_detail = None
+        if pending.booking_id:
+            booking_detail = await operations.get_booking_detail(doctor_id=pending.doctor_id, booking_id=pending.booking_id)
+        panel = await _render_doctor_encounter_panel(
+            doctor_id=pending.doctor_id,
+            patient_id=pending.patient_id or getattr(encounter, "patient_id", ""),
+            encounter=encounter,
+            locale=locale,
+            booking_detail=booking_detail,
+        )
+        await message.answer(
+            f"{i18n.t('doctor.encounter.quick_note.saved', locale)}\n\n{panel}",
+            reply_markup=await _doctor_encounter_keyboard(
+                encounter_id=pending.encounter_id,
+                booking_id=pending.booking_id,
+                locale=locale,
+            ),
         )
 
     return router
