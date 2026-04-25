@@ -147,9 +147,46 @@ class _BookingFlow:
 class _RecommendationService:
     def __init__(self, rows: list[Recommendation]) -> None:
         self.rows = rows
+        self.created: list[dict[str, object]] = []
+        self.issued: list[str] = []
 
     async def list_for_booking(self, *, booking_id: str):
         return [row for row in self.rows if row.booking_id == booking_id]
+
+    async def create_recommendation(
+        self,
+        *,
+        clinic_id: str,
+        patient_id: str,
+        recommendation_type: str,
+        source_kind: str,
+        title: str,
+        body_text: str,
+        rationale_text: str | None = None,
+        booking_id: str | None = None,
+        encounter_id: str | None = None,
+        chart_id: str | None = None,
+        issued_by_actor_id: str | None = None,
+        prepared: bool = True,
+    ):
+        recommendation_id = f"rec_created_{len(self.created) + 1}"
+        self.created.append(
+            {
+                "clinic_id": clinic_id,
+                "patient_id": patient_id,
+                "recommendation_type": recommendation_type,
+                "title": title,
+                "body_text": body_text,
+                "booking_id": booking_id,
+                "encounter_id": encounter_id,
+                "source_kind": source_kind,
+            }
+        )
+        return SimpleNamespace(recommendation_id=recommendation_id)
+
+    async def issue(self, *, recommendation_id: str, issued_by_actor_id: str | None = None):
+        self.issued.append(recommendation_id)
+        return SimpleNamespace(recommendation_id=recommendation_id)
 
 
 class _CareRepo:
@@ -449,6 +486,7 @@ def _doctor_router(
     runtime = CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=InMemoryRedis()))
     codec = CardCallbackCodec(runtime=runtime)
     clinical = clinical_service or _ClinicalService()
+    recommendation_service = _RecommendationService(recommendation_rows)
     router = make_doctor_router(
         i18n=i18n,
         access_resolver=_access(RoleCode.DOCTOR, user_id=702),
@@ -461,7 +499,7 @@ def _doctor_router(
         reference_service=_DoctorReference(),
         patient_reader=_PatientReader(),
         clinical_service=clinical,
-        recommendation_service=_RecommendationService(recommendation_rows),
+        recommendation_service=recommendation_service,
         care_commerce_service=care_service,
         default_locale="en",
         max_voice_duration_sec=60,
@@ -470,7 +508,7 @@ def _doctor_router(
         card_runtime=runtime,
         card_callback_codec=codec,
     )
-    return router, codec, clinical
+    return router, codec, clinical, recommendation_service
 
 
 def _booking_callback_payload(*, page_or_index: str, booking_id: str, source_context: SourceContext) -> CardCallback:
@@ -565,7 +603,7 @@ def test_admin_linked_recommendation_hides_care_order_cta_when_absent_and_manual
 
 
 def test_doctor_linked_opens_render_panels_and_missing_state() -> None:
-    router, codec, _ = _doctor_router(recommendation_rows=[], care_service=_build_care_service())
+    router, codec, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_care_service())
     callback_handler = _handler(router, "doctor_runtime_booking_callback")
     rec_data = asyncio.run(codec.encode(_booking_callback_payload(page_or_index="open_recommendation", booking_id="b1", source_context=SourceContext.DOCTOR_QUEUE)))
     rec_callback = _Callback(rec_data, user_id=702)
@@ -575,7 +613,7 @@ def test_doctor_linked_opens_render_panels_and_missing_state() -> None:
     assert rec_kb.inline_keyboard[0][0].text == "Back"
     assert rec_text.strip() != "-"
 
-    router2, codec2, _ = _doctor_router(recommendation_rows=_build_recommendation_rows(), care_service=_build_empty_care_service())
+    router2, codec2, _, _ = _doctor_router(recommendation_rows=_build_recommendation_rows(), care_service=_build_empty_care_service())
     callback_handler2 = _handler(router2, "doctor_runtime_booking_callback")
     order_data = asyncio.run(codec2.encode(_booking_callback_payload(page_or_index="open_care_order", booking_id="b1", source_context=SourceContext.DOCTOR_QUEUE)))
     order_callback = _Callback(order_data, user_id=702)
@@ -587,7 +625,7 @@ def test_doctor_linked_opens_render_panels_and_missing_state() -> None:
 
 
 def test_doctor_in_service_hands_off_into_encounter_context() -> None:
-    router, codec, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service())
+    router, codec, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service())
     callback_handler = _handler(router, "doctor_runtime_booking_callback")
     in_service_data = asyncio.run(
         codec.encode(_booking_callback_payload(page_or_index="in_service", booking_id="b1", source_context=SourceContext.DOCTOR_QUEUE))
@@ -599,11 +637,11 @@ def test_doctor_in_service_hands_off_into_encounter_context() -> None:
     assert "Encounter: enc_b1" in text
     assert "Patient: Jane Roe" in text
     assert "Booking: b1 ·" in text
-    assert [row[0].text for row in kb.inline_keyboard] == ["Add quick note", "Back to booking"]
+    assert [row[0].text for row in kb.inline_keyboard] == ["Issue recommendation", "Add quick note", "Back to booking"]
 
 
 def test_doctor_legacy_booking_callback_is_bounded() -> None:
-    router, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service())
+    router, _, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service())
     callback_handler = _handler(router, "doctor_runtime_booking_callback_legacy")
     stale_callback = _Callback("doctorbk:unknown:b1", user_id=702)
     asyncio.run(callback_handler(stale_callback))
@@ -611,7 +649,7 @@ def test_doctor_legacy_booking_callback_is_bounded() -> None:
 
 
 def test_encounter_open_command_uses_canonical_encounter_panel() -> None:
-    router, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service())
+    router, _, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service())
     handler = _handler(router, "encounter_open", kind="message")
     message = _CommandMessage("/encounter_open p1 b1", user_id=702)
     asyncio.run(handler(message))
@@ -620,11 +658,11 @@ def test_encounter_open_command_uses_canonical_encounter_panel() -> None:
     assert "Encounter: enc_b1" in text
     assert "Patient: Jane Roe" in text
     assert "Booking: b1 ·" in text
-    assert [row[0].text for row in kb.inline_keyboard] == ["Add quick note", "Back to booking"]
+    assert [row[0].text for row in kb.inline_keyboard] == ["Issue recommendation", "Add quick note", "Back to booking"]
 
 
 def test_doctor_booking_panel_add_quick_note_cta_only_for_in_service() -> None:
-    router_in_service, codec, _ = _doctor_router(
+    router_in_service, codec, _, _ = _doctor_router(
         recommendation_rows=[],
         care_service=_build_empty_care_service(),
         booking_status="in_service",
@@ -634,9 +672,11 @@ def test_doctor_booking_panel_add_quick_note_cta_only_for_in_service() -> None:
     open_callback = _Callback(open_data, user_id=702)
     asyncio.run(callback_handler(open_callback))
     _, kb = open_callback.message.edits[-1]
-    assert "Add quick note" in [row[0].text for row in kb.inline_keyboard]
+    actions = [row[0].text for row in kb.inline_keyboard]
+    assert "Add quick note" in actions
+    assert "Issue recommendation" in actions
 
-    router_confirmed, codec2, _ = _doctor_router(
+    router_confirmed, codec2, _, _ = _doctor_router(
         recommendation_rows=[],
         care_service=_build_empty_care_service(),
         booking_status="confirmed",
@@ -646,12 +686,14 @@ def test_doctor_booking_panel_add_quick_note_cta_only_for_in_service() -> None:
     open_callback2 = _Callback(open_data2, user_id=702)
     asyncio.run(callback_handler2(open_callback2))
     _, kb2 = open_callback2.message.edits[-1]
-    assert "Add quick note" not in [row[0].text for row in kb2.inline_keyboard]
+    actions2 = [row[0].text for row in kb2.inline_keyboard]
+    assert "Add quick note" not in actions2
+    assert "Issue recommendation" not in actions2
 
 
 def test_doctor_quick_note_type_and_capture_flow_calls_add_note_and_returns_context() -> None:
     clinical = _ClinicalService()
-    router, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service(), clinical_service=clinical, booking_status="in_service")
+    router, _, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service(), clinical_service=clinical, booking_status="in_service")
     start_handler = _handler(router, "doctor_encounter_quick_note_start")
     type_handler = _handler(router, "doctor_encounter_quick_note_type")
     capture_handler = _handler(router, "doctor_encounter_quick_note_capture", kind="message")
@@ -672,12 +714,12 @@ def test_doctor_quick_note_type_and_capture_flow_calls_add_note_and_returns_cont
     final_text, final_kb = text_message.answers[-1]
     assert "Note saved." in final_text
     assert "Encounter context" in final_text
-    assert [row[0].text for row in final_kb.inline_keyboard] == ["Add quick note", "Back to booking"]
+    assert [row[0].text for row in final_kb.inline_keyboard] == ["Issue recommendation", "Add quick note", "Back to booking"]
 
 
 def test_doctor_quick_note_text_without_pending_context_is_not_captured() -> None:
     clinical = _ClinicalService()
-    router, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service(), clinical_service=clinical, booking_status="in_service")
+    router, _, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service(), clinical_service=clinical, booking_status="in_service")
     capture_handler = _handler(router, "doctor_encounter_quick_note_capture", kind="message")
     message = _CommandMessage("Random plain message", user_id=702)
     asyncio.run(capture_handler(message))
@@ -686,16 +728,97 @@ def test_doctor_quick_note_text_without_pending_context_is_not_captured() -> Non
 
 
 def test_doctor_quick_note_malformed_type_callback_is_bounded() -> None:
-    router, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service(), booking_status="in_service")
+    router, _, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service(), booking_status="in_service")
     handler = _handler(router, "doctor_encounter_quick_note_type")
     callback = _Callback("dnote:type:enc_b1:badtype:b1", user_id=702)
     asyncio.run(handler(callback))
     assert callback.answers and "unavailable" in callback.answers[0].lower()
 
 
+def test_doctor_recommendation_type_and_capture_flow_calls_issue_and_returns_context() -> None:
+    clinical = _ClinicalService()
+    router, _, _, recommendation_service = _doctor_router(
+        recommendation_rows=[],
+        care_service=_build_empty_care_service(),
+        clinical_service=clinical,
+        booking_status="in_service",
+    )
+    start_handler = _handler(router, "doctor_encounter_recommendation_start")
+    type_handler = _handler(router, "doctor_encounter_recommendation_type")
+    capture_handler = _handler(router, "doctor_encounter_recommendation_capture", kind="message")
+
+    start_callback = _Callback("drec:start:enc_b1:b1", user_id=702)
+    asyncio.run(start_handler(start_callback))
+    start_text, _ = start_callback.message.edits[-1]
+    assert "Choose recommendation type" in start_text
+
+    type_callback = _Callback("drec:type:enc_b1:aftercare:b1", user_id=702)
+    asyncio.run(type_handler(type_callback))
+    type_text, _ = type_callback.message.edits[-1]
+    assert "Send recommendation as" in type_text
+
+    text_message = _CommandMessage("Aftercare | Use a soft brush and avoid hard food for 48h.", user_id=702)
+    asyncio.run(capture_handler(text_message))
+    assert recommendation_service.created
+    issued_payload = recommendation_service.created[-1]
+    assert issued_payload["patient_id"] == "p1"
+    assert issued_payload["recommendation_type"] == "aftercare"
+    assert issued_payload["title"] == "Aftercare"
+    assert issued_payload["body_text"] == "Use a soft brush and avoid hard food for 48h."
+    assert issued_payload["booking_id"] == "b1"
+    assert issued_payload["encounter_id"] == "enc_b1"
+    final_text, final_kb = text_message.answers[-1]
+    assert "Recommendation saved." in final_text
+    assert "Encounter context" in final_text
+    assert [row[0].text for row in final_kb.inline_keyboard] == ["Issue recommendation", "Add quick note", "Back to booking"]
+
+
+def test_doctor_recommendation_text_without_pending_context_is_not_captured() -> None:
+    router, _, _, recommendation_service = _doctor_router(
+        recommendation_rows=[],
+        care_service=_build_empty_care_service(),
+        booking_status="in_service",
+    )
+    capture_handler = _handler(router, "doctor_encounter_recommendation_capture", kind="message")
+    message = _CommandMessage("Some free text message", user_id=702)
+    asyncio.run(capture_handler(message))
+    assert recommendation_service.created == []
+    assert message.answers == []
+
+
+def test_doctor_recommendation_capture_rejects_malformed_title_body() -> None:
+    router, _, _, recommendation_service = _doctor_router(
+        recommendation_rows=[],
+        care_service=_build_empty_care_service(),
+        booking_status="in_service",
+    )
+    type_handler = _handler(router, "doctor_encounter_recommendation_type")
+    capture_handler = _handler(router, "doctor_encounter_recommendation_capture", kind="message")
+    type_callback = _Callback("drec:type:enc_b1:aftercare:b1", user_id=702)
+    asyncio.run(type_handler(type_callback))
+    malformed = _CommandMessage("bad format without separator", user_id=702)
+    asyncio.run(capture_handler(malformed))
+    assert recommendation_service.created == []
+    assert "Use format: Title | Body." in malformed.answers[-1][0]
+
+
+def test_doctor_recommend_issue_command_fallback_still_works() -> None:
+    router, _, _, recommendation_service = _doctor_router(
+        recommendation_rows=[],
+        care_service=_build_empty_care_service(),
+        booking_status="in_service",
+    )
+    handler = _handler(router, "recommend_issue", kind="message")
+    message = _CommandMessage("/recommend_issue p1 aftercare b1 Legacy|Legacy body", user_id=702)
+    asyncio.run(handler(message))
+    assert recommendation_service.created
+    assert recommendation_service.created[-1]["recommendation_type"] == "aftercare"
+    assert "Recommendation issued:" in message.answers[-1][0]
+
+
 def test_doctor_encounter_note_command_fallback_still_works() -> None:
     clinical = _ClinicalService()
-    router, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service(), clinical_service=clinical)
+    router, _, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service(), clinical_service=clinical)
     handler = _handler(router, "encounter_note", kind="message")
     message = _CommandMessage("/encounter_note enc_b1 other legacy command note", user_id=702)
     asyncio.run(handler(message))
