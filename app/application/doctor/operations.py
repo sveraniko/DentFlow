@@ -190,6 +190,16 @@ class DoctorOperationsService:
             return None
         return await self.clinical_service.add_encounter_note(encounter_id=encounter_id, note_type=note_type, note_text=note_text)
 
+    async def complete_encounter(self, *, doctor_id: str, encounter_id: str) -> ClinicalEncounter | None:
+        if self.clinical_service is None:
+            return None
+        encounter = await self.clinical_service.repository.get_encounter(encounter_id)
+        if encounter is None or encounter.doctor_id != doctor_id:
+            return None
+        if encounter.status in {"closed", "completed"}:
+            return encounter
+        return await self.clinical_service.close_encounter(encounter_id)
+
     async def set_chart_diagnosis(self, *, doctor_id: str, clinic_id: str, patient_id: str, diagnosis_text: str, encounter_id: str | None = None) -> str | None:
         if self.clinical_service is None:
             return None
