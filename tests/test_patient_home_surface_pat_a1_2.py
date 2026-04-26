@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-from aiogram.types import ReplyKeyboardMarkup
+from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
 
 from app.application.booking.orchestration_outcomes import OrchestrationSuccess
 from app.application.booking.telegram_flow import BookingResumePanel
@@ -432,15 +432,19 @@ def test_service_and_doctor_panels_include_navigation_and_code_flow() -> None:
         runtime.bind_actor_session_state(
             scope="patient_flow",
             actor_id=1001,
-            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_flow", "care": {}},
+            payload={
+                "booking_session_id": "sess_1",
+                "booking_mode": "new_booking_flow",
+                "quick_booking_prefill": {"service_id": "service_consult", "doctor_id": "doctor_1", "branch_id": "branch_1"},
+                "care": {},
+            },
         )
     )
-    callback = _Callback(data="book:back:services:sess_1", user_id=1001)
-    asyncio.run(_handler(router, "booking_back_to_services", kind="callback")(callback))
+    callback = _Callback(data="qbook:other:sess_1", user_id=1001)
+    asyncio.run(_handler(router, "quick_book_other", kind="callback")(callback))
     text, markup = _latest_callback_panel(callback)
     assert "Choose a service" in text
     svc_actions = [button.callback_data for row in markup.inline_keyboard for button in row]
-    assert "book:back:services:sess_1" in svc_actions
     assert "phome:home" in svc_actions
 
     svc_callback = _Callback(data="book:svc:sess_1:service_consult", user_id=1001)
@@ -452,6 +456,28 @@ def test_service_and_doctor_panels_include_navigation_and_code_flow() -> None:
     assert "book:doc_code:sess_1" in doc_actions
     assert "book:back:doctors:sess_1" in doc_actions
     assert "phome:home" in doc_actions
+
+
+def test_callback_success_paths_answer_once_for_new_p0_02b_handlers() -> None:
+    router, runtime, _, _, _ = _build_router(with_recommendations=False, with_care=False)
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_flow", "care": {}},
+        )
+    )
+    to_services = _Callback(data="book:back:services:sess_1", user_id=1001)
+    asyncio.run(_handler(router, "booking_back_to_services", kind="callback")(to_services))
+    assert len(to_services.answer_payloads) <= 1
+
+    to_doctors = _Callback(data="book:back:doctors:sess_1", user_id=1001)
+    asyncio.run(_handler(router, "booking_back_to_doctors", kind="callback")(to_doctors))
+    assert len(to_doctors.answer_payloads) <= 1
+
+    doc_code = _Callback(data="book:doc_code:sess_1", user_id=1001)
+    asyncio.run(_handler(router, "booking_doctor_code_prompt", kind="callback")(doc_code))
+    assert len(doc_code.answer_payloads) <= 1
 
 
 def test_doctor_code_prompt_and_resolution_path() -> None:
@@ -495,6 +521,63 @@ def test_doctor_code_invalid_keeps_retry_navigation() -> None:
     actions = [button.callback_data for row in markup.inline_keyboard for button in row]
     assert "book:back:doctors:sess_1" in actions
     assert "phome:home" in actions
+
+
+def test_contact_reply_keyboard_home_navigation_removes_keyboard() -> None:
+    router, runtime, _, _, _ = _build_router(with_recommendations=False, with_care=False)
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_contact", "care": {}},
+        )
+    )
+    msg = _Message(text="🏠 Main menu", user_id=1001)
+    asyncio.run(_handler(router, "on_contact_navigation")(msg))
+    assert any(isinstance(reply_markup, ReplyKeyboardRemove) for _, reply_markup in msg.answers)
+
+
+def test_contact_reply_keyboard_back_navigation_removes_keyboard_and_renders_slots() -> None:
+    router, runtime, _, _, _ = _build_router(with_recommendations=False, with_care=False)
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_contact", "care": {}},
+        )
+    )
+    msg = _Message(text="⬅️ Back", user_id=1001)
+    asyncio.run(_handler(router, "on_contact_navigation")(msg))
+    assert any(isinstance(reply_markup, ReplyKeyboardRemove) for _, reply_markup in msg.answers)
+    assert any("No open slots found yet" in text for text, _ in msg.answers)
+
+
+def test_slot_state_defaults_and_roundtrip_when_payload_missing_fields() -> None:
+    router, runtime, _, _, _ = _build_router(with_recommendations=False, with_care=False)
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_flow", "care": {}},
+        )
+    )
+    callback = _Callback(data="book:back:services:sess_1", user_id=1001)
+    asyncio.run(_handler(router, "booking_back_to_services", kind="callback")(callback))
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["slot_page"] == 0
+    assert state["slot_date_from"] == ""
+    assert state["slot_time_window"] == "all"
+
+    state["slot_page"] = 2
+    state["slot_date_from"] = "2026-05-01"
+    state["slot_time_window"] = "morning"
+    asyncio.run(runtime.bind_actor_session_state(scope="patient_flow", actor_id=1001, payload=state))
+    callback = _Callback(data="book:back:doctors:sess_1", user_id=1001)
+    asyncio.run(_handler(router, "booking_back_to_doctors", kind="callback")(callback))
+    reloaded = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert reloaded["slot_page"] == 2
+    assert reloaded["slot_date_from"] == "2026-05-01"
+    assert reloaded["slot_time_window"] == "morning"
 
 
 def test_book_and_home_book_callback_have_equivalent_entry_state() -> None:
