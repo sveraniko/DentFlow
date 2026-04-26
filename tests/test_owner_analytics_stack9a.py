@@ -75,6 +75,7 @@ class _OwnerAnalyticsStub:
             rows=[
                 SimpleNamespace(
                     doctor_id="d1",
+                    doctor_label="Dr. Alice",
                     bookings_created_count=10,
                     bookings_confirmed_count=8,
                     bookings_completed_count=7,
@@ -93,6 +94,7 @@ class _OwnerAnalyticsStub:
             rows=[
                 SimpleNamespace(
                     service_id="srv1",
+                    service_label="Consultation",
                     bookings_created_count=12,
                     bookings_confirmed_count=9,
                     bookings_completed_count=8,
@@ -180,17 +182,20 @@ def test_owner_router_commands_owner_only_and_localized() -> None:
     doctors = _Message("/owner_doctors")
     asyncio.run(_handler_by_name(router, "owner_doctors")(doctors))
     assert "Owner Doctor Metrics" in doctors.answers[-1]
+    assert "Dr. Alice" in doctors.answers[-1]
     assert analytics.last_doctor_days == 7
 
     services = _Message("/owner_services 30")
     asyncio.run(_handler_by_name(router, "owner_services")(services))
     assert "Owner Service Metrics" in services.answers[-1]
+    assert "Consultation" in services.answers[-1]
     assert analytics.last_service_days == 30
 
     branches = _Message("/owner_branches")
     asyncio.run(_handler_by_name(router, "owner_branches")(branches))
     assert "Owner Branch Metrics" in branches.answers[-1]
     assert "Main branch" in branches.answers[-1]
+    assert "Window note:" in branches.answers[-1]
     assert analytics.last_branch_days == 7
 
     care = _Message("/owner_care")
@@ -494,6 +499,53 @@ def test_owner_metrics_invalid_window_and_empty_states() -> None:
     assert "No care-commerce activity" in empty_care.answers[-1]
 
 
+def test_owner_metric_labels_fallback_to_compact_ids() -> None:
+    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+
+    class _IdOnlyAnalytics(_OwnerAnalyticsStub):
+        async def get_doctor_metrics(self, *, clinic_id: str, days: int = 7):
+            return SimpleNamespace(
+                rows=[
+                    SimpleNamespace(
+                        doctor_id="doctor-very-long-id-12345",
+                        doctor_label=None,
+                        bookings_created_count=1,
+                        bookings_confirmed_count=1,
+                        bookings_completed_count=1,
+                        bookings_no_show_count=0,
+                        bookings_reschedule_requested_count=0,
+                        reminders_sent_count=1,
+                        reminders_failed_count=0,
+                        encounters_created_count=1,
+                    )
+                ]
+            )
+
+        async def get_service_metrics(self, *, clinic_id: str, days: int = 7):
+            return SimpleNamespace(
+                rows=[
+                    SimpleNamespace(
+                        service_id="service-very-long-id-99999",
+                        service_label=None,
+                        bookings_created_count=1,
+                        bookings_confirmed_count=1,
+                        bookings_completed_count=1,
+                        bookings_no_show_count=0,
+                        bookings_reschedule_requested_count=0,
+                    )
+                ]
+            )
+
+    router = make_router(i18n, _access(RoleCode.OWNER), analytics=_IdOnlyAnalytics(), default_locale="en")
+    doctors = _Message("/owner_doctors")
+    asyncio.run(_handler_by_name(router, "owner_doctors")(doctors))
+    assert "doctor…2345" in doctors.answers[-1]
+
+    services = _Message("/owner_services")
+    asyncio.run(_handler_by_name(router, "owner_services")(services))
+    assert "servic…9999" in services.answers[-1]
+
+
 def test_owner_service_doctor_metrics_aggregate_and_bound(monkeypatch: pytest.MonkeyPatch) -> None:
     service = OwnerAnalyticsService(db_config=object())
 
@@ -522,9 +574,10 @@ def test_owner_service_doctor_metrics_aggregate_and_bound(monkeypatch: pytest.Mo
             captured_params.append((sql, params))
             if "daily_doctor_metrics" in sql:
                 return _Res([
-                    {
-                        "doctor_id": "d1",
-                        "bookings_created_count": 11,
+                {
+                    "doctor_id": "d1",
+                    "doctor_label": "Dr. Label",
+                    "bookings_created_count": 11,
                         "bookings_confirmed_count": 9,
                         "bookings_completed_count": 8,
                         "bookings_no_show_count": 1,
@@ -537,6 +590,7 @@ def test_owner_service_doctor_metrics_aggregate_and_bound(monkeypatch: pytest.Mo
             return _Res([
                 {
                     "service_id": "srv1",
+                    "service_label": "Service Label",
                     "bookings_created_count": 10,
                     "bookings_confirmed_count": 8,
                     "bookings_completed_count": 7,
@@ -567,10 +621,14 @@ def test_owner_service_doctor_metrics_aggregate_and_bound(monkeypatch: pytest.Mo
 
     assert doctors.limit == 10
     assert doctors.rows[0].doctor_id == "d1"
+    assert doctors.rows[0].doctor_label == "Dr. Label"
     assert services.limit == 10
     assert services.rows[0].service_id == "srv1"
-    assert any("GROUP BY doctor_id" in sql for sql, _ in captured_params)
-    assert any("GROUP BY service_id" in sql for sql, _ in captured_params)
+    assert services.rows[0].service_label == "Service Label"
+    assert any("GROUP BY m.doctor_id" in sql for sql, _ in captured_params)
+    assert any("GROUP BY m.service_id" in sql for sql, _ in captured_params)
+    assert any("LEFT JOIN core_reference.doctors" in sql for sql, _ in captured_params)
+    assert any("LEFT JOIN core_reference.services" in sql for sql, _ in captured_params)
 
 
 def test_owner_branch_metrics_aggregate_and_bound_with_label_fallback(monkeypatch: pytest.MonkeyPatch) -> None:

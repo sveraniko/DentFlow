@@ -73,6 +73,16 @@ def make_router(
         if len(value) <= 12:
             return value
         return f"{value[:6]}…{value[-4:]}"
+
+    def _doctor_metric_label(row: object) -> str:
+        label = getattr(row, "doctor_label", None)
+        doctor_id = getattr(row, "doctor_id")
+        return str(label) if label else _compact_id(str(doctor_id))
+
+    def _service_metric_label(row: object) -> str:
+        label = getattr(row, "service_label", None)
+        service_id = getattr(row, "service_id")
+        return str(label) if label else _compact_id(str(service_id))
     @router.message(Command("owner_today"))
     async def owner_today(message: Message) -> None:
         allowed, locale = await _guard_owner(message)
@@ -199,7 +209,7 @@ def make_router(
         for row in summary.rows:
             lines.append(
                 i18n.t("owner.doctors.item", locale).format(
-                    doctor_id=row.doctor_id,
+                    doctor=_doctor_metric_label(row),
                     created=row.bookings_created_count,
                     confirmed=row.bookings_confirmed_count,
                     completed=row.bookings_completed_count,
@@ -233,7 +243,7 @@ def make_router(
         for row in summary.rows:
             lines.append(
                 i18n.t("owner.services.item", locale).format(
-                    service_id=row.service_id,
+                    service=_service_metric_label(row),
                     created=row.bookings_created_count,
                     confirmed=row.bookings_confirmed_count,
                     completed=row.bookings_completed_count,
@@ -273,6 +283,7 @@ def make_router(
                     reschedule=row.bookings_reschedule_requested_count,
                 )
             )
+        lines.append(i18n.t("owner.branches.window_note", locale).format(days=days))
         await message.answer("\n".join(lines))
 
     @router.message(Command("owner_care"))
@@ -347,8 +358,14 @@ def make_router(
         for row in overview.rows:
             name = row.display_name or _compact_id(row.actor_id)
             role = row.role_label or row.role_code or i18n.t("owner.staff.unknown", locale)
-            tg_state = i18n.t(f"owner.staff.telegram.{row.telegram_binding_state}", locale)
-            active_state = i18n.t(f"owner.staff.active.{row.active_state}", locale)
+            tg_key = f"owner.staff.telegram.{row.telegram_binding_state}"
+            tg_state = i18n.t(tg_key, locale)
+            if tg_state == tg_key:
+                tg_state = i18n.t("owner.staff.telegram.unknown", locale)
+            active_key = f"owner.staff.active.{row.active_state}"
+            active_state = i18n.t(active_key, locale)
+            if active_state == active_key:
+                active_state = i18n.t("owner.staff.active.unknown", locale)
             lines.append(
                 i18n.t("owner.staff.item", locale).format(
                     name=name,

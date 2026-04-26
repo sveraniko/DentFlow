@@ -141,9 +141,9 @@ Status meanings remain the same as in `docs/71_role_scenarios_and_acceptance.md`
 - **Governed object / topic:** doctor/staff roster.
 - **Primary actor(s):** Admin, Owner (future), composite lead-doctor persona (future).
 - **Purpose:** inspect who is active in the clinic and what references currently exist.
-- **Current operating model:** admin can inspect doctors through clinic reference views.
-- **Current implementation status:** **Implemented** for read-only admin visibility; **Partial** as a broader management surface.
-- **Evidence:** `app/interfaces/bots/admin/router.py` (`/doctors`); clinic reference docs.
+- **Current operating model:** admin can inspect doctors through clinic reference views; owner has a bounded read-only `/owner_staff` access snapshot.
+- **Current implementation status:** **Implemented** as bounded read-only visibility; **Partial** as a broader management surface.
+- **Evidence:** `app/interfaces/bots/admin/router.py` (`/doctors`); `app/interfaces/bots/owner/router.py` (`/owner_staff`); clinic reference docs.
 - **Known gaps / comments:**
   - there is no dedicated staff registry panel with lifecycle status, access binding status, or offboarding controls;
   - owner-facing roster control is not yet first-class.
@@ -208,7 +208,7 @@ Status meanings remain the same as in `docs/71_role_scenarios_and_acceptance.md`
 - **Governed object / topic:** clinic-wide registries, staffing, sync health, and governance controls.
 - **Primary actor(s):** Owner; potentially composite lead-doctor persona if business wants delegated governance.
 - **Purpose:** provide one place for governance questions that are not the same as daily admin workdesk actions.
-- **Current operating model:** owner surface currently focuses on digest/snapshot/alerts.
+- **Current operating model:** owner surface currently focuses on digest/snapshot/alerts plus a bounded staff/access read snapshot (`/owner_staff`).
 - **Current implementation status:** **Partial**.
 - **Evidence:** `app/interfaces/bots/owner/router.py`; `docs/50_analytics_and_owner_metrics.md`; docs 70/71.
 - **Known gaps / comments:** owner today is oversight-first, not yet governance-console-first.
@@ -347,14 +347,14 @@ The following decisions still need explicit product freezing:
 |---|---|---|---|---|
 | GOV-001 | Clinic references read | Implemented | admin router reference commands | keep as read baseline |
 | GOV-002 | Patient base operational registry | Implemented / Partial | admin patient/search surfaces | decide whether owner/export registry view is needed |
-| GOV-003 | Staff roster read surface | Implemented / Partial | `/doctors` reference view | add true staff registry only if needed |
+| GOV-003 | Staff roster read surface | Implemented / Partial | `/doctors` reference view + `/owner_staff` snapshot | add true staff registry only if needed |
 | GOV-004 | Staff lifecycle mutation / offboarding | Missing | no dedicated runtime governance surface | design staff governance flow |
 | GOV-005 | Composite-role policy / chief doctor model | Partial | role codes + current role routers | freeze policy before widening owner/governance scope |
 | GOV-006 | Care catalog authoring via Sheets | Implemented (bounded) | workbook spec + sync services + `/admin_catalog_sync` + `/admin_integrations` | keep command surface compact; no generic sync dashboard |
 | GOV-007 | Calendar mirror governance | Implemented (bounded) | projection docs/code + `/admin_calendar` + `/admin_integrations` | keep mirror read-only; no Calendar-to-DentFlow sync |
 | GOV-008 | Generated document governance baseline | Implemented | export services + staff doc routes | expand families carefully, do not let docs become truth |
 | GOV-009 | Patient-facing document delivery | Missing | staff-only artifact baseline | decide delivery model |
-| GOV-010 | Owner / chief-doctor governance console | Partial | owner digest/snapshot/alerts | decide if governance console is really needed now |
+| GOV-010 | Owner / chief-doctor governance console | Partial | owner digest/snapshot/alerts + `/owner_staff` | decide if governance console is really needed now |
 
 ---
 
