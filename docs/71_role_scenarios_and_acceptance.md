@@ -340,9 +340,9 @@ Each scenario in this document contains:
   2. Admin returns to DentFlow for actual mutations and operational truth.
 - **Outbound messages / notifications:** calendar event projection updates happen from DentFlow changes.
 - **State / object transitions:** DentFlow booking changes project outward to calendar.
-- **Current implementation status:** **Partial**.
-- **Evidence:** `docs/69_google_calendar_schedule_projection.md`; `app/application/integration/google_calendar_projection.py`; projector worker/runtime docs and reports.
-- **Known gaps / comments:** backend projection exists, but a first-class admin mirror surface inside Telegram is not yet the main operational UX.
+- **Current implementation status:** **Implemented (bounded awareness surface)**.
+- **Evidence:** `app/interfaces/bots/admin/router.py` (`/admin_calendar`); `app/application/integration/google_calendar_projection.py` (summary/recent mapping reads); `docs/report/PR_S13_A1_REPORT.md`; `docs/report/PR_S13_A2_REPORT.md`.
+- **Known gaps / comments:** this is a bounded read-only awareness panel, not a full calendar UI, two-way edit surface, or worker liveness dashboard.
 
 ### ADM-DOC-001 — Generate 043/export artifact from staff context
 - **Actor / persona:** Admin / reception.
@@ -547,7 +547,7 @@ The key outbound message classes currently intended by the product are:
 | ADM-006 | Admin | Partial | confirmations/issues queues | strengthen rescue/issue-control acceptance where needed |
 | ADM-007 | Admin | Implemented | PR 12B-1 + admin router | keep regression coverage |
 | ADM-008 | Admin | Implemented | PR 12B-1 + pickup routes | separate governance/catalog concerns into 73 |
-| ADM-009 | Admin | Partial | calendar projection docs + integration code | build visible admin mirror surface if product still wants it |
+| ADM-009 | Admin | Implemented (bounded) | `/admin_calendar` + projection summary/read model + mirror guardrails | keep read-only; richer observability remains optional |
 | ADM-DOC-001 | Admin | Implemented | export services + admin doc commands | embed deeper into contextual workdesk only if needed |
 | ADM-DOC-002 | Admin | Implemented | PR 12B-2 + admin doc routes | keep provider support bounded |
 | DOC-001 | Doctor | Implemented | doctor queue routes | keep regression coverage |

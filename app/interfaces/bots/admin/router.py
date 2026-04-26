@@ -262,15 +262,18 @@ def make_router(
             lines.append(i18n.t("admin.catalog.sync.result.more_issues", locale).format(omitted=omitted))
         return "\n".join(lines)
 
-    def _worker_projection_hint() -> str | None:
+    def _calendar_projection_configuration_hint() -> str:
         import os
 
-        worker_mode = (os.environ.get("WORKER_MODE") or "").strip().lower()
-        if worker_mode in {"projector", "all"}:
+        raw = os.environ.get("INTEGRATIONS_GOOGLE_CALENDAR_ENABLED")
+        if raw is None:
+            return "unknown"
+        normalized = raw.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
             return "configured"
-        if worker_mode in {"reminder"}:
+        if normalized in {"0", "false", "no", "off"}:
             return "not_configured"
-        return None
+        return "unknown"
 
     async def _load_issue_escalation_statuses(
         *,
@@ -1738,22 +1741,25 @@ def make_router(
             await message.answer(i18n.t("admin.calendar.unavailable", locale))
             return
 
+        projection_configuration_hint = _calendar_projection_configuration_hint()
         lines = [
             i18n.t("admin.calendar.title", locale),
             i18n.t("admin.calendar.source_of_truth_note", locale),
+            i18n.t(f"admin.calendar.config.{projection_configuration_hint}", locale),
             i18n.t("admin.calendar.summary", locale).format(
                 mapped_events=summary.mapped_events,
                 pending_projection=summary.pending_projection,
-                failed_projection=summary.failed_projection,
             ),
+            i18n.t("admin.calendar.failures", locale).format(failed_projection=summary.failed_projection),
+            i18n.t("admin.calendar.worker_liveness_unknown", locale),
         ]
-        worker_hint = _worker_projection_hint()
-        if worker_hint == "configured":
-            lines.append(i18n.t("admin.calendar.worker_configured", locale))
-        elif worker_hint == "not_configured":
-            lines.append(i18n.t("admin.calendar.worker_not_configured", locale))
+
+        recent_with_sync_time = [row for row in recent if row.last_synced_at is not None]
+        if recent_with_sync_time:
+            latest_sync = max(row.last_synced_at for row in recent_with_sync_time)
+            lines.append(i18n.t("admin.calendar.last_projection_activity", locale).format(last_synced_at=latest_sync.isoformat()))
         else:
-            lines.append(i18n.t("admin.calendar.worker_unknown", locale))
+            lines.append(i18n.t("admin.calendar.last_projection_activity_unknown", locale))
         if not recent:
             lines.append(i18n.t("admin.calendar.empty", locale))
             await message.answer("\n".join(lines))

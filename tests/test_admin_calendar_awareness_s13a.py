@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+import subprocess
 
 from app.application.access import AccessResolver, InMemoryAccessRepository
 from app.application.integration.google_calendar_projection import CalendarProjectionRecentMapping, CalendarProjectionSummary
@@ -131,22 +132,32 @@ def _handler(router, name: str):
     raise AssertionError(name)
 
 
-def test_admin_calendar_panel_renders_read_only_mirror_summary() -> None:
+def test_admin_calendar_panel_renders_read_only_mirror_summary(monkeypatch) -> None:
+    monkeypatch.setenv("INTEGRATIONS_GOOGLE_CALENDAR_ENABLED", "1")
     router = _router(access=_access(), calendar_service=_CalendarReadService())
     msg = _Message("/admin_calendar")
     asyncio.run(_handler(router, "admin_calendar")(msg))
     text = msg.answers[-1][0]
     assert "Google Calendar mirror awareness" in text
     assert "source of truth" in text
-    assert "Recent mirrored bookings:" in text
+    assert "Projection configuration: configured." in text
+    assert "Projection summary: mapped=4, pending=2." in text
+    assert "Failed projection mappings: 1." in text
+    assert "Worker liveness is not available from bot runtime." in text
+    assert "Recent projection activity: 2026-04-24T00:00:00+00:00" in text
+    assert "Recent mapped bookings:" in text
     assert "b10" in text and "synced" in text
 
 
-def test_admin_calendar_empty_state_is_bounded() -> None:
+def test_admin_calendar_empty_state_is_bounded(monkeypatch) -> None:
+    monkeypatch.setenv("INTEGRATIONS_GOOGLE_CALENDAR_ENABLED", "0")
     router = _router(access=_access(), calendar_service=_CalendarReadServiceEmpty())
     msg = _Message("/admin_calendar")
     asyncio.run(_handler(router, "admin_calendar")(msg))
-    assert "No projected mapping rows yet." in msg.answers[-1][0]
+    text = msg.answers[-1][0]
+    assert "Projection configuration: not configured." in text
+    assert "No mapping rows yet for this clinic." in text
+    assert "Recent projection activity: unknown/unavailable." in text
 
 
 def test_admin_calendar_unavailable_is_bounded() -> None:
@@ -156,9 +167,41 @@ def test_admin_calendar_unavailable_is_bounded() -> None:
     assert "Calendar projection awareness is unavailable" in msg.answers[-1][0]
 
 
+def test_admin_calendar_projection_configuration_unknown(monkeypatch) -> None:
+    monkeypatch.setenv("INTEGRATIONS_GOOGLE_CALENDAR_ENABLED", "maybe")
+    router = _router(access=_access(), calendar_service=_CalendarReadServiceEmpty())
+    msg = _Message("/admin_calendar")
+    asyncio.run(_handler(router, "admin_calendar")(msg))
+    text = msg.answers[-1][0]
+    assert "Projection configuration: unknown from this bot runtime." in text
+
+
+def test_admin_calendar_copy_keeps_mirror_only_boundary(monkeypatch) -> None:
+    monkeypatch.setenv("INTEGRATIONS_GOOGLE_CALENDAR_ENABLED", "1")
+    router = _router(access=_access(), calendar_service=_CalendarReadService())
+    msg = _Message("/admin_calendar")
+    asyncio.run(_handler(router, "admin_calendar")(msg))
+    text = msg.answers[-1][0].lower()
+    assert "dentflow booking data is the source of truth" in text
+    assert "google calendar is a read-only projection mirror" in text
+    assert "sync from calendar" not in text
+
+
 def test_admin_calendar_non_admin_is_guarded() -> None:
     router = _router(access=_access(admin_user_id=777, role=RoleCode.DOCTOR), calendar_service=_CalendarReadService())
     msg = _Message("/admin_calendar", user_id=777)
     asyncio.run(_handler(router, "admin_calendar")(msg))
     assert msg.answers
     assert "Access denied" in msg.answers[-1][0]
+
+
+def test_s13_a2_does_not_add_migration_files() -> None:
+    tracked = subprocess.check_output(["git", "ls-files"], text=True).splitlines()
+    migration_paths = [
+        path
+        for path in tracked
+        if path.startswith("migrations/")
+        or path.startswith("alembic/versions/")
+        or path.startswith("db/migrations/")
+    ]
+    assert migration_paths == []
