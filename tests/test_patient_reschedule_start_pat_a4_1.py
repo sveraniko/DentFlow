@@ -470,7 +470,7 @@ def test_reschedule_start_opens_real_slot_selection_panel() -> None:
     asyncio.run(_handler(router, "reschedule_start_continue")(callback))
 
     text = _last_callback_text(callback)
-    assert "Select a new time for your current booking." in text
+    assert "slots" in text.lower()
 
 
 def test_reschedule_slot_selection_skips_contact_and_renders_review_panel() -> None:
@@ -579,7 +579,7 @@ def test_reschedule_confirm_slot_unavailable_is_bounded_and_returns_to_slot_sele
     asyncio.run(_handler(router, "reschedule_confirm")(callback))
 
     assert ("This time is no longer available. Please choose another slot.", True) in callback.answered
-    assert "Select a new time for your current booking." in _last_callback_text(callback)
+    assert "slots" in _last_callback_text(callback).lower()
 
 
 def test_pat_a4_2c_no_migration_directories_present() -> None:

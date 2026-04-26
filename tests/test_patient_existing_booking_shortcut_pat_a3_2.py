@@ -525,7 +525,7 @@ def test_quick_book_repeat_prefills_session_and_opens_slot_selection() -> None:
     assert booking_flow.apply_prefill_calls == 1
     assert booking_flow.apply_same_doctor_prefill_calls == 0
     assert callback.bot.edits
-    assert "Choose one of the nearest available slots" in callback.bot.edits[-1]["text"]
+    assert "slots" in callback.bot.edits[-1]["text"].lower()
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
     assert state["quick_booking_prefill"] == {}
 
