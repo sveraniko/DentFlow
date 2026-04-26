@@ -235,6 +235,13 @@ Outcome:
 - owner digest
 - today snapshot
 - booking/doctor/service/branch baseline metrics
+- care-performance operational snapshot (`/owner_care`)
+- owner read-only governance visibility (`/owner_staff`, `/owner_patients`, `/owner_references`)
+
+Status:
+- **Completed (bounded owner baseline after OWN-A1 + OWN-A2).**
+- Closure scope is intentionally read-only for governance visibility and operational metrics.
+- Scope does **not** include staff mutation/offboarding, patient editing/export workflows, owner AI summaries, or full BI/revenue analytics.
 
 ## Stack 10. Recommendations
 References:
@@ -293,6 +300,9 @@ References:
 Outcome:
 - grounded owner AI summaries and Q&A
 
+Status:
+- **Deferred / not implemented** in current bounded closure.
+
 ## Stack 15. Pilot hardening
 References:
 - `docs/92_seed_data_and_demo_fixtures.md`
@@ -302,6 +312,9 @@ Outcome:
 - realistic fixtures
 - smoke confidence
 - rollback confidence
+
+Status:
+- **Partial / ongoing** (do not treat as fully closed launch gate yet).
 
 ---
 

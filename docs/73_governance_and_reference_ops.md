@@ -131,10 +131,10 @@ Status meanings remain the same as in `docs/71_role_scenarios_and_acceptance.md`
 - **Primary actor(s):** Admin.
 - **Purpose:** search, open, and act on patients as operational objects.
 - **Current operating model:** patient base is kept in DentFlow; admin opens it via search and workdesk views.
-- **Current implementation status:** **Implemented** for admin operational use; **Partial** as a broader governance/reporting surface.
+- **Current implementation status:** **Implemented (bounded visibility)** for admin operational use plus owner read-only snapshot (`/owner_patients`); **Partial** as a broader governance/reporting + mutation surface.
 - **Evidence:** `app/interfaces/bots/admin/router.py` (`/admin_patients`, `/search_patient` and patient card/open flows); search/read-model docs and reports.
 - **Known gaps / comments:**
-  - owner/chief-doctor-wide registry oversight is not yet a first-class governance panel;
+  - owner/chief-doctor-wide registry oversight is now available only as bounded read-only snapshot (`/owner_patients`), not as a full governance console;
   - patient-base export/report snapshots may still be useful as a separate artifact, but they must remain snapshots, not truth.
 
 ### GOV-003 — Doctor / staff roster read surface
@@ -142,11 +142,11 @@ Status meanings remain the same as in `docs/71_role_scenarios_and_acceptance.md`
 - **Primary actor(s):** Admin, Owner (future), composite lead-doctor persona (future).
 - **Purpose:** inspect who is active in the clinic and what references currently exist.
 - **Current operating model:** admin can inspect doctors through clinic reference views; owner has a bounded read-only `/owner_staff` access snapshot.
-- **Current implementation status:** **Implemented** as bounded read-only visibility; **Partial** as a broader management surface.
+- **Current implementation status:** **Implemented (bounded read-only visibility)** via admin reference reads and owner `/owner_staff`; **Partial** as a broader management surface.
 - **Evidence:** `app/interfaces/bots/admin/router.py` (`/doctors`); `app/interfaces/bots/owner/router.py` (`/owner_staff`); clinic reference docs.
 - **Known gaps / comments:**
-  - there is no dedicated staff registry panel with lifecycle status, access binding status, or offboarding controls;
-  - owner-facing roster control is not yet first-class.
+  - there is still no dedicated mutation/offboarding workflow;
+  - owner-facing roster is visibility-only (no lifecycle actions).
 
 ### GOV-004 — Staff lifecycle mutation and offboarding
 - **Governed object / topic:** add doctor, deactivate doctor, offboard staff, rebind roles/access when someone leaves.
@@ -211,7 +211,10 @@ Status meanings remain the same as in `docs/71_role_scenarios_and_acceptance.md`
 - **Current operating model:** owner surface currently focuses on digest/snapshot/alerts plus bounded read-only governance snapshots for staff/access (`/owner_staff`), patient base (`/owner_patients`), and clinic references (`/owner_references`).
 - **Current implementation status:** **Partial**.
 - **Evidence:** `app/interfaces/bots/owner/router.py`; `docs/50_analytics_and_owner_metrics.md`; docs 70/71.
-- **Known gaps / comments:** owner today is oversight-first, not yet governance-console-first.
+- **Known gaps / comments:**
+  - owner today remains oversight-first, not governance-console-first;
+  - current owner governance is intentionally read-only and bounded;
+  - mutation/offboarding controls remain deferred.
 
 ---
 

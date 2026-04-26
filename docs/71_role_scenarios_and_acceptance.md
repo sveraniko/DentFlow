@@ -499,14 +499,25 @@ Owner governance visibility is additionally available as bounded read-only snaps
 
 ### OWN-004 — Open care-performance view
 - **Actor / persona:** Owner.
-- **Preconditions:** Care-commerce metrics are expected at owner level.
-- **Entry point:** dedicated owner care-performance surface.
-- **Main flow:** planned owner view for attach-rate / care-performance visibility.
+- **Preconditions:** Owner role binding exists.
+- **Entry point:** `/owner_care`.
+- **Main flow:** owner opens bounded care-commerce operational performance summary (order lifecycle counts + active orders/reservations).
 - **Outbound messages / notifications:** care-performance summary.
 - **State / object transitions:** read-only analytics consumption.
-- **Current implementation status:** **Missing**.
-- **Evidence:** `docs/50_analytics_and_owner_metrics.md` and `docs/70_bot_flows.md` describe the need; current owner router does not expose a dedicated care-performance command.
-- **Known gaps / comments:** owner surface today is digest/snapshot/alerts baseline, not the full planned analytics set.
+- **Current implementation status:** **Implemented (bounded)**.
+- **Evidence:** `app/interfaces/bots/owner/router.py` (`owner_care`); owner analytics service read model; OWN-A1B-2 report.
+- **Known gaps / comments:** care panel is explicitly non-revenue and non-payment analytics; deeper BI-style attach-rate modeling remains deferred.
+
+Owner bounded read-only analytics/governance surfaces currently available:
+- `/owner_doctors` — doctor metrics snapshot.
+- `/owner_services` — service metrics snapshot.
+- `/owner_branches` — branch metrics snapshot.
+- `/owner_care` — care-commerce operational performance snapshot.
+- `/owner_staff` — staff/access overview snapshot (read-only governance).
+- `/owner_patients` — patient-base snapshot (read-only governance).
+- `/owner_references` — clinic references overview (read-only governance).
+
+No owner mutation/offboarding workflows are included in this baseline.
 
 ---
 
@@ -563,7 +574,7 @@ The key outbound message classes currently intended by the product are:
 | OWN-001 | Owner | Implemented | owner digest route | extend only if business needs real drilldowns |
 | OWN-002 | Owner | Implemented | owner today route | extend only if business needs real drilldowns |
 | OWN-003 | Owner | Implemented | owner alerts routes | extend only if business needs real drilldowns |
-| OWN-004 | Owner | Missing | owner metrics docs only | define and implement care-performance owner surface |
+| OWN-004 | Owner | Implemented (bounded) | `/owner_care` owner care metrics route + owner analytics service | keep bounded to read-only operational counts; defer richer BI/revenue scope |
 
 ---
 
