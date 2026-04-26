@@ -156,6 +156,27 @@ class OwnerStaffAccessOverview:
 
 
 @dataclass(slots=True)
+class OwnerPatientBaseRecentRow:
+    patient_id: str
+    display_name: str | None
+    created_at: datetime | None
+
+
+@dataclass(slots=True)
+class OwnerPatientBaseSnapshot:
+    clinic_id: str
+    days: int
+    limit: int
+    total_patients_count: int | None
+    new_patients_in_window_count: int | None
+    upcoming_live_booking_patients_count: int | None
+    completed_booking_patients_in_window_count: int | None
+    active_care_patients_count: int | None
+    telegram_bound_patients_count: int | None
+    recent_new_patients: list[OwnerPatientBaseRecentRow]
+
+
+@dataclass(slots=True)
 class OwnerAnalyticsService:
     db_config: object
 
@@ -742,6 +763,165 @@ class OwnerAnalyticsService:
                     last_seen_at=row["last_seen_at"],
                 )
                 for row in rows
+            ],
+        )
+
+    async def get_patient_base_snapshot(self, *, clinic_id: str, days: int = 30, limit: int = 10) -> OwnerPatientBaseSnapshot:
+        point = datetime.now(timezone.utc)
+        day_start_utc, _, local_date = await self._local_day_window(clinic_id=clinic_id, point=point)
+        window_days = max(days, 1)
+        window_start = local_date - timedelta(days=window_days - 1)
+        bounded_limit = max(1, min(limit, 10))
+
+        async def _safe_scalar(conn, sql: str, params: dict[str, object]) -> int | None:
+            try:
+                value = (await conn.execute(text(sql), params)).scalar_one()
+            except Exception:
+                return None
+            try:
+                return int(value or 0)
+            except (TypeError, ValueError):
+                return None
+
+        engine = create_engine(self.db_config)
+        try:
+            async with engine.connect() as conn:
+                total_patients_count = await _safe_scalar(
+                    conn,
+                    """
+                    SELECT COUNT(*)
+                    FROM core_patient.patients
+                    WHERE clinic_id=:clinic_id
+                    """,
+                    {"clinic_id": clinic_id},
+                )
+                new_patients_in_window_count = await _safe_scalar(
+                    conn,
+                    """
+                    WITH tz AS (
+                      SELECT COALESCE(NULLIF(timezone, ''), 'UTC') AS tz_name
+                      FROM core_reference.clinics
+                      WHERE clinic_id=:clinic_id
+                    )
+                    SELECT COUNT(*)
+                    FROM core_patient.patients p
+                    WHERE p.clinic_id=:clinic_id
+                      AND DATE(p.created_at AT TIME ZONE (SELECT tz_name FROM tz))
+                          BETWEEN :window_start AND :window_end
+                    """,
+                    {"clinic_id": clinic_id, "window_start": window_start, "window_end": local_date},
+                )
+                upcoming_live_booking_patients_count = await _safe_scalar(
+                    conn,
+                    """
+                    SELECT COUNT(DISTINCT b.resolved_patient_id)
+                    FROM booking.bookings b
+                    WHERE b.clinic_id=:clinic_id
+                      AND b.resolved_patient_id IS NOT NULL
+                      AND (
+                        b.status='in_service'
+                        OR (
+                          b.scheduled_start_at>=:day_start
+                          AND b.status IN ('pending_confirmation', 'confirmed', 'reschedule_requested')
+                        )
+                      )
+                    """,
+                    {"clinic_id": clinic_id, "day_start": day_start_utc},
+                )
+                completed_booking_patients_in_window_count = await _safe_scalar(
+                    conn,
+                    """
+                    WITH tz AS (
+                      SELECT COALESCE(NULLIF(timezone, ''), 'UTC') AS tz_name
+                      FROM core_reference.clinics
+                      WHERE clinic_id=:clinic_id
+                    )
+                    SELECT COUNT(DISTINCT b.resolved_patient_id)
+                    FROM booking.bookings b
+                    WHERE b.clinic_id=:clinic_id
+                      AND b.resolved_patient_id IS NOT NULL
+                      AND b.completed_at IS NOT NULL
+                      AND DATE(b.completed_at AT TIME ZONE (SELECT tz_name FROM tz))
+                          BETWEEN :window_start AND :window_end
+                    """,
+                    {"clinic_id": clinic_id, "window_start": window_start, "window_end": local_date},
+                )
+                active_care_patients_count = await _safe_scalar(
+                    conn,
+                    """
+                    WITH active_patients AS (
+                      SELECT co.patient_id
+                      FROM care_commerce.care_orders co
+                      WHERE co.clinic_id=:clinic_id
+                        AND co.patient_id IS NOT NULL
+                        AND co.status IN ('created', 'awaiting_confirmation', 'confirmed', 'awaiting_payment', 'paid', 'ready_for_pickup', 'issued')
+                      UNION
+                      SELECT co.patient_id
+                      FROM care_commerce.care_reservations cr
+                      JOIN care_commerce.care_orders co ON co.care_order_id=cr.care_order_id
+                      WHERE co.clinic_id=:clinic_id
+                        AND co.patient_id IS NOT NULL
+                        AND cr.status IN ('created', 'active')
+                    )
+                    SELECT COUNT(DISTINCT patient_id) FROM active_patients
+                    """,
+                    {"clinic_id": clinic_id},
+                )
+                telegram_bound_patients_count = await _safe_scalar(
+                    conn,
+                    """
+                    SELECT COUNT(DISTINCT pei.patient_id)
+                    FROM core_patient.patient_external_ids pei
+                    JOIN core_patient.patients p ON p.patient_id=pei.patient_id
+                    WHERE p.clinic_id=:clinic_id
+                      AND pei.external_system='telegram'
+                    """,
+                    {"clinic_id": clinic_id},
+                )
+                try:
+                    recent_rows = (
+                        await conn.execute(
+                            text(
+                                """
+                                WITH tz AS (
+                                  SELECT COALESCE(NULLIF(timezone, ''), 'UTC') AS tz_name
+                                  FROM core_reference.clinics
+                                  WHERE clinic_id=:clinic_id
+                                )
+                                SELECT patient_id, display_name, created_at
+                                FROM core_patient.patients p
+                                WHERE p.clinic_id=:clinic_id
+                                  AND DATE(p.created_at AT TIME ZONE (SELECT tz_name FROM tz))
+                                      BETWEEN :window_start AND :window_end
+                                ORDER BY p.created_at DESC, p.patient_id ASC
+                                LIMIT :limit
+                                """
+                            ),
+                            {"clinic_id": clinic_id, "window_start": window_start, "window_end": local_date, "limit": bounded_limit},
+                        )
+                    ).mappings().all()
+                except Exception:
+                    recent_rows = []
+        finally:
+            await engine.dispose()
+
+        return OwnerPatientBaseSnapshot(
+            clinic_id=clinic_id,
+            days=window_days,
+            limit=bounded_limit,
+            total_patients_count=total_patients_count,
+            new_patients_in_window_count=new_patients_in_window_count,
+            upcoming_live_booking_patients_count=upcoming_live_booking_patients_count,
+            completed_booking_patients_in_window_count=completed_booking_patients_in_window_count,
+            active_care_patients_count=active_care_patients_count,
+            telegram_bound_patients_count=telegram_bound_patients_count,
+            recent_new_patients=[
+                OwnerPatientBaseRecentRow(
+                    patient_id=str(row["patient_id"]),
+                    display_name=str(row["display_name"]) if row["display_name"] else None,
+                    created_at=row["created_at"],
+                )
+                for row in recent_rows
             ],
         )
 

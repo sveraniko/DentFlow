@@ -694,5 +694,19 @@
   "owner.staff.telegram.unknown": "unknown",
   "owner.staff.active.active": "active",
   "owner.staff.active.inactive": "inactive",
-  "owner.staff.active.unknown": "unknown"
+  "owner.staff.active.unknown": "unknown",
+  "owner.patients.usage": "Usage: /owner_patients [days 1..365]",
+  "owner.patients.invalid_window": "Invalid window. Use days from 1 to 365.",
+  "owner.patients.unavailable": "Patient base snapshot is temporarily unavailable.",
+  "owner.patients.unknown": "unknown",
+  "owner.patients.title": "Owner Patient Base Snapshot (last {days} day(s))",
+  "owner.patients.total": "Total patients: {value}",
+  "owner.patients.new": "New patients ({days}d): {value}",
+  "owner.patients.upcoming": "Patients with upcoming/live bookings: {value}",
+  "owner.patients.completed": "Patients with completed bookings ({days}d): {value}",
+  "owner.patients.active_care": "Patients with active care orders/reservations: {value}",
+  "owner.patients.telegram": "Patients with Telegram binding: {value}",
+  "owner.patients.recent_title": "Recent new patients (up to {limit}):",
+  "owner.patients.recent_item": "• {name} · created:{created_at}",
+  "owner.patients.recent_empty": "No recent new patients in the last {days} day(s)."
 }

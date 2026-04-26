@@ -69,6 +69,20 @@ def make_router(
             return None
         return limit
 
+    def _parse_patient_window_days(raw_text: str | None) -> int | None:
+        if not raw_text:
+            return 30
+        parts = raw_text.strip().split(maxsplit=1)
+        if len(parts) == 1:
+            return 30
+        try:
+            days = int(parts[1])
+        except ValueError:
+            return None
+        if days < 1 or days > 365:
+            return None
+        return days
+
     def _compact_id(value: str) -> str:
         if len(value) <= 12:
             return value
@@ -91,6 +105,11 @@ def make_router(
         label = getattr(row, "service_label", None)
         service_id = getattr(row, "service_id")
         return str(label) if label else _compact_id(str(service_id))
+
+    def _fmt_optional_count(value: int | None, *, locale: str) -> str:
+        if value is None:
+            return i18n.t("owner.patients.unknown", locale)
+        return str(value)
     @router.message(Command("owner_today"))
     async def owner_today(message: Message) -> None:
         allowed, locale = await _guard_owner(message)
@@ -385,5 +404,46 @@ def make_router(
                     branch=row.branch_label or row.branch_id or "-",
                 )
             )
+        await message.answer("\n".join(lines))
+
+    @router.message(Command("owner_patients"))
+    async def owner_patients(message: Message) -> None:
+        allowed, locale = await _guard_owner(message)
+        if not allowed or not message.from_user:
+            return
+        actor = access_resolver.resolve_actor_context(message.from_user.id)
+        if actor is None:
+            return
+        days = _parse_patient_window_days(message.text)
+        if days is None:
+            await message.answer(i18n.t("owner.patients.invalid_window", locale))
+            await message.answer(i18n.t("owner.patients.usage", locale))
+            return
+        try:
+            snap = await analytics.get_patient_base_snapshot(clinic_id=actor.clinic_id, days=days, limit=10)
+        except Exception:
+            await message.answer(i18n.t("owner.patients.unavailable", locale))
+            return
+
+        lines = [
+            i18n.t("owner.patients.title", locale).format(days=days),
+            i18n.t("owner.patients.total", locale).format(value=_fmt_optional_count(snap.total_patients_count, locale=locale)),
+            i18n.t("owner.patients.new", locale).format(value=_fmt_optional_count(snap.new_patients_in_window_count, locale=locale), days=days),
+            i18n.t("owner.patients.upcoming", locale).format(value=_fmt_optional_count(snap.upcoming_live_booking_patients_count, locale=locale)),
+            i18n.t("owner.patients.completed", locale).format(
+                value=_fmt_optional_count(snap.completed_booking_patients_in_window_count, locale=locale),
+                days=days,
+            ),
+            i18n.t("owner.patients.active_care", locale).format(value=_fmt_optional_count(snap.active_care_patients_count, locale=locale)),
+            i18n.t("owner.patients.telegram", locale).format(value=_fmt_optional_count(snap.telegram_bound_patients_count, locale=locale)),
+        ]
+        if snap.recent_new_patients:
+            lines.append(i18n.t("owner.patients.recent_title", locale).format(limit=len(snap.recent_new_patients)))
+            for row in snap.recent_new_patients:
+                name = row.display_name or _compact_id(row.patient_id)
+                created = row.created_at.date().isoformat() if row.created_at else "-"
+                lines.append(i18n.t("owner.patients.recent_item", locale).format(name=name, created_at=created))
+        else:
+            lines.append(i18n.t("owner.patients.recent_empty", locale).format(days=days))
         await message.answer("\n".join(lines))
     return router
