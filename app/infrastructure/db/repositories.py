@@ -5,6 +5,19 @@ from pathlib import Path
 
 from sqlalchemy import text
 
+# Columns that are JSONB in the DB schema — values must be serialized via json.dumps
+_SEED_JSONB_COLUMNS: frozenset[str] = frozenset({
+    "service_scope",
+    "branch_scope",
+    "value_json",
+    "payload_json",
+    "date_window",
+    "payload_summary_json",
+    "snapshot_payload_json",
+    "contact_time_window",
+    "details_json",
+})
+
 from app.application.access import InMemoryAccessRepository
 from app.application.clinic_reference import InMemoryClinicReferenceRepository
 from app.application.policy import InMemoryPolicyRepository
@@ -426,10 +439,13 @@ async def _seed_rows(conn, payload: dict) -> None:
 
     for key, (table, columns) in statements.items():
         for row in payload.get(key, []):
-            col_csv = ", ".join(columns)
-            values = ", ".join(f":{name}" for name in columns)
-            updates = ", ".join(f"{name}=EXCLUDED.{name}" for name in columns if name not in {columns[0]})
+            # Only include columns present (non-None) in the seed row so DB DEFAULT applies
+            # for omitted columns. Always include the PK column (columns[0]).
+            include_cols = [c for c in columns if c == columns[0] or row.get(c) is not None]
+            col_csv = ", ".join(include_cols)
+            values = ", ".join(f":{name}" for name in include_cols)
+            updates = ", ".join(f"{name}=EXCLUDED.{name}" for name in include_cols if name != include_cols[0])
             await conn.execute(
                 text(f"INSERT INTO {table} ({col_csv}) VALUES ({values}) ON CONFLICT ({columns[0]}) DO UPDATE SET {updates}"),
-                {name: row.get(name) for name in columns},
+                {name: json.dumps(row.get(name)) if (name in _SEED_JSONB_COLUMNS or isinstance(row.get(name), (list, dict))) else row.get(name) for name in include_cols},
             )

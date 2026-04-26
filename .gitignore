@@ -1,5 +1,30 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .venv/
-.env
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Environment & secrets — NEVER commit these
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import text
 
@@ -206,6 +207,9 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
     async def persist_patient(self, patient: Patient, *, event_name: str | None = None) -> None:
         engine = create_engine(self._db_config)
         async with engine.begin() as conn:
+            params = asdict(patient)
+            if isinstance(params.get("birth_date"), str):
+                params["birth_date"] = date.fromisoformat(params["birth_date"])
             await conn.execute(
                 text(
                     """
@@ -232,7 +236,7 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
                   updated_at=NOW()
                 """
                 ),
-                asdict(patient),
+                params,
             )
             if event_name is not None:
                 await self._append_event_on_conn(
@@ -288,6 +292,9 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
     async def persist_preferences(self, preference: PatientPreference) -> None:
         engine = create_engine(self._db_config)
         async with engine.begin() as conn:
+            params = asdict(preference)
+            if isinstance(params.get("contact_time_window"), (dict, list)):
+                params["contact_time_window"] = json.dumps(params["contact_time_window"])
             await conn.execute(
                 text(
                     """
@@ -311,7 +318,7 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
                   updated_at=NOW()
                 """
                 ),
-                asdict(preference),
+                params,
             )
             patient = self.patients.get(preference.patient_id)
             if patient is not None:
@@ -588,7 +595,8 @@ async def seed_stack2_patients(db_config, payload: dict) -> dict[str, int]:
                 set_at=row.get("set_at", DEFAULT_SEED_TIMESTAMP),
                 expires_at=row.get("expires_at"),
                 note=row.get("note"),
-            )
+            ),
+            event_name="patient.flag_set",
         )
     for row in payload.get("patient_photos", []):
         await repo.persist_photo(

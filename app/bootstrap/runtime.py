@@ -224,7 +224,6 @@ class RuntimeRegistry:
                 self.reference_service,
                 reminder_actions=self.reminder_action_service,
                 recommendation_service=self.recommendation_service,
-                recommendation_delivery_service=self.patient_recommendation_delivery_service,
                 care_commerce_service=self.care_commerce_service,
                 recommendation_repository=self.recommendation_repository,
                 default_locale=self.settings.app.default_locale,
