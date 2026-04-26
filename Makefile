@@ -1,4 +1,4 @@
-.PHONY: test db-bootstrap run-app run-bootstrap run-bots run-worker run-worker-projector run-worker-reminder run-worker-all seed-stack1 seed-stack2
+.PHONY: test db-bootstrap run-app run-bootstrap run-bots run-worker run-worker-projector run-worker-reminder run-worker-all smoke-import smoke-settings smoke-dispatcher smoke-worker-modes smoke-launch seed-stack1 seed-stack2
 
 test:
 	pytest -q
@@ -28,6 +28,21 @@ run-worker-reminder:
 
 run-worker-all:
 	WORKER_MODE=all python -m app.worker
+
+
+smoke-import:
+	python scripts/smoke_import_app.py
+
+smoke-settings:
+	python scripts/smoke_settings.py
+
+smoke-dispatcher:
+	python scripts/smoke_dispatcher.py
+
+smoke-worker-modes:
+	python scripts/smoke_worker_modes.py
+
+smoke-launch: smoke-import smoke-settings smoke-worker-modes smoke-dispatcher
 
 seed-stack2:
 	python scripts/seed_stack2.py
