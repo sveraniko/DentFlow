@@ -2,6 +2,12 @@
 
 > Telegram-first, phone-first operating system for private dental clinics.
 
+## Operational security note
+
+- Do not commit `.env`.
+- Do not include `.env` in archives/reports shared with external tools.
+- If `.env` was shared, rotate Telegram bot tokens immediately.
+
 ## 1. Purpose of this document
 
 This README is the **main index and authority map** for the DentFlow wiki.

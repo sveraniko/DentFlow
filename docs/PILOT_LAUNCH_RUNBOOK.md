@@ -2,6 +2,7 @@
 
 ## 1) Required environment checklist
 - Copy `.env.example` to `.env` and set real values.
+- Security: never commit `.env`, never include `.env` in zip archives/reports sent to tools, and rotate Telegram bot tokens immediately if `.env` was shared.
 - Required launch keys:
   - `APP_RUN_MODE=bootstrap|polling`
   - `APP_DEFAULT_LOCALE`, `APP_DEFAULT_TIMEZONE`
