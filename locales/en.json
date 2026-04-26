@@ -650,5 +650,19 @@
   "admin.calendar.failures": "Failed projection mappings: {failed_projection}.",
   "admin.calendar.last_projection_activity": "Recent projection activity: {last_synced_at}",
   "admin.calendar.last_projection_activity_unknown": "Recent projection activity: unknown/unavailable.",
-  "admin.calendar.worker_liveness_unknown": "Worker liveness is not available from bot runtime."
+  "admin.calendar.worker_liveness_unknown": "Worker liveness is not available from bot runtime.",
+  "admin.integrations.title": "Integration control index (bounded)",
+  "admin.integrations.catalog.header": "1) Care catalog sync",
+  "admin.integrations.catalog.hint.sheets": "• Command: /admin_catalog_sync sheets <url_or_id>",
+  "admin.integrations.catalog.hint.xlsx": "• Command: /admin_catalog_sync xlsx <server_local_path>",
+  "admin.integrations.catalog.truth_note": "• Truth: Google Sheets/XLSX are import authoring surfaces, not runtime order/booking truth.",
+  "admin.integrations.catalog.surface.available": "• Surface wiring: available in this runtime.",
+  "admin.integrations.catalog.surface.unavailable": "• Surface wiring: unavailable in this runtime.",
+  "admin.integrations.calendar.header": "2) Google Calendar mirror awareness",
+  "admin.integrations.calendar.hint": "• Command: /admin_calendar",
+  "admin.integrations.calendar.truth_note": "• Truth: DentFlow booking data is source of truth; Google Calendar is read-only mirror.",
+  "admin.integrations.calendar.surface.available": "• Surface wiring: available in this runtime.",
+  "admin.integrations.calendar.surface.unavailable": "• Surface wiring: unavailable in this runtime.",
+  "admin.integrations.worker.header": "3) Worker/runtime note",
+  "admin.integrations.worker.truth_note": "• Reminder/projector workers exist. Worker liveness is not available from bot runtime unless a dedicated healthcheck subsystem exists."
 }

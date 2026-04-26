@@ -275,6 +275,28 @@ def make_router(
             return "not_configured"
         return "unknown"
 
+    def _render_admin_integrations_index(*, locale: str) -> str:
+        catalog_surface = "available" if care_catalog_sync_service is not None else "unavailable"
+        calendar_surface = "available" if calendar_projection_read_service is not None else "unavailable"
+        lines = [
+            i18n.t("admin.integrations.title", locale),
+            "",
+            i18n.t("admin.integrations.catalog.header", locale),
+            i18n.t("admin.integrations.catalog.hint.sheets", locale),
+            i18n.t("admin.integrations.catalog.hint.xlsx", locale),
+            i18n.t("admin.integrations.catalog.truth_note", locale),
+            i18n.t(f"admin.integrations.catalog.surface.{catalog_surface}", locale),
+            "",
+            i18n.t("admin.integrations.calendar.header", locale),
+            i18n.t("admin.integrations.calendar.hint", locale),
+            i18n.t("admin.integrations.calendar.truth_note", locale),
+            i18n.t(f"admin.integrations.calendar.surface.{calendar_surface}", locale),
+            "",
+            i18n.t("admin.integrations.worker.header", locale),
+            i18n.t("admin.integrations.worker.truth_note", locale),
+        ]
+        return "\n".join(lines)
+
     async def _load_issue_escalation_statuses(
         *,
         clinic_id: str,
@@ -1773,6 +1795,28 @@ def make_router(
                 )
             )
         await message.answer("\n".join(lines))
+
+    @router.message(Command("admin_integrations"))
+    async def admin_integrations(message: Message) -> None:
+        allowed = await guard_roles(
+            message,
+            i18n=i18n,
+            access_resolver=access_resolver,
+            allowed_roles={RoleCode.ADMIN},
+            fallback_locale=default_locale,
+        )
+        if not allowed or not message.from_user:
+            return
+        actor_context = access_resolver.resolve_actor_context(message.from_user.id)
+        if not actor_context:
+            return
+        locale = await resolve_locale(
+            message,
+            access_resolver=access_resolver,
+            fallback_locale=default_locale,
+            clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
+        )
+        await message.answer(_render_admin_integrations_index(locale=locale))
 
     @router.message(Command("booking_escalations"))
     async def booking_escalations(message: Message) -> None:

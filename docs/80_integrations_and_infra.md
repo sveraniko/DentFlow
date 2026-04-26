@@ -237,6 +237,17 @@ The recommended baseline is:
 - external mapping between booking and calendar event ids
 - operator returns to DentFlow for real actions
 
+### Current bounded operator surfaces (Stack 13 closure)
+- `/admin_catalog_sync sheets <url_or_id>` and `/admin_catalog_sync xlsx <server_local_path>` provide bounded catalog import execution.
+- `/admin_calendar` provides bounded read-only mirror awareness.
+- `/admin_integrations` provides a compact integration control index for these operator surfaces and truth boundaries.
+
+Non-goals remain explicit:
+- no Calendar-as-truth,
+- no Calendar-to-DentFlow sync path,
+- no Sheets/XLSX runtime order/booking truth,
+- no generic observability platform.
+
 ---
 
 ## 12. External adapters stance
