@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -502,6 +502,9 @@ def make_router(
         return row is not None and row.status == "active" and row.free_qty > 0
 
     _LIST_PAGE_SIZE = 6
+    SLOT_PAGE_SIZE = 5
+    SLOT_PREFETCH_LIMIT = 80
+    SLOT_DATE_PICKER_DAYS = 14
 
     def _page_slice(total: int, page: int, page_size: int = _LIST_PAGE_SIZE) -> tuple[int, int, int]:
         if total <= 0:
@@ -511,6 +514,63 @@ def make_router(
         start = safe_page * page_size
         end = min(start + page_size, total)
         return safe_page, start, end
+
+    _RU_WEEKDAYS_SHORT = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+    _EN_WEEKDAYS_SHORT = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+    _RU_MONTHS_GENITIVE = (
+        "января",
+        "февраля",
+        "марта",
+        "апреля",
+        "мая",
+        "июня",
+        "июля",
+        "августа",
+        "сентября",
+        "октября",
+        "ноября",
+        "декабря",
+    )
+    _EN_MONTHS_SHORT = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+    def _is_ru_locale(locale: str) -> bool:
+        return (locale or "").lower().startswith("ru")
+
+    def _weekday_label(*, value: date, locale: str) -> str:
+        return (_RU_WEEKDAYS_SHORT if _is_ru_locale(locale) else _EN_WEEKDAYS_SHORT)[value.weekday()]
+
+    def _month_label(*, value: date, locale: str) -> str:
+        return (_RU_MONTHS_GENITIVE if _is_ru_locale(locale) else _EN_MONTHS_SHORT)[value.month - 1]
+
+    def _slot_date_label(*, value: date, locale: str) -> str:
+        return f"{_weekday_label(value=value, locale=locale)}, {value.day} {_month_label(value=value, locale=locale)}"
+
+    def _slot_datetime_label(*, value: datetime, locale: str) -> str:
+        return f"{_slot_date_label(value=value.date(), locale=locale)} · {value:%H:%M}"
+
+    def _parse_iso_date(value: str) -> date | None:
+        if not value:
+            return None
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return None
+
+    def _resolve_time_window(*, value: str | None) -> str:
+        token = (value or "all").strip().lower()
+        return token if token in {"all", "morning", "day", "evening"} else "all"
+
+    def _match_slot_time_window(*, local_start: datetime, time_window: str) -> bool:
+        if time_window == "all":
+            return True
+        hour = local_start.hour
+        if time_window == "morning":
+            return 6 <= hour < 12
+        if time_window == "day":
+            return 12 <= hour < 17
+        if time_window == "evening":
+            return 17 <= hour < 22
+        return True
 
     def _availability_label(row: Any, *, locale: str) -> str:
         if row is None or row.status != "active" or row.free_qty <= 0:
@@ -1881,24 +1941,126 @@ def make_router(
         message: Message | CallbackQuery, *, actor_id: int, session_id: str, prompt_key: str = "patient.booking.slot.prompt"
     ) -> None:
         locale = _locale()
-        slots = await booking_flow.list_slots_for_session(booking_session_id=session_id)
-        if not slots:
-            await _send_or_edit_panel(
-                actor_id=actor_id,
-                message=message,
-                session_id=session_id,
-                text=i18n.t("patient.booking.slot.empty", locale),
-            )
+        flow = await _load_flow_state(actor_id)
+        flow.slot_time_window = _resolve_time_window(value=flow.slot_time_window)
+        page = max(flow.slot_page, 0)
+        session = await booking_flow.get_booking_session(booking_session_id=session_id)
+        if session is None:
+            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=session_id, text=i18n.t("patient.booking.session.missing", locale))
             return
-        rows = []
+        timezone_name = _resolve_booking_timezone_name(clinic_id=session.clinic_id, branch_id=session.branch_id)
+        zone = _zone_or_utc(timezone_name)
+        effective_date = _parse_iso_date(flow.slot_date_from) or datetime.now(zone).date()
+        slots = await booking_flow.list_slots_for_session(booking_session_id=session_id, limit=SLOT_PREFETCH_LIMIT)
+        filtered: list[tuple[Any, datetime]] = []
         for slot in slots:
-            label = slot.start_at.astimezone(timezone.utc).strftime("%a %d %b · %H:%M UTC")
-            rows.append([InlineKeyboardButton(text=label, callback_data=f"book:slot:{slot.slot_id}")])
+            local_start = slot.start_at.astimezone(zone)
+            if local_start.date() < effective_date:
+                continue
+            if not _match_slot_time_window(local_start=local_start, time_window=flow.slot_time_window):
+                continue
+            filtered.append((slot, local_start))
+        filtered.sort(key=lambda item: item[1])
+        start = page * SLOT_PAGE_SIZE
+        page_items = filtered[start : start + SLOT_PAGE_SIZE]
+        has_more = start + SLOT_PAGE_SIZE < len(filtered)
+
+        rows: list[list[InlineKeyboardButton]] = []
+        for slot, local_start in page_items:
+            rows.append([InlineKeyboardButton(text=_slot_datetime_label(value=local_start, locale=locale), callback_data=f"book:slot:{slot.slot_id}")])
+        if has_more:
+            rows.append([InlineKeyboardButton(text=i18n.t("patient.booking.slot.more", locale), callback_data=f"book:slots:more:{session_id}")])
+        rows.append(
+            [
+                InlineKeyboardButton(text=i18n.t("patient.booking.slot.another_date", locale), callback_data=f"book:slots:dates:{session_id}"),
+                InlineKeyboardButton(text=i18n.t("patient.booking.slot.time_of_day", locale), callback_data=f"book:slots:windows:{session_id}"),
+            ]
+        )
+        rows.append([InlineKeyboardButton(text=i18n.t("patient.booking.slot.change_doctor", locale), callback_data=f"book:back:doctors:{session_id}")])
+        rows.append(
+            [
+                InlineKeyboardButton(text=i18n.t("patient.home.nav.back", locale), callback_data=f"book:back:doctors:{session_id}"),
+                _patient_home_nav_button(locale=locale),
+            ]
+        )
+        text = "\n".join(
+            [
+                i18n.t("patient.booking.slot.panel.title", locale),
+                "",
+                i18n.t("patient.booking.slot.panel.timezone_hint", locale),
+                f"{i18n.t('patient.booking.slot.panel.date', locale)}: {_slot_date_label(value=effective_date, locale=locale)}",
+                f"{i18n.t('patient.booking.slot.panel.time_window', locale)}: {i18n.t(f'patient.booking.slot.time_window.{flow.slot_time_window}', locale)}",
+                "",
+                i18n.t("patient.booking.slot.panel.choose", locale),
+            ]
+        )
+        if not page_items:
+            text = i18n.t("patient.booking.slot.empty.filtered", locale)
         await _send_or_edit_panel(
             actor_id=actor_id,
             message=message,
             session_id=session_id,
-            text=i18n.t(prompt_key, locale),
+            text=text,
+            keyboard=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _render_slot_date_picker_panel(message: Message | CallbackQuery, *, actor_id: int, session_id: str) -> None:
+        locale = _locale()
+        flow = await _load_flow_state(actor_id)
+        session = await booking_flow.get_booking_session(booking_session_id=session_id)
+        if session is None:
+            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=session_id, text=i18n.t("patient.booking.session.missing", locale))
+            return
+        zone = _zone_or_utc(_resolve_booking_timezone_name(clinic_id=session.clinic_id, branch_id=session.branch_id))
+        start_date = _parse_iso_date(flow.slot_date_from) or datetime.now(zone).date()
+        rows = [
+            [
+                InlineKeyboardButton(
+                    text=_slot_date_label(value=start_date + timedelta(days=offset), locale=locale),
+                    callback_data=f"book:slots:date:{session_id}:{(start_date + timedelta(days=offset)).isoformat()}",
+                )
+            ]
+            for offset in range(SLOT_DATE_PICKER_DAYS)
+        ]
+        rows.append(
+            [
+                InlineKeyboardButton(text=i18n.t("patient.home.nav.back", locale), callback_data=f"book:slots:back:{session_id}"),
+                _patient_home_nav_button(locale=locale),
+            ]
+        )
+        text = "\n".join([i18n.t("patient.booking.slot.date_picker.title", locale), "", i18n.t("patient.booking.slot.date_picker.body", locale)])
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id=session_id,
+            text=text,
+            keyboard=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _render_slot_window_picker_panel(message: Message | CallbackQuery, *, actor_id: int, session_id: str) -> None:
+        locale = _locale()
+        windows = ("all", "morning", "day", "evening")
+        rows = [
+            [
+                InlineKeyboardButton(
+                    text=i18n.t(f"patient.booking.slot.time_window.{window}", locale),
+                    callback_data=f"book:slots:window:{session_id}:{window}",
+                )
+            ]
+            for window in windows
+        ]
+        rows.append(
+            [
+                InlineKeyboardButton(text=i18n.t("patient.home.nav.back", locale), callback_data=f"book:slots:back:{session_id}"),
+                _patient_home_nav_button(locale=locale),
+            ]
+        )
+        text = "\n".join([i18n.t("patient.booking.slot.time_window_picker.title", locale), "", i18n.t("patient.booking.slot.time_window_picker.body", locale)])
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id=session_id,
+            text=text,
             keyboard=InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
@@ -3908,6 +4070,104 @@ def make_router(
             clinic_id=session.clinic_id,
             branch_id=session.branch_id,
         )
+
+    @router.callback_query(F.data.startswith("book:slots:more:"))
+    async def booking_slots_more(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            await callback.answer()
+            return
+        _, _, _, callback_session_id = callback.data.split(":", 3)
+        if not await booking_flow.validate_active_session_callback(clinic_id=clinic_id, telegram_user_id=callback.from_user.id, callback_session_id=callback_session_id):
+            await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
+            return
+        flow = await _load_flow_state(callback.from_user.id)
+        flow.slot_page = max(flow.slot_page, 0) + 1
+        await _save_flow_state(callback.from_user.id, flow)
+        await _render_slot_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
+
+    @router.callback_query(F.data.startswith("book:slots:dates:"))
+    async def booking_slots_dates(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            await callback.answer()
+            return
+        _, _, _, callback_session_id = callback.data.split(":", 3)
+        if not await booking_flow.validate_active_session_callback(clinic_id=clinic_id, telegram_user_id=callback.from_user.id, callback_session_id=callback_session_id):
+            await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
+            return
+        await _render_slot_date_picker_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
+
+    @router.callback_query(F.data.startswith("book:slots:date:"))
+    async def booking_slots_date_select(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            await callback.answer()
+            return
+        _, _, _, callback_session_id, selected_date_iso = callback.data.split(":", 4)
+        if not await booking_flow.validate_active_session_callback(clinic_id=clinic_id, telegram_user_id=callback.from_user.id, callback_session_id=callback_session_id):
+            await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
+            return
+        if _parse_iso_date(selected_date_iso) is None:
+            await callback.answer(i18n.t("patient.booking.unavailable", _locale()), show_alert=True)
+            return
+        flow = await _load_flow_state(callback.from_user.id)
+        flow.slot_date_from = selected_date_iso
+        flow.slot_page = 0
+        await _save_flow_state(callback.from_user.id, flow)
+        await _render_slot_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
+
+    @router.callback_query(F.data.startswith("book:slots:windows:"))
+    async def booking_slots_windows(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            await callback.answer()
+            return
+        _, _, _, callback_session_id = callback.data.split(":", 3)
+        if not await booking_flow.validate_active_session_callback(clinic_id=clinic_id, telegram_user_id=callback.from_user.id, callback_session_id=callback_session_id):
+            await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
+            return
+        await _render_slot_window_picker_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
+
+    @router.callback_query(F.data.startswith("book:slots:window:"))
+    async def booking_slots_window_select(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            await callback.answer()
+            return
+        _, _, _, callback_session_id, requested_window = callback.data.split(":", 4)
+        if not await booking_flow.validate_active_session_callback(clinic_id=clinic_id, telegram_user_id=callback.from_user.id, callback_session_id=callback_session_id):
+            await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
+            return
+        flow = await _load_flow_state(callback.from_user.id)
+        flow.slot_time_window = _resolve_time_window(value=requested_window)
+        flow.slot_page = 0
+        await _save_flow_state(callback.from_user.id, flow)
+        await _render_slot_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
+
+    @router.callback_query(F.data.startswith("book:slots:back:"))
+    async def booking_slots_back(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            await callback.answer()
+            return
+        _, _, _, callback_session_id = callback.data.split(":", 3)
+        if not await booking_flow.validate_active_session_callback(clinic_id=clinic_id, telegram_user_id=callback.from_user.id, callback_session_id=callback_session_id):
+            await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
+            return
+        await _render_slot_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
 
     @router.callback_query(F.data.startswith("book:doc_code:"))
     async def booking_doctor_code_prompt(callback: CallbackQuery) -> None:

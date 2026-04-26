@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,7 +12,7 @@ from app.application.booking.orchestration_outcomes import OrchestrationSuccess
 from app.application.booking.telegram_flow import BookingResumePanel
 from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
 from app.common.i18n import I18nService
-from app.domain.booking import BookingSession
+from app.domain.booking import AvailabilitySlot, BookingSession
 from app.domain.clinic_reference.models import Branch, Clinic, Doctor, DoctorAccessCode, RecordStatus, Service
 from app.interfaces.bots.patient.router import make_router
 from app.interfaces.cards import CardCallbackCodec, CardRuntimeCoordinator, CardRuntimeStateStore
@@ -123,6 +123,21 @@ class _BookingFlowStub:
         self.start_or_resume_existing_calls = 0
         self.resolve_known_patient_calls = 0
         self.known_patient_result_kind = "invalid_state"
+        self.slots = [
+            AvailabilitySlot(
+                slot_id=f"slot_{idx}",
+                clinic_id="clinic_main",
+                branch_id="branch_1",
+                doctor_id="doctor_1",
+                start_at=datetime(2026, 4, 28, 10, 0, tzinfo=timezone.utc) + timedelta(hours=idx),
+                end_at=datetime(2026, 4, 28, 10, 30, tzinfo=timezone.utc) + timedelta(hours=idx),
+                status="open",
+                visibility_policy="public",
+                updated_at=now,
+                service_scope={"service_ids": ["service_consult"]},
+            )
+            for idx in range(7)
+        ]
 
     async def start_or_resume_session(self, **kwargs):  # noqa: ANN003
         self.start_or_resume_calls += 1
@@ -175,7 +190,8 @@ class _BookingFlowStub:
         return True
 
     async def list_slots_for_session(self, **kwargs):  # noqa: ANN003
-        return []
+        limit = kwargs.get("limit", len(self.slots))
+        return self.slots[:limit]
 
     async def select_slot(self, **kwargs):  # noqa: ANN003
         return OrchestrationSuccess(kind="success", entity=self.session)
@@ -362,10 +378,10 @@ class _CareServiceStub:
         )
 
 
-def _reference() -> ClinicReferenceService:
+def _reference(*, clinic_timezone: str = "UTC", branch_timezone: str = "UTC") -> ClinicReferenceService:
     repo = InMemoryClinicReferenceRepository()
-    repo.upsert_clinic(Clinic(clinic_id="clinic_main", code="MAIN", display_name="Main", timezone="UTC", default_locale="en"))
-    repo.upsert_branch(Branch(branch_id="branch_1", clinic_id="clinic_main", display_name="Main Branch", address_text="-", timezone="UTC"))
+    repo.upsert_clinic(Clinic(clinic_id="clinic_main", code="MAIN", display_name="Main", timezone=clinic_timezone, default_locale="en"))
+    repo.upsert_branch(Branch(branch_id="branch_1", clinic_id="clinic_main", display_name="Main Branch", address_text="-", timezone=branch_timezone))
     repo.upsert_service(Service(service_id="service_consult", clinic_id="clinic_main", code="CONSULT", title_key="service.consultation", duration_minutes=30))
     repo.upsert_doctor(Doctor(doctor_id="doctor_1", clinic_id="clinic_main", display_name="Dr One", specialty_code="dent", branch_id="branch_1"))
     repo.upsert_doctor_access_code(
@@ -388,8 +404,16 @@ def _handler(router, name: str, *, kind: str = "message"):
     raise AssertionError(name)
 
 
-def _build_router(*, with_recommendations: bool, with_care: bool, recommendation_repository=None):
-    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+def _build_router(
+    *,
+    with_recommendations: bool,
+    with_care: bool,
+    recommendation_repository=None,
+    locale: str = "en",
+    clinic_timezone: str = "UTC",
+    branch_timezone: str = "UTC",
+):
+    i18n = I18nService(locales_path=Path("locales"), default_locale=locale)
     runtime = CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=InMemoryRedis()))
     codec = CardCallbackCodec(runtime=runtime)
     booking_flow = _BookingFlowStub()
@@ -398,12 +422,12 @@ def _build_router(*, with_recommendations: bool, with_care: bool, recommendation
     router = make_router(
         i18n=i18n,
         booking_flow=booking_flow,
-        reference=_reference(),
+        reference=_reference(clinic_timezone=clinic_timezone, branch_timezone=branch_timezone),
         reminder_actions=_ReminderActions(),
         recommendation_service=recommendation_service,
         care_commerce_service=care_service,
         recommendation_repository=recommendation_repository if recommendation_repository is not None else _RecommendationRepoStub(),
-        default_locale="en",
+        default_locale=locale,
         card_runtime=runtime,
         card_callback_codec=codec,
     )
@@ -549,7 +573,7 @@ def test_contact_reply_keyboard_back_navigation_removes_keyboard_and_renders_slo
     msg = _Message(text="⬅️ Back", user_id=1001)
     asyncio.run(_handler(router, "on_contact_navigation")(msg))
     assert any(isinstance(reply_markup, ReplyKeyboardRemove) for _, reply_markup in msg.answers)
-    assert any("No open slots found yet" in text for text, _ in msg.answers)
+    assert any("Upcoming slots" in text for text, _ in msg.answers)
 
 
 def test_slot_state_defaults_and_roundtrip_when_payload_missing_fields() -> None:
@@ -578,6 +602,141 @@ def test_slot_state_defaults_and_roundtrip_when_payload_missing_fields() -> None
     assert reloaded["slot_page"] == 2
     assert reloaded["slot_date_from"] == "2026-05-01"
     assert reloaded["slot_time_window"] == "morning"
+
+
+def test_slot_labels_localized_ru_and_without_utc_or_english_fragments() -> None:
+    router, runtime, _, _, _ = _build_router(with_recommendations=False, with_care=False, locale="ru")
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_flow", "care": {}},
+        )
+    )
+    callback = _Callback(data="book:doc:sess_1:any", user_id=1001)
+    asyncio.run(_handler(router, "select_doctor_preference", kind="callback")(callback))
+    _, markup = _latest_callback_panel(callback)
+    slot_label = markup.inline_keyboard[0][0].text
+    assert "UTC" not in slot_label
+    assert "Tue" not in slot_label
+    assert "Apr" not in slot_label
+    assert "Вт" in slot_label
+    assert "апреля" in slot_label
+
+
+def test_slot_labels_use_branch_timezone_instead_of_utc() -> None:
+    router, runtime, _, _, _ = _build_router(
+        with_recommendations=False,
+        with_care=False,
+        locale="en",
+        clinic_timezone="UTC",
+        branch_timezone="Europe/Berlin",
+    )
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_flow", "care": {}},
+        )
+    )
+    callback = _Callback(data="book:doc:sess_1:any", user_id=1001)
+    asyncio.run(_handler(router, "select_doctor_preference", kind="callback")(callback))
+    _, markup = _latest_callback_panel(callback)
+    assert "12:00" in markup.inline_keyboard[0][0].text
+    assert "10:00 UTC" not in markup.inline_keyboard[0][0].text
+
+
+def test_slot_panel_has_pagination_filters_and_navigation_actions() -> None:
+    router, runtime, _, _, _ = _build_router(with_recommendations=False, with_care=False, locale="ru")
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_flow", "care": {}},
+        )
+    )
+    callback = _Callback(data="book:doc:sess_1:any", user_id=1001)
+    asyncio.run(_handler(router, "select_doctor_preference", kind="callback")(callback))
+    _, markup = _latest_callback_panel(callback)
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "book:slots:more:sess_1" in callbacks
+    assert "book:slots:dates:sess_1" in callbacks
+    assert "book:slots:windows:sess_1" in callbacks
+    assert "book:back:doctors:sess_1" in callbacks
+    assert "phome:home" in callbacks
+
+
+def test_slots_more_increments_page_and_shows_next_slice() -> None:
+    router, runtime, _, _, _ = _build_router(with_recommendations=False, with_care=False, locale="en")
+    callback = _Callback(data="book:slots:more:sess_1", user_id=1001)
+    asyncio.run(_handler(router, "booking_slots_more", kind="callback")(callback))
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["slot_page"] == 1
+    _, markup = _latest_callback_panel(callback)
+    assert "slot_5" in markup.inline_keyboard[0][0].callback_data
+
+
+def test_date_picker_selection_saves_date_and_resets_page() -> None:
+    router, runtime, _, _, _ = _build_router(with_recommendations=False, with_care=False, locale="ru")
+    open_picker = _Callback(data="book:slots:dates:sess_1", user_id=1001)
+    asyncio.run(_handler(router, "booking_slots_dates", kind="callback")(open_picker))
+    text, markup = _latest_callback_panel(open_picker)
+    assert "Выберите дату" in text
+    assert markup.inline_keyboard[0][0].callback_data.startswith("book:slots:date:sess_1:")
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_flow", "slot_page": 2, "care": {}},
+        )
+    )
+    select_date = _Callback(data="book:slots:date:sess_1:2026-04-29", user_id=1001)
+    asyncio.run(_handler(router, "booking_slots_date_select", kind="callback")(select_date))
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["slot_date_from"] == "2026-04-29"
+    assert state["slot_page"] == 0
+
+
+def test_time_window_picker_filters_and_persists_window() -> None:
+    router, runtime, _, _, _ = _build_router(with_recommendations=False, with_care=False, locale="ru")
+    picker = _Callback(data="book:slots:windows:sess_1", user_id=1001)
+    asyncio.run(_handler(router, "booking_slots_windows", kind="callback")(picker))
+    text, markup = _latest_callback_panel(picker)
+    assert "Выберите время дня" in text
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "book:slots:window:sess_1:all" in callbacks
+    assert "book:slots:window:sess_1:morning" in callbacks
+    assert "book:slots:window:sess_1:day" in callbacks
+    assert "book:slots:window:sess_1:evening" in callbacks
+    choose = _Callback(data="book:slots:window:sess_1:morning", user_id=1001)
+    asyncio.run(_handler(router, "booking_slots_window_select", kind="callback")(choose))
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["slot_time_window"] == "morning"
+    assert state["slot_page"] == 0
+    _, filtered_markup = _latest_callback_panel(choose)
+    slot_labels = [row[0].text for row in filtered_markup.inline_keyboard if row and row[0].callback_data.startswith("book:slot:")]
+    assert any("10:00" in label for label in slot_labels)
+    assert all("12:00" not in label for label in slot_labels)
+
+
+def test_slot_empty_filtered_state_has_recovery_buttons() -> None:
+    router, runtime, _, _, _ = _build_router(with_recommendations=False, with_care=False, locale="ru")
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_flow", "slot_date_from": "2026-04-28", "care": {}},
+        )
+    )
+    callback = _Callback(data="book:slots:window:sess_1:evening", user_id=1001)
+    asyncio.run(_handler(router, "booking_slots_window_select", kind="callback")(callback))
+    text, markup = _latest_callback_panel(callback)
+    assert "Свободных слотов не найдено" in text
+    actions = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "book:slots:dates:sess_1" in actions
+    assert "book:slots:windows:sess_1" in actions
+    assert "book:back:doctors:sess_1" in actions
+    assert "phome:home" in actions
 
 
 def test_book_and_home_book_callback_have_equivalent_entry_state() -> None:
