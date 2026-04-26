@@ -673,5 +673,9 @@
   "owner.services.usage": "Использование: /owner_services [дни 1..90]",
   "owner.services.empty": "Нет метрик услуг за последние {days} дн.",
   "owner.services.title": "Метрики услуг владельца (последние {days} дн.)",
-  "owner.services.item": "• {service_id} · з:{completed} с:{created} п:{confirmed} н:{no_show} пер:{reschedule}"
+  "owner.services.item": "• {service_id} · з:{completed} с:{created} п:{confirmed} н:{no_show} пер:{reschedule}",
+  "owner.branches.usage": "Использование: /owner_branches [дни 1..90]",
+  "owner.branches.empty": "Нет метрик филиалов за последние {days} дн.",
+  "owner.branches.title": "Метрики филиалов владельца (последние {days} дн.)",
+  "owner.branches.item": "• {branch} · с:{created} п:{confirmed} з:{completed} отм:{canceled} н:{no_show} пер:{reschedule}"
 }

@@ -1,6 +1,8 @@
 from .service import (
     OwnerAlertRow,
     OwnerAnalyticsService,
+    OwnerBranchMetricRow,
+    OwnerBranchMetricsSummary,
     OwnerDailyDigest,
     OwnerDoctorMetricRow,
     OwnerDoctorMetricsSummary,
@@ -12,6 +14,8 @@ from .service import (
 __all__ = [
     "OwnerAlertRow",
     "OwnerAnalyticsService",
+    "OwnerBranchMetricRow",
+    "OwnerBranchMetricsSummary",
     "OwnerDailyDigest",
     "OwnerDoctorMetricRow",
     "OwnerDoctorMetricsSummary",

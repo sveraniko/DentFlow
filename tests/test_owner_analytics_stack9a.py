@@ -30,6 +30,7 @@ class _OwnerAnalyticsStub:
     def __init__(self) -> None:
         self.last_doctor_days: int | None = None
         self.last_service_days: int | None = None
+        self.last_branch_days: int | None = None
 
     async def get_today_snapshot(self, *, clinic_id: str):
         return SimpleNamespace(
@@ -113,6 +114,23 @@ class _OwnerAnalyticsStub:
             details_json={"no_show": 4},
         )
 
+    async def get_branch_metrics(self, *, clinic_id: str, days: int = 7):
+        self.last_branch_days = days
+        return SimpleNamespace(
+            rows=[
+                SimpleNamespace(
+                    branch_id="b1",
+                    branch_label="Main branch",
+                    bookings_created_count=12,
+                    bookings_confirmed_count=10,
+                    bookings_completed_count=9,
+                    bookings_canceled_count=1,
+                    bookings_no_show_count=1,
+                    bookings_reschedule_requested_count=2,
+                )
+            ]
+        )
+
 
 def _access(role: RoleCode) -> AccessResolver:
     repo = InMemoryAccessRepository()
@@ -154,10 +172,19 @@ def test_owner_router_commands_owner_only_and_localized() -> None:
     assert "Owner Service Metrics" in services.answers[-1]
     assert analytics.last_service_days == 30
 
+    branches = _Message("/owner_branches")
+    asyncio.run(_handler_by_name(router, "owner_branches")(branches))
+    assert "Owner Branch Metrics" in branches.answers[-1]
+    assert "Main branch" in branches.answers[-1]
+    assert analytics.last_branch_days == 7
+
     denied_router = make_router(i18n, _access(RoleCode.ADMIN), analytics=_OwnerAnalyticsStub(), default_locale="en")
     denied = _Message("/owner_services")
     asyncio.run(_handler_by_name(denied_router, "owner_services")(denied))
     assert any("Access denied" in x for x in denied.answers)
+    denied_branches = _Message("/owner_branches")
+    asyncio.run(_handler_by_name(denied_router, "owner_branches")(denied_branches))
+    assert any("Access denied" in x for x in denied_branches.answers)
 
 
 class _FakeConn:
@@ -384,6 +411,10 @@ def test_owner_metrics_invalid_window_and_empty_states() -> None:
             self.last_service_days = days
             return SimpleNamespace(rows=[])
 
+        async def get_branch_metrics(self, *, clinic_id: str, days: int = 7):
+            self.last_branch_days = days
+            return SimpleNamespace(rows=[])
+
     analytics = _EmptyAnalytics()
     router = make_router(i18n, _access(RoleCode.OWNER), analytics=analytics, default_locale="en")
 
@@ -403,6 +434,15 @@ def test_owner_metrics_invalid_window_and_empty_states() -> None:
     empty_service = _Message("/owner_services")
     asyncio.run(_handler_by_name(router, "owner_services")(empty_service))
     assert "No service metrics" in empty_service.answers[-1]
+
+    invalid_branch = _Message("/owner_branches 120")
+    asyncio.run(_handler_by_name(router, "owner_branches")(invalid_branch))
+    assert "Invalid window" in invalid_branch.answers[0]
+    assert "Usage: /owner_branches" in invalid_branch.answers[1]
+
+    empty_branch = _Message("/owner_branches 30")
+    asyncio.run(_handler_by_name(router, "owner_branches")(empty_branch))
+    assert "No branch metrics" in empty_branch.answers[-1]
 
 
 def test_owner_service_doctor_metrics_aggregate_and_bound(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -482,3 +522,82 @@ def test_owner_service_doctor_metrics_aggregate_and_bound(monkeypatch: pytest.Mo
     assert services.rows[0].service_id == "srv1"
     assert any("GROUP BY doctor_id" in sql for sql, _ in captured_params)
     assert any("GROUP BY service_id" in sql for sql, _ in captured_params)
+
+
+def test_owner_branch_metrics_aggregate_and_bound_with_label_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = OwnerAnalyticsService(db_config=object())
+
+    async def _window(self, *, clinic_id: str, point: datetime):
+        return (
+            datetime(2026, 4, 17, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 4, 18, 0, 0, tzinfo=timezone.utc),
+            date(2026, 4, 17),
+        )
+
+    class _Res:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def mappings(self):
+            return self
+
+        def all(self):
+            return self._rows
+
+    captured_sql: list[str] = []
+    captured_params: list[dict[str, object]] = []
+
+    class _Conn:
+        async def execute(self, statement, params):
+            captured_sql.append(str(statement))
+            captured_params.append(params)
+            return _Res([
+                {
+                    "branch_id": "b1",
+                    "branch_label": "Branch A",
+                    "bookings_created_count": 11,
+                    "bookings_confirmed_count": 8,
+                    "bookings_completed_count": 7,
+                    "bookings_canceled_count": 2,
+                    "bookings_no_show_count": 1,
+                    "bookings_reschedule_requested_count": 1,
+                },
+                {
+                    "branch_id": "b2",
+                    "branch_label": None,
+                    "bookings_created_count": 4,
+                    "bookings_confirmed_count": 3,
+                    "bookings_completed_count": 2,
+                    "bookings_canceled_count": 1,
+                    "bookings_no_show_count": 0,
+                    "bookings_reschedule_requested_count": 1,
+                },
+            ])
+
+    class _Engine:
+        def connect(self):
+            class _Ctx:
+                async def __aenter__(self_non):
+                    return _Conn()
+
+                async def __aexit__(self_non, exc_type, exc, tb):
+                    return False
+
+            return _Ctx()
+
+        async def dispose(self):
+            return None
+
+    monkeypatch.setattr(OwnerAnalyticsService, "_local_day_window", _window)
+    monkeypatch.setattr("app.application.owner.service.create_engine", lambda _: _Engine())
+
+    summary = asyncio.run(service.get_branch_metrics(clinic_id="c1", days=7, limit=25))
+
+    assert summary.limit == 10
+    assert len(summary.rows) == 2
+    assert summary.rows[0].branch_label == "Branch A"
+    assert summary.rows[1].branch_id == "b2"
+    assert summary.rows[1].branch_label is None
+    assert any("LEFT JOIN core_reference.branches" in sql for sql in captured_sql)
+    assert any("GROUP BY b.branch_id, cb.display_name" in sql for sql in captured_sql)
+    assert captured_params[0]["limit"] == 10

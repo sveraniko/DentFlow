@@ -673,5 +673,9 @@
   "owner.services.usage": "Usage: /owner_services [days 1..90]",
   "owner.services.empty": "No service metrics for last {days} day(s).",
   "owner.services.title": "Owner Service Metrics (last {days} day(s))",
-  "owner.services.item": "• {service_id} · c:{completed} cr:{created} cf:{confirmed} ns:{no_show} rr:{reschedule}"
+  "owner.services.item": "• {service_id} · c:{completed} cr:{created} cf:{confirmed} ns:{no_show} rr:{reschedule}",
+  "owner.branches.usage": "Usage: /owner_branches [days 1..90]",
+  "owner.branches.empty": "No branch metrics for last {days} day(s).",
+  "owner.branches.title": "Owner Branch Metrics (last {days} day(s))",
+  "owner.branches.item": "• {branch} · cr:{created} cf:{confirmed} c:{completed} ca:{canceled} ns:{no_show} rr:{reschedule}"
 }
