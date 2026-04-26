@@ -79,6 +79,15 @@ class DoctorOperationResult(Protocol):
     kind: str
 
 
+@dataclass(frozen=True)
+class EncounterBookingCoherenceResult:
+    encounter_completed: bool
+    booking_completed: bool
+    booking_already_terminal: bool
+    booking_completion_not_applicable: bool
+    failure_reason: str | None = None
+
+
 @dataclass(slots=True)
 class DoctorOperationsService:
     access_resolver: AccessResolver
@@ -199,6 +208,46 @@ class DoctorOperationsService:
         if encounter.status in {"closed", "completed"}:
             return encounter
         return await self.clinical_service.close_encounter(encounter_id)
+
+    async def complete_encounter_with_booking_coherence(
+        self,
+        *,
+        doctor_id: str,
+        encounter_id: str,
+        booking_id: str | None,
+    ) -> EncounterBookingCoherenceResult:
+        if self.clinical_service is None:
+            return EncounterBookingCoherenceResult(False, False, False, False, "clinical_service_unavailable")
+        encounter = await self.clinical_service.repository.get_encounter(encounter_id)
+        if encounter is None or encounter.doctor_id != doctor_id:
+            return EncounterBookingCoherenceResult(False, False, False, False, "encounter_not_accessible")
+        completed_encounter = encounter
+        if encounter.status not in {"closed", "completed"}:
+            completed_encounter = await self.clinical_service.close_encounter(encounter_id)
+            if completed_encounter is None:
+                return EncounterBookingCoherenceResult(False, False, False, False, "encounter_close_failed")
+
+        if not booking_id:
+            return EncounterBookingCoherenceResult(True, False, False, True, None)
+
+        booking = await self.booking_service.load_booking(booking_id)
+        if booking is None or booking.doctor_id != doctor_id:
+            return EncounterBookingCoherenceResult(True, False, False, True, "booking_not_accessible")
+
+        if booking.status == "in_service":
+            outcome = await self.booking_orchestration.complete_booking(
+                booking_id=booking_id,
+                reason_code="doctor_encounter_completed",
+            )
+            if outcome.kind == "success":
+                return EncounterBookingCoherenceResult(True, True, False, False, None)
+            if outcome.kind == "invalid_state":
+                return EncounterBookingCoherenceResult(True, False, False, True, "booking_invalid_transition")
+            return EncounterBookingCoherenceResult(True, False, False, True, "booking_complete_failed")
+
+        if booking.status in {"completed", "canceled", "no_show"}:
+            return EncounterBookingCoherenceResult(True, False, True, False, None)
+        return EncounterBookingCoherenceResult(True, False, False, True, "booking_state_not_completable")
 
     async def set_chart_diagnosis(self, *, doctor_id: str, clinic_id: str, patient_id: str, diagnosis_text: str, encounter_id: str | None = None) -> str | None:
         if self.clinical_service is None:

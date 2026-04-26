@@ -423,3 +423,37 @@ def test_complete_encounter_enforces_ownership_and_closes_active_encounter() -> 
     denied = asyncio.run(ops.complete_encounter(doctor_id="d1", encounter_id="enc_foreign"))
     assert denied is None
     assert clinical.closed == ["enc_ok"]
+
+
+def test_complete_encounter_with_booking_coherence_completes_only_in_service_booking() -> None:
+    class _ClinicalRepo:
+        async def get_encounter(self, encounter_id: str):
+            return SimpleNamespace(encounter_id=encounter_id, doctor_id="d1", status="in_progress")
+
+    class _ClinicalService:
+        def __init__(self) -> None:
+            self.repository = _ClinicalRepo()
+            self.closed: list[str] = []
+
+        async def close_encounter(self, encounter_id: str):
+            self.closed.append(encounter_id)
+            return SimpleNamespace(encounter_id=encounter_id, doctor_id="d1", status="closed")
+
+    in_service_ops = _ops([_booking("b1", patient_id="pat1", doctor_id="d1", minutes=60, status="in_service")])
+    in_service_ops.clinical_service = _ClinicalService()
+    ok = asyncio.run(
+        in_service_ops.complete_encounter_with_booking_coherence(doctor_id="d1", encounter_id="enc_b1", booking_id="b1")
+    )
+    assert ok.encounter_completed is True
+    assert ok.booking_completed is True
+    completed_booking = asyncio.run(in_service_ops.booking_service.load_booking("b1"))
+    assert completed_booking is not None and completed_booking.status == "completed"
+
+    canceled_ops = _ops([_booking("b2", patient_id="pat1", doctor_id="d1", minutes=90, status="canceled")])
+    canceled_ops.clinical_service = _ClinicalService()
+    skipped = asyncio.run(
+        canceled_ops.complete_encounter_with_booking_coherence(doctor_id="d1", encounter_id="enc_b2", booking_id="b2")
+    )
+    assert skipped.encounter_completed is True
+    assert skipped.booking_completed is False
+    assert skipped.booking_already_terminal is True
