@@ -694,5 +694,19 @@
   "owner.staff.telegram.unknown": "неизвестно",
   "owner.staff.active.active": "активен",
   "owner.staff.active.inactive": "неактивен",
-  "owner.staff.active.unknown": "неизвестно"
+  "owner.staff.active.unknown": "неизвестно",
+  "owner.patients.usage": "Использование: /owner_patients [дни 1..365]",
+  "owner.patients.invalid_window": "Некорректное окно. Используйте дни от 1 до 365.",
+  "owner.patients.unavailable": "Снимок базы пациентов временно недоступен.",
+  "owner.patients.unknown": "неизвестно",
+  "owner.patients.title": "Снимок базы пациентов владельца (последние {days} дн.)",
+  "owner.patients.total": "Всего пациентов: {value}",
+  "owner.patients.new": "Новые пациенты ({days}д): {value}",
+  "owner.patients.upcoming": "Пациенты с предстоящими/текущими визитами: {value}",
+  "owner.patients.completed": "Пациенты с завершёнными визитами ({days}д): {value}",
+  "owner.patients.active_care": "Пациенты с активными care-заказами/резервами: {value}",
+  "owner.patients.telegram": "Пациенты с Telegram-привязкой: {value}",
+  "owner.patients.recent_title": "Недавние новые пациенты (до {limit}):",
+  "owner.patients.recent_item": "• {name} · создан:{created_at}",
+  "owner.patients.recent_empty": "За последние {days} дн. новых пациентов нет."
 }
