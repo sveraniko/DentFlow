@@ -334,6 +334,34 @@ class _CatalogSyncService:
         return result
 
 
+class _CatalogSyncServiceLargeIssues(_CatalogSyncService):
+    async def sync_google_sheet(self, *, clinic_id: str, sheet_url_or_id: str, tmp_path: str):
+        result = CatalogImportResult(source="google_sheets")
+        for i in range(1, 5):
+            result.warnings.append(
+                CatalogIssue(level="warning", tab="products", row_number=i, code=f"w_{i}", message=f"warning_{i}")
+            )
+        for i in range(1, 5):
+            result.validation_errors.append(
+                CatalogIssue(level="error", tab="products", row_number=10 + i, code=f"e_{i}", message=f"error_{i}")
+            )
+        for i in range(1, 5):
+            result.fatal_errors.append(
+                CatalogIssue(level="fatal", tab="workbook", row_number=None, code=f"f_{i}", message=f"fatal_{i}")
+            )
+        return result
+
+
+class _CatalogSyncServiceRaisesSheets(_CatalogSyncService):
+    async def sync_google_sheet(self, *, clinic_id: str, sheet_url_or_id: str, tmp_path: str):
+        raise RuntimeError("boom sheets")
+
+
+class _CatalogSyncServiceRaisesXlsx(_CatalogSyncService):
+    async def import_xlsx(self, *, clinic_id: str, path: str, source: str = "xlsx"):
+        raise RuntimeError("boom xlsx")
+
+
 def _access() -> AccessResolver:
     repo = InMemoryAccessRepository()
     now = datetime(2026, 4, 17, tzinfo=timezone.utc)
@@ -344,7 +372,7 @@ def _access() -> AccessResolver:
     return AccessResolver(repo)
 
 
-def _router():
+def _router(catalog_sync_service=None):
     i18n = I18nService(locales_path=Path("locales"), default_locale="en")
     runtime = CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=InMemoryRedis()))
     codec = CardCallbackCodec(runtime=runtime)
@@ -359,7 +387,7 @@ def _router():
         stt_service=SimpleNamespace(),
         voice_mode_store=SimpleNamespace(),
         care_commerce_service=_CareService(),
-        care_catalog_sync_service=_CatalogSyncService(),
+        care_catalog_sync_service=catalog_sync_service or _CatalogSyncService(),
         admin_workdesk=_Workdesk(),
         reminder_recovery=recovery,
         default_locale="en",
@@ -460,6 +488,32 @@ def test_admin_catalog_sync_xlsx_failure_summary() -> None:
     asyncio.run(_handler(router, "admin_catalog_sync")(msg))
     assert "source=xlsx ok=false" in msg.answers[-1][0]
     assert "fatal [workbook] missing_tab: missing products" in msg.answers[-1][0]
+
+
+def test_admin_catalog_sync_result_is_bounded_and_includes_issue_counts() -> None:
+    router, _, _ = _router(catalog_sync_service=_CatalogSyncServiceLargeIssues())
+    msg = _Message("/admin_catalog_sync sheets sheet_id")
+    asyncio.run(_handler(router, "admin_catalog_sync")(msg))
+    response = msg.answers[-1][0]
+    assert "issues warnings=4 validation_errors=4 fatal_errors=4" in response
+    assert response.count("warning [") == 4
+    assert response.count("error [") == 4
+    assert response.count("fatal [") == 0
+    assert "... and 4 more issues omitted" in response
+
+
+def test_admin_catalog_sync_sheets_unexpected_exception_is_bounded() -> None:
+    router, _, _ = _router(catalog_sync_service=_CatalogSyncServiceRaisesSheets())
+    msg = _Message("/admin_catalog_sync sheets sheet_id")
+    asyncio.run(_handler(router, "admin_catalog_sync")(msg))
+    assert msg.answers[-1][0] == "Catalog sync failed unexpectedly. Please retry or check runtime logs."
+
+
+def test_admin_catalog_sync_xlsx_unexpected_exception_is_bounded() -> None:
+    router, _, _ = _router(catalog_sync_service=_CatalogSyncServiceRaisesXlsx())
+    msg = _Message("/admin_catalog_sync xlsx /tmp/catalog.xlsx")
+    asyncio.run(_handler(router, "admin_catalog_sync")(msg))
+    assert msg.answers[-1][0] == "Catalog sync failed unexpectedly. Please retry or check runtime logs."
 
 
 def test_admin_patients_open_active_booking_from_card() -> None:

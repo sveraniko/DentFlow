@@ -212,8 +212,22 @@ def make_router(
                     skipped=stats.skipped,
                 )
             )
+
+        warning_count = len(result.warnings)
+        validation_error_count = len(result.validation_errors)
+        fatal_error_count = len(result.fatal_errors)
+        lines.append(
+            i18n.t("admin.catalog.sync.result.issue_counts", locale).format(
+                warnings=warning_count,
+                validation_errors=validation_error_count,
+                fatal_errors=fatal_error_count,
+            )
+        )
+
+        max_issue_lines = 8
+        issue_lines: list[str] = []
         for issue in result.warnings:
-            lines.append(
+            issue_lines.append(
                 i18n.t("admin.catalog.sync.result.warning", locale).format(
                     tab=issue.tab,
                     row=issue.row_number if issue.row_number is not None else "-",
@@ -222,7 +236,7 @@ def make_router(
                 )
             )
         for issue in result.validation_errors:
-            lines.append(
+            issue_lines.append(
                 i18n.t("admin.catalog.sync.result.error", locale).format(
                     tab=issue.tab,
                     row=issue.row_number if issue.row_number is not None else "-",
@@ -231,13 +245,19 @@ def make_router(
                 )
             )
         for issue in result.fatal_errors:
-            lines.append(
+            issue_lines.append(
                 i18n.t("admin.catalog.sync.result.fatal", locale).format(
                     tab=issue.tab,
                     code=issue.code,
                     message=issue.message,
                 )
             )
+
+        shown_issue_lines = issue_lines[:max_issue_lines]
+        lines.extend(shown_issue_lines)
+        omitted = len(issue_lines) - len(shown_issue_lines)
+        if omitted > 0:
+            lines.append(i18n.t("admin.catalog.sync.result.more_issues", locale).format(omitted=omitted))
         return "\n".join(lines)
 
     async def _load_issue_escalation_statuses(
@@ -1655,18 +1675,22 @@ def make_router(
         if not source_ref:
             await message.answer(i18n.t("admin.catalog.sync.usage", locale))
             return
-        if mode == "sheets":
-            result = await care_catalog_sync_service.sync_google_sheet(
-                clinic_id=actor_context.clinic_id,
-                sheet_url_or_id=source_ref,
-                tmp_path="/tmp/dentflow-care-catalog-admin-sync.xlsx",
-            )
-        else:
-            result = await care_catalog_sync_service.import_xlsx(
-                clinic_id=actor_context.clinic_id,
-                path=source_ref,
-                source="xlsx",
-            )
+        try:
+            if mode == "sheets":
+                result = await care_catalog_sync_service.sync_google_sheet(
+                    clinic_id=actor_context.clinic_id,
+                    sheet_url_or_id=source_ref,
+                    tmp_path="/tmp/dentflow-care-catalog-admin-sync.xlsx",
+                )
+            else:
+                result = await care_catalog_sync_service.import_xlsx(
+                    clinic_id=actor_context.clinic_id,
+                    path=source_ref,
+                    source="xlsx",
+                )
+        except Exception:
+            await message.answer(i18n.t("admin.catalog.sync.error.unexpected", locale))
+            return
         await message.answer(_render_catalog_sync_result(result=result, locale=locale))
 
     @router.message(Command("booking_escalations"))
