@@ -23,6 +23,7 @@ from app.application.export import (
     MediaAssetRegistryService,
 )
 from app.application.export.services import TemplateResolutionError
+from app.application.care_catalog_sync import CareCatalogSyncService
 from app.application.search.service import HybridSearchService
 from app.application.search.models import PatientSearchResult, SearchQuery
 from app.application.voice import SpeechToTextService, VoiceSearchModeStore
@@ -97,6 +98,7 @@ def make_router(
     generated_document_registry: GeneratedDocumentRegistryService | None = None,
     media_asset_registry: MediaAssetRegistryService | None = None,
     artifact_delivery: GeneratedArtifactDeliveryService | None = None,
+    care_catalog_sync_service: CareCatalogSyncService | None = None,
     *,
     default_locale: str,
     max_voice_duration_sec: int,
@@ -191,6 +193,52 @@ def make_router(
         if escalation_status in {"open", "in_progress", "resolved"}:
             return escalation_status
         return projected_status if projected_status in {"open", "in_progress", "resolved"} else "open"
+
+    def _render_catalog_sync_result(*, result, locale: str) -> str:
+        lines = [
+            i18n.t("admin.catalog.sync.result.header", locale).format(source=result.source, ok=str(result.ok).lower())
+        ]
+        tabs = sorted(set(result.tabs_processed))
+        if tabs:
+            lines.append(i18n.t("admin.catalog.sync.result.tabs", locale).format(tabs=", ".join(tabs)))
+        for tab in sorted(result.stats):
+            stats = result.stats[tab]
+            lines.append(
+                i18n.t("admin.catalog.sync.result.tab_stats", locale).format(
+                    tab=tab,
+                    added=stats.added,
+                    updated=stats.updated,
+                    unchanged=stats.unchanged,
+                    skipped=stats.skipped,
+                )
+            )
+        for issue in result.warnings:
+            lines.append(
+                i18n.t("admin.catalog.sync.result.warning", locale).format(
+                    tab=issue.tab,
+                    row=issue.row_number if issue.row_number is not None else "-",
+                    code=issue.code,
+                    message=issue.message,
+                )
+            )
+        for issue in result.validation_errors:
+            lines.append(
+                i18n.t("admin.catalog.sync.result.error", locale).format(
+                    tab=issue.tab,
+                    row=issue.row_number if issue.row_number is not None else "-",
+                    code=issue.code,
+                    message=issue.message,
+                )
+            )
+        for issue in result.fatal_errors:
+            lines.append(
+                i18n.t("admin.catalog.sync.result.fatal", locale).format(
+                    tab=issue.tab,
+                    code=issue.code,
+                    message=issue.message,
+                )
+            )
+        return "\n".join(lines)
 
     async def _load_issue_escalation_statuses(
         *,
@@ -1575,6 +1623,51 @@ def make_router(
     @router.message(Command("services"))
     async def service_list(message: Message) -> None:
         await _list_reference(message, i18n, access_resolver, reference_service, default_locale=default_locale, entity="services")
+
+    @router.message(Command("admin_catalog_sync"))
+    async def admin_catalog_sync(message: Message) -> None:
+        allowed = await guard_roles(
+            message,
+            i18n=i18n,
+            access_resolver=access_resolver,
+            allowed_roles={RoleCode.ADMIN},
+            fallback_locale=default_locale,
+        )
+        if not allowed or not message.from_user or not message.text:
+            return
+        actor_context = access_resolver.resolve_actor_context(message.from_user.id)
+        if not actor_context:
+            return
+        locale = await resolve_locale(
+            message,
+            access_resolver=access_resolver,
+            fallback_locale=default_locale,
+            clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
+        )
+        if care_catalog_sync_service is None:
+            await message.answer(i18n.t("admin.catalog.sync.unavailable", locale))
+            return
+        parts = message.text.strip().split(maxsplit=2)
+        if len(parts) != 3 or parts[1] not in {"sheets", "xlsx"}:
+            await message.answer(i18n.t("admin.catalog.sync.usage", locale))
+            return
+        mode, source_ref = parts[1], parts[2].strip()
+        if not source_ref:
+            await message.answer(i18n.t("admin.catalog.sync.usage", locale))
+            return
+        if mode == "sheets":
+            result = await care_catalog_sync_service.sync_google_sheet(
+                clinic_id=actor_context.clinic_id,
+                sheet_url_or_id=source_ref,
+                tmp_path="/tmp/dentflow-care-catalog-admin-sync.xlsx",
+            )
+        else:
+            result = await care_catalog_sync_service.import_xlsx(
+                clinic_id=actor_context.clinic_id,
+                path=source_ref,
+                source="xlsx",
+            )
+        await message.answer(_render_catalog_sync_result(result=result, locale=locale))
 
     @router.message(Command("booking_escalations"))
     async def booking_escalations(message: Message) -> None:
