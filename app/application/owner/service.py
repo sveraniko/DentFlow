@@ -129,6 +129,29 @@ class OwnerCareMetricsSummary:
 
 
 @dataclass(slots=True)
+class OwnerStaffAccessRow:
+    actor_id: str
+    display_name: str | None
+    role_code: str | None
+    role_label: str | None
+    staff_kind: str
+    doctor_id: str | None
+    telegram_binding_state: str
+    active_state: str
+    branch_id: str | None
+    branch_label: str | None
+    created_at: datetime | None
+    last_seen_at: datetime | None
+
+
+@dataclass(slots=True)
+class OwnerStaffAccessOverview:
+    clinic_id: str
+    limit: int
+    rows: list[OwnerStaffAccessRow]
+
+
+@dataclass(slots=True)
 class OwnerAnalyticsService:
     db_config: object
 
@@ -590,6 +613,116 @@ class OwnerAnalyticsService:
         finally:
             await engine.dispose()
         return OwnerAlertRow(**dict(row)) if row else None
+
+    async def get_staff_access_overview(self, *, clinic_id: str, limit: int = 50) -> OwnerStaffAccessOverview:
+        bounded_limit = max(1, min(limit, 100))
+        engine = create_engine(self.db_config)
+        try:
+            async with engine.connect() as conn:
+                rows = (
+                    await conn.execute(
+                        text(
+                            """
+                            WITH staff_base AS (
+                              SELECT sm.staff_id,
+                                     sm.actor_id,
+                                     sm.display_name AS staff_display_name,
+                                     sm.full_name,
+                                     sm.staff_status,
+                                     sm.primary_branch_id,
+                                     sm.created_at AS staff_created_at,
+                                     ai.display_name AS actor_display_name,
+                                     ai.status AS actor_status,
+                                     ai.created_at AS actor_created_at
+                              FROM access_identity.staff_members sm
+                              LEFT JOIN access_identity.actor_identities ai ON ai.actor_id=sm.actor_id
+                              WHERE sm.clinic_id=:clinic_id
+                            )
+                            SELECT
+                              sb.actor_id,
+                              COALESCE(NULLIF(sb.staff_display_name, ''), NULLIF(sb.full_name, ''), NULLIF(sb.actor_display_name, '')) AS display_name,
+                              cra.role_code,
+                              CASE cra.role_code
+                                WHEN 'owner' THEN 'Owner'
+                                WHEN 'admin' THEN 'Admin'
+                                WHEN 'doctor' THEN 'Doctor'
+                                ELSE cra.role_code
+                              END AS role_label,
+                              CASE
+                                WHEN cra.role_code='doctor' OR dp.doctor_id IS NOT NULL THEN 'doctor'
+                                WHEN cra.role_code='admin' THEN 'admin'
+                                WHEN cra.role_code='owner' THEN 'owner'
+                                ELSE 'unknown'
+                              END AS staff_kind,
+                              dp.doctor_id,
+                              CASE
+                                WHEN tb.actor_id IS NULL THEN 'no'
+                                WHEN tb.is_active THEN 'yes'
+                                ELSE 'unknown'
+                              END AS telegram_binding_state,
+                              CASE
+                                WHEN sb.staff_status='active' AND sb.actor_status='active' AND COALESCE(cra.is_active, TRUE) THEN 'active'
+                                WHEN sb.staff_status IS NULL AND sb.actor_status IS NULL AND cra.role_code IS NULL THEN 'unknown'
+                                ELSE 'inactive'
+                              END AS active_state,
+                              COALESCE(cra.branch_id, sb.primary_branch_id) AS branch_id,
+                              cb.display_name AS branch_label,
+                              GREATEST(sb.staff_created_at, sb.actor_created_at) AS created_at,
+                              tb.last_seen_at
+                            FROM staff_base sb
+                            LEFT JOIN access_identity.clinic_role_assignments cra
+                              ON cra.staff_id=sb.staff_id
+                             AND cra.clinic_id=:clinic_id
+                             AND cra.is_active
+                             AND cra.revoked_at IS NULL
+                            LEFT JOIN access_identity.doctor_profiles dp
+                              ON dp.staff_id=sb.staff_id
+                             AND dp.clinic_id=:clinic_id
+                             AND (dp.active_for_clinical_work OR dp.active_for_booking)
+                            LEFT JOIN LATERAL (
+                              SELECT actor_id, is_active, last_seen_at
+                              FROM access_identity.telegram_bindings tbx
+                              WHERE tbx.actor_id=sb.actor_id
+                                AND tbx.is_primary
+                              ORDER BY tbx.created_at DESC
+                              LIMIT 1
+                            ) tb ON TRUE
+                            LEFT JOIN core_reference.branches cb
+                              ON cb.branch_id=COALESCE(cra.branch_id, sb.primary_branch_id)
+                            ORDER BY
+                              CASE WHEN cra.role_code='owner' THEN 0 WHEN cra.role_code='admin' THEN 1 WHEN cra.role_code='doctor' THEN 2 ELSE 3 END,
+                              COALESCE(NULLIF(sb.staff_display_name, ''), NULLIF(sb.full_name, ''), sb.actor_id) ASC,
+                              sb.actor_id ASC
+                            LIMIT :limit
+                            """
+                        ),
+                        {"clinic_id": clinic_id, "limit": bounded_limit},
+                    )
+                ).mappings().all()
+        finally:
+            await engine.dispose()
+
+        return OwnerStaffAccessOverview(
+            clinic_id=clinic_id,
+            limit=bounded_limit,
+            rows=[
+                OwnerStaffAccessRow(
+                    actor_id=str(row["actor_id"]),
+                    display_name=str(row["display_name"]) if row["display_name"] else None,
+                    role_code=str(row["role_code"]) if row["role_code"] else None,
+                    role_label=str(row["role_label"]) if row["role_label"] else None,
+                    staff_kind=str(row["staff_kind"] or "unknown"),
+                    doctor_id=str(row["doctor_id"]) if row["doctor_id"] else None,
+                    telegram_binding_state=str(row["telegram_binding_state"] or "unknown"),
+                    active_state=str(row["active_state"] or "unknown"),
+                    branch_id=str(row["branch_id"]) if row["branch_id"] else None,
+                    branch_label=str(row["branch_label"]) if row["branch_label"] else None,
+                    created_at=row["created_at"],
+                    last_seen_at=row["last_seen_at"],
+                )
+                for row in rows
+            ],
+        )
 
     async def _local_day_window(self, *, clinic_id: str, point: datetime) -> tuple[datetime, datetime, date]:
         engine = create_engine(self.db_config)

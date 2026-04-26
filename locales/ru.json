@@ -680,5 +680,18 @@
   "owner.branches.item": "• {branch} · с:{created} п:{confirmed} з:{completed} отм:{canceled} н:{no_show} пер:{reschedule}",
   "owner.care.usage": "Использование: /owner_care [дни 1..90]",
   "owner.care.empty": "Нет care-commerce активности за последние {days} дн.",
-  "owner.care.card": "Care-commerce метрики владельца (последние {days} дн.)\nСоздано: {created}\nПодтверждено: {confirmed}\nГотово к выдаче: {ready}\nВыдано: {issued}\nЗавершено: {fulfilled}\nОтменено: {canceled}\nИстекло: {expired}\nАктивные заказы: {active_orders}\nАктивные резервы: {active_reservations}"
+  "owner.care.card": "Care-commerce метрики владельца (последние {days} дн.)\nСоздано: {created}\nПодтверждено: {confirmed}\nГотово к выдаче: {ready}\nВыдано: {issued}\nЗавершено: {fulfilled}\nОтменено: {canceled}\nИстекло: {expired}\nАктивные заказы: {active_orders}\nАктивные резервы: {active_reservations}",
+  "owner.staff.usage": "Использование: /owner_staff [лимит 1..100]",
+  "owner.staff.invalid_limit": "Некорректный лимит. Используйте число от 1 до 100.",
+  "owner.staff.unavailable": "Обзор сотрудников/доступов временно недоступен.",
+  "owner.staff.empty": "Сотрудники/доступы не найдены (лимит {limit}).",
+  "owner.staff.title": "Обзор сотрудников и доступов владельца (показано: {shown}, лимит: {limit})",
+  "owner.staff.item": "• {name} · роль:{role} · тип:{staff_kind} · tg:{telegram} · статус:{active} · doctor:{doctor_id} · филиал:{branch}",
+  "owner.staff.unknown": "неизвестно",
+  "owner.staff.telegram.yes": "да",
+  "owner.staff.telegram.no": "нет",
+  "owner.staff.telegram.unknown": "неизвестно",
+  "owner.staff.active.active": "активен",
+  "owner.staff.active.inactive": "неактивен",
+  "owner.staff.active.unknown": "неизвестно"
 }
