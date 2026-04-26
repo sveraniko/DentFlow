@@ -495,6 +495,8 @@ Each scenario in this document contains:
 - **Evidence:** `app/interfaces/bots/owner/router.py` (`owner_alerts`, `owner_alert_open`).
 - **Known gaps / comments:** alert model exists, but owner still lacks many planned business drilldowns.
 
+Owner governance visibility is additionally available as bounded read-only snapshots via `/owner_staff`, `/owner_patients`, and `/owner_references`; these are governance views, not editing workflows.
+
 ### OWN-004 — Open care-performance view
 - **Actor / persona:** Owner.
 - **Preconditions:** Care-commerce metrics are expected at owner level.

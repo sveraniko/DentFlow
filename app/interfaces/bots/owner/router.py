@@ -83,6 +83,20 @@ def make_router(
             return None
         return days
 
+    def _parse_reference_limit(raw_text: str | None) -> int | None:
+        if not raw_text:
+            return 20
+        parts = raw_text.strip().split(maxsplit=1)
+        if len(parts) == 1:
+            return 20
+        try:
+            limit = int(parts[1])
+        except ValueError:
+            return None
+        if limit < 1 or limit > 50:
+            return None
+        return limit
+
     def _compact_id(value: str) -> str:
         if len(value) <= 12:
             return value
@@ -105,6 +119,18 @@ def make_router(
         label = getattr(row, "service_label", None)
         service_id = getattr(row, "service_id")
         return str(label) if label else _compact_id(str(service_id))
+
+    def _service_reference_label(row: object, *, locale: str) -> str:
+        title_key = getattr(row, "title_key", None)
+        code = getattr(row, "code", None)
+        service_id = getattr(row, "service_id")
+        if title_key:
+            localized = i18n.t(str(title_key), locale)
+            if localized and localized != str(title_key):
+                return localized
+        if code:
+            return str(code)
+        return _compact_id(str(service_id))
 
     def _fmt_optional_count(value: int | None, *, locale: str) -> str:
         if value is None:
@@ -445,5 +471,68 @@ def make_router(
                 lines.append(i18n.t("owner.patients.recent_item", locale).format(name=name, created_at=created))
         else:
             lines.append(i18n.t("owner.patients.recent_empty", locale).format(days=days))
+        await message.answer("\n".join(lines))
+
+    @router.message(Command("owner_references"))
+    async def owner_references(message: Message) -> None:
+        allowed, locale = await _guard_owner(message)
+        if not allowed or not message.from_user:
+            return
+        actor = access_resolver.resolve_actor_context(message.from_user.id)
+        if actor is None:
+            return
+        limit = _parse_reference_limit(message.text)
+        if limit is None:
+            await message.answer(i18n.t("owner.references.invalid_limit", locale))
+            await message.answer(i18n.t("owner.references.usage", locale))
+            return
+        try:
+            overview = await analytics.get_clinic_reference_overview(clinic_id=actor.clinic_id, limit=limit)
+        except Exception:
+            await message.answer(i18n.t("owner.references.unavailable", locale))
+            return
+
+        unknown = i18n.t("owner.references.unknown", locale)
+        lines = [i18n.t("owner.references.title", locale).format(limit=limit)]
+        lines.append(i18n.t("owner.references.section.branches", locale).format(count=len(overview.branches), limit=limit))
+        if overview.branches:
+            for row in overview.branches:
+                lines.append(
+                    i18n.t("owner.references.branch.item", locale).format(
+                        branch=row.display_name or _compact_id(row.branch_id),
+                        status=row.status or unknown,
+                        timezone=row.timezone or unknown,
+                    )
+                )
+        else:
+            lines.append(i18n.t("owner.references.section.empty", locale))
+
+        lines.append(i18n.t("owner.references.section.services", locale).format(count=len(overview.services), limit=limit))
+        if overview.services:
+            for row in overview.services:
+                lines.append(
+                    i18n.t("owner.references.service.item", locale).format(
+                        service=_service_reference_label(row, locale=locale),
+                        code=row.code or unknown,
+                        duration=row.duration_minutes if row.duration_minutes is not None else unknown,
+                        status=row.status or unknown,
+                    )
+                )
+        else:
+            lines.append(i18n.t("owner.references.section.empty", locale))
+
+        lines.append(i18n.t("owner.references.section.doctors", locale).format(count=len(overview.doctors), limit=limit))
+        if overview.doctors:
+            for row in overview.doctors:
+                lines.append(
+                    i18n.t("owner.references.doctor.item", locale).format(
+                        doctor=row.display_name or _compact_id(row.doctor_id),
+                        specialty=row.specialty or unknown,
+                        status=row.status or unknown,
+                        branch=row.branch_display_name or row.branch_id or unknown,
+                    )
+                )
+        else:
+            lines.append(i18n.t("owner.references.section.empty", locale))
         await message.answer("\n".join(lines))
     return router
