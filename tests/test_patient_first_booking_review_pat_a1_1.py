@@ -285,7 +285,8 @@ def test_home_book_callback_reuses_booking_entry_helper() -> None:
     assert booking_flow.start_or_resume_calls == 1
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
     assert state["booking_session_id"] == "sess_1"
-    assert callback.answers[-1] == "Share your phone contact or type the number in chat."
+    assert "Contact for booking" in callback.answers[-1]
+    assert "+7 999 123-45-67" in callback.answers[-1]
 
 
 def test_explicit_confirm_callback_finalizes_booking() -> None:

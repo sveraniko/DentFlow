@@ -430,8 +430,10 @@ def test_my_booking_direct_shortcut_uses_trusted_patient_and_skips_contact_promp
 
     assert booking_flow.resolve_known_patient_calls == 1
     assert booking_flow.start_or_resume_existing_calls == 0
-    text, _ = message.answers[-1]
-    assert "upcoming booking for this contact" in text
+    text, keyboard = message.answers[-1]
+    assert "No active booking yet" in text
+    actions = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+    assert actions == ["phome:book", "phome:home"]
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
     assert state["booking_mode"] == "existing_booking_control"
 
@@ -452,8 +454,42 @@ def test_my_booking_without_trusted_identity_falls_back_to_contact_prompt() -> N
 
     assert booking_flow.resolve_known_patient_calls == 0
     assert booking_flow.start_or_resume_existing_calls == 1
-    text, _ = message.answers[-1]
+    text, keyboard = message.answers[-1]
     assert "share the same phone" in text
+    assert "+7 999 123-45-67" in text
+    keyboard_rows = [[button.text for button in row] for row in keyboard.keyboard]
+    assert any("⬅️ Back" in row for row in keyboard_rows) is False
+    assert any("🏠 Main menu" in row for row in keyboard_rows)
+
+
+def test_recommendations_empty_state_has_my_booking_and_home_actions() -> None:
+    router, _, _, recommendation_service, _ = _build_router(with_recommendations=True, with_care=False)
+    assert recommendation_service is not None
+    recommendation_service.rows = []
+    message = _Message(text="/recommendations", user_id=1001)
+
+    asyncio.run(_handler(router, "recommendations_list")(message))
+
+    text, keyboard = message.answers[-1]
+    assert "No recommendations yet" in text
+    actions = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+    assert actions == ["phome:my_booking", "phome:home"]
+
+
+def test_care_catalog_unavailable_empty_state_has_home_action() -> None:
+    router, _, _, _, care_service = _build_router(with_recommendations=False, with_care=True)
+    assert care_service is not None
+    async def _empty_categories(**kwargs):  # noqa: ANN003
+        return []
+    care_service.list_catalog_categories = _empty_categories  # type: ignore[method-assign]
+    callback = _Callback(data="phome:care", user_id=1001)
+
+    asyncio.run(_handler(router, "patient_home_care", kind="callback")(callback))
+
+    text, markup = _latest_callback_panel(callback)
+    assert "Care catalog is unavailable right now" in text
+    actions = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert actions == ["phome:home"]
 
 
 def test_recommendations_command_and_home_callback_share_entry_when_available() -> None:

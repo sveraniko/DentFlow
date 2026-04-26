@@ -652,7 +652,8 @@ def test_book_entry_with_trusted_identity_without_phone_falls_back_to_contact_pr
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
     assert state["booking_mode"] == "new_booking_contact"
     assert message.answers
-    assert "Share your phone contact or type the number in chat." in message.answers[-1][0]
+    assert "Contact for booking" in message.answers[-1][0]
+    assert "+7 999 123-45-67" in message.answers[-1][0]
 
 
 def test_phome_book_has_parity_with_book_for_trusted_identity_and_phone() -> None:
@@ -697,7 +698,8 @@ def test_book_entry_without_trusted_patient_falls_back_to_contact_prompt() -> No
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
     assert state["booking_mode"] == "new_booking_contact"
     assert message.answers
-    assert "Share your phone contact or type the number in chat." in message.answers[-1][0]
+    assert "Contact for booking" in message.answers[-1][0]
+    assert "+7 999 123-45-67" in message.answers[-1][0]
 
 
 def test_pat_a3_2_no_migration_directories_present() -> None:
