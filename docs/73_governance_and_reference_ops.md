@@ -208,7 +208,7 @@ Status meanings remain the same as in `docs/71_role_scenarios_and_acceptance.md`
 - **Governed object / topic:** clinic-wide registries, staffing, sync health, and governance controls.
 - **Primary actor(s):** Owner; potentially composite lead-doctor persona if business wants delegated governance.
 - **Purpose:** provide one place for governance questions that are not the same as daily admin workdesk actions.
-- **Current operating model:** owner surface currently focuses on digest/snapshot/alerts plus a bounded staff/access read snapshot (`/owner_staff`).
+- **Current operating model:** owner surface currently focuses on digest/snapshot/alerts plus bounded read-only governance snapshots for staff/access (`/owner_staff`), patient base (`/owner_patients`), and clinic references (`/owner_references`).
 - **Current implementation status:** **Partial**.
 - **Evidence:** `app/interfaces/bots/owner/router.py`; `docs/50_analytics_and_owner_metrics.md`; docs 70/71.
 - **Known gaps / comments:** owner today is oversight-first, not yet governance-console-first.
@@ -354,7 +354,7 @@ The following decisions still need explicit product freezing:
 | GOV-007 | Calendar mirror governance | Implemented (bounded) | projection docs/code + `/admin_calendar` + `/admin_integrations` | keep mirror read-only; no Calendar-to-DentFlow sync |
 | GOV-008 | Generated document governance baseline | Implemented | export services + staff doc routes | expand families carefully, do not let docs become truth |
 | GOV-009 | Patient-facing document delivery | Missing | staff-only artifact baseline | decide delivery model |
-| GOV-010 | Owner / chief-doctor governance console | Partial | owner digest/snapshot/alerts + `/owner_staff` | decide if governance console is really needed now |
+| GOV-010 | Owner / chief-doctor governance console | Partial | owner digest/snapshot/alerts + `/owner_staff` + `/owner_patients` + `/owner_references` | keep bounded read-only scope; defer mutation/editor surfaces |
 
 ---
 

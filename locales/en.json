@@ -708,5 +708,17 @@
   "owner.patients.telegram": "Patients with Telegram binding: {value}",
   "owner.patients.recent_title": "Recent new patients (up to {limit}):",
   "owner.patients.recent_item": "• {name} · created:{created_at}",
-  "owner.patients.recent_empty": "No recent new patients in the last {days} day(s)."
+  "owner.patients.recent_empty": "No recent new patients in the last {days} day(s).",
+  "owner.references.usage": "Usage: /owner_references [limit 1..50]",
+  "owner.references.invalid_limit": "Invalid limit. Use a number from 1 to 50.",
+  "owner.references.unavailable": "Clinic reference overview is temporarily unavailable.",
+  "owner.references.unknown": "unknown",
+  "owner.references.title": "Owner Clinic Reference Overview (per-section limit: {limit})",
+  "owner.references.section.branches": "Branches ({count}/{limit}):",
+  "owner.references.section.services": "Services ({count}/{limit}):",
+  "owner.references.section.doctors": "Doctors ({count}/{limit}):",
+  "owner.references.section.empty": "• empty",
+  "owner.references.branch.item": "• {branch} · status:{status} · tz:{timezone}",
+  "owner.references.service.item": "• {service} · code:{code} · dur:{duration}m · status:{status}",
+  "owner.references.doctor.item": "• {doctor} · specialty:{specialty} · status:{status} · branch:{branch}"
 }

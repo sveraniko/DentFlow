@@ -708,5 +708,17 @@
   "owner.patients.telegram": "Пациенты с Telegram-привязкой: {value}",
   "owner.patients.recent_title": "Недавние новые пациенты (до {limit}):",
   "owner.patients.recent_item": "• {name} · создан:{created_at}",
-  "owner.patients.recent_empty": "За последние {days} дн. новых пациентов нет."
+  "owner.patients.recent_empty": "За последние {days} дн. новых пациентов нет.",
+  "owner.references.usage": "Использование: /owner_references [лимит 1..50]",
+  "owner.references.invalid_limit": "Некорректный лимит. Используйте число от 1 до 50.",
+  "owner.references.unavailable": "Обзор справочников клиники временно недоступен.",
+  "owner.references.unknown": "неизвестно",
+  "owner.references.title": "Обзор справочников клиники владельца (лимит на секцию: {limit})",
+  "owner.references.section.branches": "Филиалы ({count}/{limit}):",
+  "owner.references.section.services": "Услуги ({count}/{limit}):",
+  "owner.references.section.doctors": "Врачи ({count}/{limit}):",
+  "owner.references.section.empty": "• пусто",
+  "owner.references.branch.item": "• {branch} · статус:{status} · tz:{timezone}",
+  "owner.references.service.item": "• {service} · код:{code} · длит:{duration}м · статус:{status}",
+  "owner.references.doctor.item": "• {doctor} · спец:{specialty} · статус:{status} · филиал:{branch}"
 }

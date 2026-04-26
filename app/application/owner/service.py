@@ -177,6 +177,42 @@ class OwnerPatientBaseSnapshot:
 
 
 @dataclass(slots=True)
+class OwnerBranchReferenceRow:
+    branch_id: str
+    display_name: str | None
+    status: str | None
+    timezone: str | None
+
+
+@dataclass(slots=True)
+class OwnerServiceReferenceRow:
+    service_id: str
+    code: str | None
+    title_key: str | None
+    duration_minutes: int | None
+    status: str | None
+
+
+@dataclass(slots=True)
+class OwnerDoctorReferenceRow:
+    doctor_id: str
+    display_name: str | None
+    specialty: str | None
+    status: str | None
+    branch_id: str | None
+    branch_display_name: str | None
+
+
+@dataclass(slots=True)
+class OwnerClinicReferenceOverview:
+    clinic_id: str
+    limit: int
+    branches: list[OwnerBranchReferenceRow]
+    services: list[OwnerServiceReferenceRow]
+    doctors: list[OwnerDoctorReferenceRow]
+
+
+@dataclass(slots=True)
 class OwnerAnalyticsService:
     db_config: object
 
@@ -922,6 +958,97 @@ class OwnerAnalyticsService:
                     created_at=row["created_at"],
                 )
                 for row in recent_rows
+            ],
+        )
+
+    async def get_clinic_reference_overview(self, *, clinic_id: str, limit: int = 20) -> OwnerClinicReferenceOverview:
+        bounded_limit = max(1, min(limit, 50))
+        engine = create_engine(self.db_config)
+        try:
+            async with engine.connect() as conn:
+                branch_rows = (
+                    await conn.execute(
+                        text(
+                            """
+                            SELECT branch_id, display_name, status, timezone
+                            FROM core_reference.branches
+                            WHERE clinic_id=:clinic_id
+                            ORDER BY display_name ASC, branch_id ASC
+                            LIMIT :limit
+                            """
+                        ),
+                        {"clinic_id": clinic_id, "limit": bounded_limit},
+                    )
+                ).mappings().all()
+                service_rows = (
+                    await conn.execute(
+                        text(
+                            """
+                            SELECT service_id, code, title_key, duration_minutes, status
+                            FROM core_reference.services
+                            WHERE clinic_id=:clinic_id
+                            ORDER BY code ASC, service_id ASC
+                            LIMIT :limit
+                            """
+                        ),
+                        {"clinic_id": clinic_id, "limit": bounded_limit},
+                    )
+                ).mappings().all()
+                doctor_rows = (
+                    await conn.execute(
+                        text(
+                            """
+                            SELECT d.doctor_id,
+                                   NULLIF(d.display_name, '') AS display_name,
+                                   d.specialty_code AS specialty,
+                                   d.status,
+                                   d.branch_id,
+                                   b.display_name AS branch_display_name
+                            FROM core_reference.doctors d
+                            LEFT JOIN core_reference.branches b ON b.branch_id=d.branch_id
+                            WHERE d.clinic_id=:clinic_id
+                            ORDER BY COALESCE(NULLIF(d.display_name, ''), d.doctor_id) ASC, d.doctor_id ASC
+                            LIMIT :limit
+                            """
+                        ),
+                        {"clinic_id": clinic_id, "limit": bounded_limit},
+                    )
+                ).mappings().all()
+        finally:
+            await engine.dispose()
+
+        return OwnerClinicReferenceOverview(
+            clinic_id=clinic_id,
+            limit=bounded_limit,
+            branches=[
+                OwnerBranchReferenceRow(
+                    branch_id=str(row["branch_id"]),
+                    display_name=str(row["display_name"]) if row["display_name"] else None,
+                    status=str(row["status"]) if row["status"] else None,
+                    timezone=str(row["timezone"]) if row["timezone"] else None,
+                )
+                for row in branch_rows
+            ],
+            services=[
+                OwnerServiceReferenceRow(
+                    service_id=str(row["service_id"]),
+                    code=str(row["code"]) if row["code"] else None,
+                    title_key=str(row["title_key"]) if row["title_key"] else None,
+                    duration_minutes=int(row["duration_minutes"]) if row["duration_minutes"] is not None else None,
+                    status=str(row["status"]) if row["status"] else None,
+                )
+                for row in service_rows
+            ],
+            doctors=[
+                OwnerDoctorReferenceRow(
+                    doctor_id=str(row["doctor_id"]),
+                    display_name=str(row["display_name"]) if row["display_name"] else None,
+                    specialty=str(row["specialty"]) if row["specialty"] else None,
+                    status=str(row["status"]) if row["status"] else None,
+                    branch_id=str(row["branch_id"]) if row["branch_id"] else None,
+                    branch_display_name=str(row["branch_display_name"]) if row["branch_display_name"] else None,
+                )
+                for row in doctor_rows
             ],
         )
 
