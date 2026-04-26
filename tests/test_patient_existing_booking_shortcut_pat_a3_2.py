@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+from aiogram.types import ReplyKeyboardMarkup
+
 from app.application.booking.orchestration_outcomes import OrchestrationSuccess
 from app.application.booking.telegram_flow import BookingResumePanel, RecentBookingPrefill, ReturningPatientStartResult
 from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
@@ -241,7 +243,7 @@ class _BookingFlowStub:
         return self.slot if slot_id == self.slot.slot_id else None
 
     def list_services(self, *, clinic_id: str):
-        return [SimpleNamespace(code="CONSULT", service_id="service_consult")]
+        return [SimpleNamespace(code="CONSULT", service_id="service_consult", title_key="service.cleaning")]
 
     async def list_slots_for_session(self, **kwargs):  # noqa: ANN003
         return [self.slot]
@@ -393,7 +395,13 @@ def test_missing_trusted_identity_falls_back_to_contact_prompt() -> None:
 
     assert booking_flow.resolve_known_patient_calls == 0
     assert booking_flow.start_or_resume_existing_calls == 1
-    assert "share the same phone" in message.answers[-1][0]
+    text, keyboard = message.answers[-1]
+    assert "share the same phone" in text
+    assert isinstance(keyboard, ReplyKeyboardMarkup)
+    rows = [[button.text for button in row] for row in keyboard.keyboard]
+    assert rows[0] == ["Share contact"]
+    assert rows[1] == ["🏠 Main menu"]
+    assert "⬅️ Back" not in rows[1]
 
 
 def test_multiple_candidate_patients_fall_back_to_contact_prompt() -> None:

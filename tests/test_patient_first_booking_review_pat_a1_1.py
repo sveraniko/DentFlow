@@ -7,6 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
+
 from app.application.booking.orchestration_outcomes import InvalidStateOutcome, OrchestrationSuccess
 from app.application.booking.telegram_flow import BookingCardView, BookingResumePanel, PatientResolutionFlowResult
 from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
@@ -46,9 +48,14 @@ class _CallbackMessage:
         self.chat = SimpleNamespace(id=9001)
         self.message_id = message_id
         self.edits: list[tuple[str, object | None]] = []
+        self.answers: list[tuple[str, object | None]] = []
 
     async def edit_text(self, text: str, reply_markup=None):
         self.edits.append((text, reply_markup))
+
+    async def answer(self, text: str, reply_markup=None):
+        self.answers.append((text, reply_markup))
+        return SimpleNamespace(chat=self.chat, message_id=900 + len(self.answers))
 
 
 class _Callback:
@@ -59,11 +66,20 @@ class _Callback:
         self.from_user = SimpleNamespace(id=user_id)
         self.message = _CallbackMessage(message_id=message_id)
         self.answers: list[str] = []
+        self.answer_payloads: list[tuple[str, object | None]] = []
 
     async def answer(self, text: str = "", show_alert: bool = False, reply_markup=None) -> None:
+        self.answer_payloads.append((text, reply_markup))
         if text:
             self.answers.append(text)
         return SimpleNamespace(chat=self.chat, message_id=self.message.message_id)
+
+
+def _latest_callback_payload(callback: _Callback) -> tuple[str, object | None]:
+    for payload in reversed(callback.answer_payloads):
+        if payload[0] or payload[1] is not None:
+            return payload
+    raise AssertionError("expected callback answer payload")
 
 
 class _ReminderActions:
@@ -289,6 +305,44 @@ def test_home_book_callback_reuses_booking_entry_helper() -> None:
     assert "+7 999 123-45-67" in callback.answers[-1]
 
 
+def test_select_slot_callback_sends_contact_reply_keyboard() -> None:
+    router, _, runtime = _build_router_and_flow()
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_flow", "care": {}},
+        )
+    )
+    callback = _Callback(data="book:slot:slot_1", user_id=1001, message_id=501)
+
+    asyncio.run(_handler(router, "select_slot", kind="callback")(callback))
+
+    text, keyboard = _latest_callback_payload(callback)
+    assert "Contact for booking" in text
+    assert isinstance(keyboard, ReplyKeyboardMarkup)
+    rows = [[button.text for button in row] for row in keyboard.keyboard]
+    assert rows[0] == ["Share contact"]
+    assert rows[1] == ["⬅️ Back", "🏠 Main menu"]
+    assert callback.message.edits == []
+
+
+def test_resume_contact_collection_callback_sends_contact_reply_keyboard() -> None:
+    router, _, runtime = _build_router_and_flow()
+    callback = _Callback(data="phome:book", user_id=1001, message_id=501)
+
+    asyncio.run(_handler(router, "patient_home_book", kind="callback")(callback))
+
+    text, keyboard = _latest_callback_payload(callback)
+    assert "Contact for booking" in text
+    assert isinstance(keyboard, ReplyKeyboardMarkup)
+    rows = [[button.text for button in row] for row in keyboard.keyboard]
+    assert rows[0] == ["Share contact"]
+    assert rows[1] == ["⬅️ Back", "🏠 Main menu"]
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "new_booking_contact"
+
+
 def test_explicit_confirm_callback_finalizes_booking() -> None:
     router, booking_flow, runtime = _build_router_and_flow()
     asyncio.run(
@@ -308,6 +362,7 @@ def test_explicit_confirm_callback_finalizes_booking() -> None:
     assert callback.answers == []
     assert callback.bot.edits
     success_text = callback.bot.edits[-1]["text"]
+    assert isinstance(callback.bot.edits[-1]["reply_markup"], InlineKeyboardMarkup)
     assert "Doctor: Dr One" in success_text
     assert "Service: Teeth cleaning" in success_text
     assert "Time: 2026-04-22 12:00 CEST" in success_text
