@@ -54,6 +54,25 @@ def make_router(
         if days < 1 or days > 90:
             return None
         return days
+
+    def _parse_staff_limit(raw_text: str | None) -> int | None:
+        if not raw_text:
+            return 30
+        parts = raw_text.strip().split(maxsplit=1)
+        if len(parts) == 1:
+            return 30
+        try:
+            limit = int(parts[1])
+        except ValueError:
+            return None
+        if limit < 1 or limit > 100:
+            return None
+        return limit
+
+    def _compact_id(value: str) -> str:
+        if len(value) <= 12:
+            return value
+        return f"{value[:6]}…{value[-4:]}"
     @router.message(Command("owner_today"))
     async def owner_today(message: Message) -> None:
         allowed, locale = await _guard_owner(message)
@@ -300,4 +319,46 @@ def make_router(
                 active_reservations=summary.active_reservations_count,
             )
         )
+
+    @router.message(Command("owner_staff"))
+    async def owner_staff(message: Message) -> None:
+        allowed, locale = await _guard_owner(message)
+        if not allowed or not message.from_user:
+            return
+        actor = access_resolver.resolve_actor_context(message.from_user.id)
+        if actor is None:
+            return
+        limit = _parse_staff_limit(message.text)
+        if limit is None:
+            await message.answer(i18n.t("owner.staff.invalid_limit", locale))
+            await message.answer(i18n.t("owner.staff.usage", locale))
+            return
+        try:
+            overview = await analytics.get_staff_access_overview(clinic_id=actor.clinic_id, limit=limit)
+        except Exception:
+            await message.answer(i18n.t("owner.staff.unavailable", locale))
+            return
+        if not overview.rows:
+            await message.answer(i18n.t("owner.staff.empty", locale).format(limit=limit))
+            return
+        lines = [
+            i18n.t("owner.staff.title", locale).format(shown=len(overview.rows), limit=limit),
+        ]
+        for row in overview.rows:
+            name = row.display_name or _compact_id(row.actor_id)
+            role = row.role_label or row.role_code or i18n.t("owner.staff.unknown", locale)
+            tg_state = i18n.t(f"owner.staff.telegram.{row.telegram_binding_state}", locale)
+            active_state = i18n.t(f"owner.staff.active.{row.active_state}", locale)
+            lines.append(
+                i18n.t("owner.staff.item", locale).format(
+                    name=name,
+                    role=role,
+                    staff_kind=row.staff_kind,
+                    telegram=tg_state,
+                    active=active_state,
+                    doctor_id=row.doctor_id or "-",
+                    branch=row.branch_label or row.branch_id or "-",
+                )
+            )
+        await message.answer("\n".join(lines))
     return router

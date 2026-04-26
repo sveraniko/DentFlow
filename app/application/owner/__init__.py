@@ -9,6 +9,8 @@ from .service import (
     OwnerDoctorMetricsSummary,
     OwnerServiceMetricRow,
     OwnerServiceMetricsSummary,
+    OwnerStaffAccessOverview,
+    OwnerStaffAccessRow,
     OwnerTodaySnapshot,
 )
 
@@ -23,5 +25,7 @@ __all__ = [
     "OwnerDoctorMetricsSummary",
     "OwnerServiceMetricRow",
     "OwnerServiceMetricsSummary",
+    "OwnerStaffAccessOverview",
+    "OwnerStaffAccessRow",
     "OwnerTodaySnapshot",
 ]

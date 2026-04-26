@@ -680,5 +680,18 @@
   "owner.branches.item": "• {branch} · cr:{created} cf:{confirmed} c:{completed} ca:{canceled} ns:{no_show} rr:{reschedule}",
   "owner.care.usage": "Usage: /owner_care [days 1..90]",
   "owner.care.empty": "No care-commerce activity for last {days} day(s).",
-  "owner.care.card": "Owner Care Metrics (last {days} day(s))\nCreated: {created}\nConfirmed: {confirmed}\nReady for pickup: {ready}\nIssued: {issued}\nFulfilled: {fulfilled}\nCanceled: {canceled}\nExpired: {expired}\nActive orders: {active_orders}\nActive reservations: {active_reservations}"
+  "owner.care.card": "Owner Care Metrics (last {days} day(s))\nCreated: {created}\nConfirmed: {confirmed}\nReady for pickup: {ready}\nIssued: {issued}\nFulfilled: {fulfilled}\nCanceled: {canceled}\nExpired: {expired}\nActive orders: {active_orders}\nActive reservations: {active_reservations}",
+  "owner.staff.usage": "Usage: /owner_staff [limit 1..100]",
+  "owner.staff.invalid_limit": "Invalid limit. Use a number from 1 to 100.",
+  "owner.staff.unavailable": "Staff access overview is temporarily unavailable.",
+  "owner.staff.empty": "No staff/access rows found (limit {limit}).",
+  "owner.staff.title": "Owner Staff / Access Overview (shown: {shown}, limit: {limit})",
+  "owner.staff.item": "• {name} · role:{role} · kind:{staff_kind} · tg:{telegram} · active:{active} · doctor:{doctor_id} · branch:{branch}",
+  "owner.staff.unknown": "unknown",
+  "owner.staff.telegram.yes": "yes",
+  "owner.staff.telegram.no": "no",
+  "owner.staff.telegram.unknown": "unknown",
+  "owner.staff.active.active": "active",
+  "owner.staff.active.inactive": "inactive",
+  "owner.staff.active.unknown": "unknown"
 }
