@@ -23,6 +23,7 @@ from app.application.booking import (
 from app.application.clinic_reference import ClinicReferenceService
 from app.application.care_commerce import CareCommerceService, PatientCareOrderDeliveryService
 from app.application.care_catalog_sync import CareCatalogSyncService
+from app.application.integration.google_calendar_projection import GoogleCalendarProjectionReadService
 from app.application.owner import OwnerAnalyticsService
 from app.application.clinical import ClinicalChartService
 from app.application.communication import BookingReminderPlanner, BookingReminderService, ReminderActionService
@@ -59,6 +60,7 @@ from app.infrastructure.db.patient_repository import (
 from app.infrastructure.db.repositories import DbAccessRepository, DbClinicReferenceRepository, DbPolicyRepository
 from app.infrastructure.db.recommendation_repository import DbRecommendationRepository
 from app.infrastructure.db.document_repository import DbDocumentTemplateRepository, DbGeneratedDocumentRepository, DbMediaAssetRepository
+from app.infrastructure.db.google_calendar_projection_repository import DbGoogleCalendarProjectionRepository
 from app.infrastructure.search.meili_backend import MeiliSearchBackend
 from app.infrastructure.search.meili_client import HttpMeiliClient
 from app.infrastructure.search.postgres_backend import PostgresSearchBackend
@@ -137,6 +139,12 @@ class RuntimeRegistry:
             patient_order_delivery=self.patient_care_order_delivery_service,
         )
         self.care_catalog_sync_service = CareCatalogSyncService(self.care_commerce_repository)
+        self.google_calendar_projection_read_service = GoogleCalendarProjectionReadService(
+            repository=DbGoogleCalendarProjectionRepository(
+                settings.db,
+                app_default_timezone=settings.app.default_timezone,
+            )
+        )
         self.policy_resolver = PolicyResolver(self.policy_repository)
         self.booking_session_service = BookingSessionService(self.booking_repository)
         self.availability_slot_service = AvailabilitySlotService(self.booking_repository)
@@ -240,6 +248,7 @@ class RuntimeRegistry:
                 generated_document_registry=self.generated_document_registry_service,
                 media_asset_registry=self.media_asset_registry_service,
                 care_catalog_sync_service=self.care_catalog_sync_service,
+                calendar_projection_read_service=self.google_calendar_projection_read_service,
                 default_locale=self.settings.app.default_locale,
                 max_voice_duration_sec=self.settings.stt.max_voice_duration_sec,
                 max_voice_file_size_bytes=self.settings.stt.max_voice_file_size_bytes,

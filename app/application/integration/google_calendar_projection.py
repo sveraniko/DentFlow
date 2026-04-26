@@ -68,6 +68,22 @@ class CalendarEventPayload:
     status: str
 
 
+@dataclass(frozen=True, slots=True)
+class CalendarProjectionSummary:
+    mapped_events: int
+    pending_projection: int
+    failed_projection: int
+
+
+@dataclass(frozen=True, slots=True)
+class CalendarProjectionRecentMapping:
+    booking_id: str
+    sync_status: str
+    target_calendar_id: str
+    external_event_id: str | None
+    last_synced_at: datetime | None
+
+
 class CalendarProjectionRepository(Protocol):
     async def get_booking_projection(self, *, booking_id: str) -> CalendarProjectionBooking | None: ...
 
@@ -84,6 +100,15 @@ class CalendarProjectionRepository(Protocol):
         payload_hash: str | None,
         last_error_text: str | None,
     ) -> None: ...
+
+    async def get_calendar_projection_summary(self, *, clinic_id: str) -> CalendarProjectionSummary: ...
+
+    async def list_recent_calendar_mappings(
+        self,
+        *,
+        clinic_id: str,
+        limit: int = 5,
+    ) -> list[CalendarProjectionRecentMapping]: ...
 
 
 class GoogleCalendarGateway(Protocol):
@@ -182,6 +207,23 @@ class GoogleCalendarProjectionService:
             payload_hash=None,
             last_error_text=None,
         )
+
+
+@dataclass(slots=True)
+class GoogleCalendarProjectionReadService:
+    repository: CalendarProjectionRepository
+
+    async def get_calendar_projection_summary(self, *, clinic_id: str) -> CalendarProjectionSummary:
+        return await self.repository.get_calendar_projection_summary(clinic_id=clinic_id)
+
+    async def list_recent_calendar_mappings(
+        self,
+        *,
+        clinic_id: str,
+        limit: int = 5,
+    ) -> list[CalendarProjectionRecentMapping]:
+        safe_limit = 1 if limit < 1 else min(limit, 10)
+        return await self.repository.list_recent_calendar_mappings(clinic_id=clinic_id, limit=safe_limit)
 
 
 def render_calendar_event(*, booking: CalendarProjectionBooking, dentflow_base_url: str) -> CalendarEventPayload:

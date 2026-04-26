@@ -636,5 +636,15 @@
   "patient.booking.quick.other": "Choose something else",
   "doctor.queue.open_booking_cta": "Open {time} · {patient}",
   "doctor.encounter.handoff.card": "Booking {booking_id} moved to in service.\nEncounter {encounter_id} is {status}.",
-  "doctor.encounter.handoff.unavailable": "Booking moved to in service, but encounter context could not be opened."
+  "doctor.encounter.handoff.unavailable": "Booking moved to in service, but encounter context could not be opened.",
+  "admin.calendar.title": "Google Calendar mirror awareness",
+  "admin.calendar.source_of_truth_note": "DentFlow bookings are the source of truth; Google Calendar is a read-only mirror.",
+  "admin.calendar.summary": "Projection summary: mapped={mapped_events}, pending={pending_projection}, failed={failed_projection}.",
+  "admin.calendar.empty": "No projected mapping rows yet.",
+  "admin.calendar.unavailable": "Calendar projection awareness is unavailable in this runtime.",
+  "admin.calendar.worker_unknown": "Projector worker status: unavailable.",
+  "admin.calendar.worker_configured": "Projector worker hint: configured (WORKER_MODE supports projector).",
+  "admin.calendar.worker_not_configured": "Projector worker hint: not configured in current WORKER_MODE.",
+  "admin.calendar.recent_mappings": "Recent mirrored bookings:",
+  "admin.calendar.recent_item": "• {booking_id} · {sync_status}"
 }
