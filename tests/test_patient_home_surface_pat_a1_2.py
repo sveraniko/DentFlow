@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+from aiogram.types import ReplyKeyboardMarkup
+
 from app.application.booking.orchestration_outcomes import OrchestrationSuccess
 from app.application.booking.telegram_flow import BookingResumePanel
 from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
@@ -44,9 +46,14 @@ class _CallbackMessage:
         self.chat = SimpleNamespace(id=9001)
         self.message_id = message_id
         self.edits: list[tuple[str, object | None]] = []
+        self.answers: list[tuple[str, object | None]] = []
 
     async def edit_text(self, text: str, reply_markup=None):
         self.edits.append((text, reply_markup))
+
+    async def answer(self, text: str, reply_markup=None):
+        self.answers.append((text, reply_markup))
+        return SimpleNamespace(chat=self.chat, message_id=900 + len(self.answers))
 
 
 class _Callback:
@@ -70,6 +77,8 @@ def _latest_callback_panel(callback: _Callback) -> tuple[str, object]:
     if callback.bot.edits:
         latest = callback.bot.edits[-1]
         return latest["text"], latest["reply_markup"]
+    if callback.message.answers:
+        return callback.message.answers[-1]
     if callback.message.edits:
         return callback.message.edits[-1]
     for text, reply_markup in reversed(callback.answer_payloads):
@@ -460,6 +469,29 @@ def test_my_booking_without_trusted_identity_falls_back_to_contact_prompt() -> N
     keyboard_rows = [[button.text for button in row] for row in keyboard.keyboard]
     assert any("⬅️ Back" in row for row in keyboard_rows) is False
     assert any("🏠 Main menu" in row for row in keyboard_rows)
+
+
+def test_home_callback_my_booking_without_trust_sends_reply_keyboard() -> None:
+    class _NoTrustRecommendationRepo:
+        async def find_patient_ids_by_telegram_user(self, *, clinic_id: str, telegram_user_id: int) -> list[str]:
+            return []
+
+    router, _, booking_flow, _, _ = _build_router(
+        with_recommendations=False,
+        with_care=False,
+        recommendation_repository=_NoTrustRecommendationRepo(),
+    )
+    callback = _Callback(data="phome:my_booking", user_id=1001, message_id=500)
+
+    asyncio.run(_handler(router, "patient_home_my_booking", kind="callback")(callback))
+
+    assert booking_flow.start_or_resume_existing_calls == 1
+    text, keyboard = _latest_callback_panel(callback)
+    assert "share the same phone" in text
+    assert isinstance(keyboard, ReplyKeyboardMarkup)
+    rows = [[button.text for button in row] for row in keyboard.keyboard]
+    assert rows[0] == ["Share contact"]
+    assert rows[1] == ["🏠 Main menu"]
 
 
 def test_recommendations_empty_state_has_my_booking_and_home_actions() -> None:

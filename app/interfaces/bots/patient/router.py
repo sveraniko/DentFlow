@@ -1051,6 +1051,41 @@ def make_router(
         source_context = SourceContext.CARE_CATALOG_CATEGORY if session_id == "care" else SourceContext.BOOKING_LIST
         state_token = session_id or f"actor:{actor_id}"
         state = await card_runtime.resolve_active_panel(actor_id=actor_id, panel_family=panel_family)
+        if reply_keyboard is not None:
+            if isinstance(message, CallbackQuery):
+                current_message = message.message
+                if current_message is None:
+                    await message.answer(i18n.t("common.card.callback.stale", _locale()), show_alert=True)
+                    return
+                sent = await current_message.answer(text, reply_markup=reply_keyboard)
+                await card_runtime.bind_panel(
+                    actor_id=actor_id,
+                    chat_id=sent.chat.id,
+                    message_id=sent.message_id,
+                    panel_family=panel_family,
+                    profile=None,
+                    entity_id=session_id or None,
+                    source_context=source_context,
+                    source_ref=session_id,
+                    page_or_index=session_id,
+                    state_token=state_token,
+                )
+                await message.answer()
+                return
+            sent = await message.answer(text, reply_markup=reply_keyboard)
+            await card_runtime.bind_panel(
+                actor_id=actor_id,
+                chat_id=sent.chat.id,
+                message_id=sent.message_id,
+                panel_family=panel_family,
+                profile=None,
+                entity_id=session_id or None,
+                source_context=source_context,
+                source_ref=session_id,
+                page_or_index=session_id,
+                state_token=state_token,
+            )
+            return
         if isinstance(message, CallbackQuery):
             current_message = message.message
             if current_message:
