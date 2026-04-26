@@ -677,5 +677,8 @@
   "owner.branches.usage": "Использование: /owner_branches [дни 1..90]",
   "owner.branches.empty": "Нет метрик филиалов за последние {days} дн.",
   "owner.branches.title": "Метрики филиалов владельца (последние {days} дн.)",
-  "owner.branches.item": "• {branch} · с:{created} п:{confirmed} з:{completed} отм:{canceled} н:{no_show} пер:{reschedule}"
+  "owner.branches.item": "• {branch} · с:{created} п:{confirmed} з:{completed} отм:{canceled} н:{no_show} пер:{reschedule}",
+  "owner.care.usage": "Использование: /owner_care [дни 1..90]",
+  "owner.care.empty": "Нет care-commerce активности за последние {days} дн.",
+  "owner.care.card": "Care-commerce метрики владельца (последние {days} дн.)\nСоздано: {created}\nПодтверждено: {confirmed}\nГотово к выдаче: {ready}\nВыдано: {issued}\nЗавершено: {fulfilled}\nОтменено: {canceled}\nИстекло: {expired}\nАктивные заказы: {active_orders}\nАктивные резервы: {active_reservations}"
 }

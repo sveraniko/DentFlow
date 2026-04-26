@@ -677,5 +677,8 @@
   "owner.branches.usage": "Usage: /owner_branches [days 1..90]",
   "owner.branches.empty": "No branch metrics for last {days} day(s).",
   "owner.branches.title": "Owner Branch Metrics (last {days} day(s))",
-  "owner.branches.item": "• {branch} · cr:{created} cf:{confirmed} c:{completed} ca:{canceled} ns:{no_show} rr:{reschedule}"
+  "owner.branches.item": "• {branch} · cr:{created} cf:{confirmed} c:{completed} ca:{canceled} ns:{no_show} rr:{reschedule}",
+  "owner.care.usage": "Usage: /owner_care [days 1..90]",
+  "owner.care.empty": "No care-commerce activity for last {days} day(s).",
+  "owner.care.card": "Owner Care Metrics (last {days} day(s))\nCreated: {created}\nConfirmed: {confirmed}\nReady for pickup: {ready}\nIssued: {issued}\nFulfilled: {fulfilled}\nCanceled: {canceled}\nExpired: {expired}\nActive orders: {active_orders}\nActive reservations: {active_reservations}"
 }

@@ -114,6 +114,21 @@ class OwnerBranchMetricsSummary:
 
 
 @dataclass(slots=True)
+class OwnerCareMetricsSummary:
+    clinic_id: str
+    days: int
+    orders_created_count: int
+    orders_confirmed_count: int
+    orders_ready_for_pickup_count: int
+    orders_issued_count: int
+    orders_fulfilled_count: int
+    orders_canceled_count: int
+    orders_expired_count: int
+    active_orders_count: int
+    active_reservations_count: int
+
+
+@dataclass(slots=True)
 class OwnerAnalyticsService:
     db_config: object
 
@@ -337,6 +352,97 @@ class OwnerAnalyticsService:
                 )
                 for row in rows
             ],
+        )
+
+    async def get_care_metrics(self, *, clinic_id: str, days: int = 7) -> OwnerCareMetricsSummary:
+        _, _, local_date = await self._local_day_window(clinic_id=clinic_id, point=datetime.now(timezone.utc))
+        window_start = local_date - timedelta(days=max(days, 1) - 1)
+
+        engine = create_engine(self.db_config)
+        try:
+            async with engine.connect() as conn:
+                row = (
+                    await conn.execute(
+                        text(
+                            """
+                            WITH tz AS (
+                              SELECT COALESCE(NULLIF(timezone, ''), 'UTC') AS tz_name
+                              FROM core_reference.clinics
+                              WHERE clinic_id=:clinic_id
+                            ),
+                            window AS (
+                              SELECT CAST(:window_start AS date) AS window_start,
+                                     CAST(:window_end AS date) AS window_end
+                            )
+                            SELECT
+                              SUM(CASE WHEN DATE(co.created_at AT TIME ZONE (SELECT tz_name FROM tz))
+                                        BETWEEN (SELECT window_start FROM window) AND (SELECT window_end FROM window)
+                                       THEN 1 ELSE 0 END) AS orders_created_count,
+                              SUM(CASE WHEN co.confirmed_at IS NOT NULL
+                                            AND DATE(co.confirmed_at AT TIME ZONE (SELECT tz_name FROM tz))
+                                        BETWEEN (SELECT window_start FROM window) AND (SELECT window_end FROM window)
+                                       THEN 1 ELSE 0 END) AS orders_confirmed_count,
+                              SUM(CASE WHEN co.ready_for_pickup_at IS NOT NULL
+                                            AND DATE(co.ready_for_pickup_at AT TIME ZONE (SELECT tz_name FROM tz))
+                                        BETWEEN (SELECT window_start FROM window) AND (SELECT window_end FROM window)
+                                       THEN 1 ELSE 0 END) AS orders_ready_for_pickup_count,
+                              SUM(CASE WHEN co.issued_at IS NOT NULL
+                                            AND DATE(co.issued_at AT TIME ZONE (SELECT tz_name FROM tz))
+                                        BETWEEN (SELECT window_start FROM window) AND (SELECT window_end FROM window)
+                                       THEN 1 ELSE 0 END) AS orders_issued_count,
+                              SUM(CASE WHEN co.fulfilled_at IS NOT NULL
+                                            AND DATE(co.fulfilled_at AT TIME ZONE (SELECT tz_name FROM tz))
+                                        BETWEEN (SELECT window_start FROM window) AND (SELECT window_end FROM window)
+                                       THEN 1 ELSE 0 END) AS orders_fulfilled_count,
+                              SUM(CASE WHEN co.canceled_at IS NOT NULL
+                                            AND DATE(co.canceled_at AT TIME ZONE (SELECT tz_name FROM tz))
+                                        BETWEEN (SELECT window_start FROM window) AND (SELECT window_end FROM window)
+                                       THEN 1 ELSE 0 END) AS orders_canceled_count,
+                              SUM(CASE WHEN co.expired_at IS NOT NULL
+                                            AND DATE(co.expired_at AT TIME ZONE (SELECT tz_name FROM tz))
+                                        BETWEEN (SELECT window_start FROM window) AND (SELECT window_end FROM window)
+                                       THEN 1 ELSE 0 END) AS orders_expired_count,
+                              SUM(CASE WHEN co.status IN ('created', 'awaiting_confirmation', 'confirmed', 'awaiting_payment', 'paid', 'ready_for_pickup', 'issued')
+                                       THEN 1 ELSE 0 END) AS active_orders_count
+                            FROM care_commerce.care_orders co
+                            WHERE co.clinic_id=:clinic_id
+                            """
+                        ),
+                        {"clinic_id": clinic_id, "window_start": window_start, "window_end": local_date},
+                    )
+                ).mappings().first()
+                active_reservations_count = int(
+                    (
+                        await conn.execute(
+                            text(
+                                """
+                                SELECT COUNT(*)
+                                FROM care_commerce.care_reservations cr
+                                JOIN care_commerce.care_orders co ON co.care_order_id=cr.care_order_id
+                                WHERE co.clinic_id=:clinic_id
+                                  AND cr.status IN ('created', 'active')
+                                """
+                            ),
+                            {"clinic_id": clinic_id},
+                        )
+                    ).scalar_one()
+                )
+        finally:
+            await engine.dispose()
+
+        row = row or {}
+        return OwnerCareMetricsSummary(
+            clinic_id=clinic_id,
+            days=days,
+            orders_created_count=int(row.get("orders_created_count") or 0),
+            orders_confirmed_count=int(row.get("orders_confirmed_count") or 0),
+            orders_ready_for_pickup_count=int(row.get("orders_ready_for_pickup_count") or 0),
+            orders_issued_count=int(row.get("orders_issued_count") or 0),
+            orders_fulfilled_count=int(row.get("orders_fulfilled_count") or 0),
+            orders_canceled_count=int(row.get("orders_canceled_count") or 0),
+            orders_expired_count=int(row.get("orders_expired_count") or 0),
+            active_orders_count=int(row.get("active_orders_count") or 0),
+            active_reservations_count=active_reservations_count,
         )
 
     async def get_today_snapshot(self, *, clinic_id: str, now: datetime | None = None) -> OwnerTodaySnapshot:

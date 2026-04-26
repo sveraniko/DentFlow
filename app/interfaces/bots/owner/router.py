@@ -255,4 +255,49 @@ def make_router(
                 )
             )
         await message.answer("\n".join(lines))
+
+    @router.message(Command("owner_care"))
+    async def owner_care(message: Message) -> None:
+        allowed, locale = await _guard_owner(message)
+        if not allowed or not message.from_user:
+            return
+        actor = access_resolver.resolve_actor_context(message.from_user.id)
+        if actor is None:
+            return
+        days = _parse_window_days(message.text)
+        if days is None:
+            await message.answer(i18n.t("owner.metrics.invalid_window", locale))
+            await message.answer(i18n.t("owner.care.usage", locale))
+            return
+        summary = await analytics.get_care_metrics(clinic_id=actor.clinic_id, days=days)
+        has_activity = any(
+            [
+                summary.orders_created_count,
+                summary.orders_confirmed_count,
+                summary.orders_ready_for_pickup_count,
+                summary.orders_issued_count,
+                summary.orders_fulfilled_count,
+                summary.orders_canceled_count,
+                summary.orders_expired_count,
+                summary.active_orders_count,
+                summary.active_reservations_count,
+            ]
+        )
+        if not has_activity:
+            await message.answer(i18n.t("owner.care.empty", locale).format(days=days))
+            return
+        await message.answer(
+            i18n.t("owner.care.card", locale).format(
+                days=days,
+                created=summary.orders_created_count,
+                confirmed=summary.orders_confirmed_count,
+                ready=summary.orders_ready_for_pickup_count,
+                issued=summary.orders_issued_count,
+                fulfilled=summary.orders_fulfilled_count,
+                canceled=summary.orders_canceled_count,
+                expired=summary.orders_expired_count,
+                active_orders=summary.active_orders_count,
+                active_reservations=summary.active_reservations_count,
+            )
+        )
     return router
