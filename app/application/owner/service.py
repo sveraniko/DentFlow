@@ -80,6 +80,8 @@ class OwnerDoctorMetricsSummary:
 class OwnerServiceMetricRow:
     service_id: str
     service_label: str | None
+    service_title_key: str | None
+    service_code: str | None
     bookings_created_count: int
     bookings_confirmed_count: int
     bookings_completed_count: int
@@ -236,7 +238,8 @@ class OwnerAnalyticsService:
                         text(
                             """
                             SELECT m.service_id,
-                                   MAX(NULLIF(cs.name, '')) AS service_label,
+                                   MAX(NULLIF(cs.title_key, '')) AS service_title_key,
+                                   MAX(NULLIF(cs.code, '')) AS service_code,
                                    SUM(bookings_created_count) AS bookings_created_count,
                                    SUM(bookings_confirmed_count) AS bookings_confirmed_count,
                                    SUM(bookings_completed_count) AS bookings_completed_count,
@@ -270,7 +273,13 @@ class OwnerAnalyticsService:
             rows=[
                 OwnerServiceMetricRow(
                     service_id=str(row["service_id"]),
-                    service_label=str(row["service_label"]) if row["service_label"] else None,
+                    service_title_key=str(row["service_title_key"]) if row["service_title_key"] else None,
+                    service_code=str(row["service_code"]) if row["service_code"] else None,
+                    service_label=(
+                        str(row["service_code"])
+                        if row.get("service_code")
+                        else (str(row["service_title_key"]) if row.get("service_title_key") else None)
+                    ),
                     bookings_created_count=int(row["bookings_created_count"] or 0),
                     bookings_confirmed_count=int(row["bookings_confirmed_count"] or 0),
                     bookings_completed_count=int(row["bookings_completed_count"] or 0),
