@@ -256,17 +256,18 @@ class _CareService:
 
 class _DoctorBookingService:
     def __init__(self, *, status: str = "confirmed") -> None:
-        self.status = status
+        self.status_by_booking: dict[str, str] = {"b1": status}
 
     async def load_booking(self, booking_id: str):
+        status = self.status_by_booking.get(booking_id, "confirmed")
         return SimpleNamespace(
-            booking_id="b1",
+            booking_id=booking_id,
             patient_id="p1",
             clinic_id="c1",
             doctor_id="d1",
             branch_id="br1",
             service_id="s1",
-            status=self.status,
+            status=status,
             source_channel="telegram",
             scheduled_start_at=datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc),
         )
@@ -279,7 +280,7 @@ class _DoctorBookingService:
                 booking_id="b1",
                 doctor_id="d1",
                 scheduled_start_at=datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc),
-                status=self.status,
+                status=self.status_by_booking.get("b1", "confirmed"),
             )
         ]
 
@@ -302,18 +303,27 @@ class _BookingState:
 
 
 class _Orchestration:
+    def __init__(self, booking_service: _DoctorBookingService) -> None:
+        self.booking_service = booking_service
+
     async def complete_booking(self, *, booking_id: str, reason_code: str | None = None):
+        status = self.booking_service.status_by_booking.get(booking_id)
+        if status != "in_service":
+            return SimpleNamespace(kind="invalid_state", reason="cannot_complete")
+        self.booking_service.status_by_booking[booking_id] = "completed"
         return SimpleNamespace(kind="success", entity=SimpleNamespace(booking_id=booking_id, status="completed"))
 
 
 class _ClinicalService:
     class _Repo:
         def __init__(self, status: str) -> None:
-            self.status = status
+            self.status_by_encounter: dict[str, str] = {}
+            self.default_status = status
 
         async def get_encounter(self, encounter_id: str):
             booking_id = encounter_id.replace("enc_", "", 1)
-            return SimpleNamespace(encounter_id=encounter_id, doctor_id="d1", patient_id="p1", booking_id=booking_id, status=self.status)
+            status = self.status_by_encounter.get(encounter_id, self.default_status)
+            return SimpleNamespace(encounter_id=encounter_id, doctor_id="d1", patient_id="p1", booking_id=booking_id, status=status)
 
     def __init__(self, *, encounter_status: str = "in_progress") -> None:
         self.repository = self._Repo(encounter_status)
@@ -333,6 +343,7 @@ class _ClinicalService:
 
     async def close_encounter(self, encounter_id: str):
         self.closed_encounters.append(encounter_id)
+        self.repository.status_by_encounter[encounter_id] = "closed"
         return SimpleNamespace(encounter_id=encounter_id, doctor_id="d1", patient_id="p1", booking_id="b1", status="closed")
 
 
@@ -526,15 +537,16 @@ def _doctor_router(
     codec = CardCallbackCodec(runtime=runtime)
     clinical = clinical_service or _ClinicalService()
     recommendation_service = _RecommendationService(recommendation_rows)
+    booking_service = _DoctorBookingService(status=booking_status)
     router = make_doctor_router(
         i18n=i18n,
         access_resolver=_access(RoleCode.DOCTOR, user_id=702),
         search_service=SimpleNamespace(),
         stt_service=SimpleNamespace(),
         voice_mode_store=SimpleNamespace(),
-        booking_service=_DoctorBookingService(status=booking_status),
+        booking_service=booking_service,
         booking_state_service=_BookingState(),
-        booking_orchestration=_Orchestration(),
+        booking_orchestration=_Orchestration(booking_service),
         reference_service=_DoctorReference(),
         patient_reader=_PatientReader(),
         clinical_service=clinical,
@@ -733,11 +745,61 @@ def test_encounter_complete_confirm_closes_and_returns_to_booking_continuity() -
     asyncio.run(handler(callback))
     assert clinical_service.closed_encounters == ["enc_b1"]
     text, kb = callback.message.edits[-1]
-    assert "Encounter completed." in text
-    assert "[In service]" in text
+    assert "Encounter and booking completed." in text
+    assert "[Completed]" in text
     actions = [row[0].text for row in kb.inline_keyboard]
-    assert "Add quick note" in actions
-    assert "Issue recommendation" in actions
+    assert "Add quick note" not in actions
+    assert "Issue recommendation" not in actions
+
+
+def test_encounter_complete_confirm_keeps_terminal_booking_unchanged() -> None:
+    clinical = _ClinicalService()
+    router, _, clinical_service, _ = _doctor_router(
+        recommendation_rows=[],
+        care_service=_build_empty_care_service(),
+        clinical_service=clinical,
+        booking_status="canceled",
+    )
+    handler = _handler(router, "doctor_encounter_complete_confirm")
+    callback = _Callback("denc:complete_confirm:enc_b1:b1", user_id=702)
+    asyncio.run(handler(callback))
+    assert clinical_service.closed_encounters == ["enc_b1"]
+    text, _ = callback.message.edits[-1]
+    assert "Booking stayed unchanged." in text
+    assert "[Canceled]" in text
+
+
+def test_encounter_complete_confirm_without_booking_keeps_encounter_only_path() -> None:
+    clinical = _ClinicalService()
+    router, _, clinical_service, _ = _doctor_router(
+        recommendation_rows=[],
+        care_service=_build_empty_care_service(),
+        clinical_service=clinical,
+    )
+    handler = _handler(router, "doctor_encounter_complete_confirm")
+    callback = _Callback("denc:complete_confirm:enc_b1:-", user_id=702)
+    asyncio.run(handler(callback))
+    assert clinical_service.closed_encounters == ["enc_b1"]
+    text, _ = callback.message.edits[-1]
+    assert "Encounter completed." in text
+    assert "Encounter context" in text
+
+
+def test_encounter_complete_confirm_invalid_booking_completion_is_bounded() -> None:
+    clinical = _ClinicalService()
+    router, _, clinical_service, _ = _doctor_router(
+        recommendation_rows=[],
+        care_service=_build_empty_care_service(),
+        clinical_service=clinical,
+        booking_status="confirmed",
+    )
+    handler = _handler(router, "doctor_encounter_complete_confirm")
+    callback = _Callback("denc:complete_confirm:enc_b1:b1", user_id=702)
+    asyncio.run(handler(callback))
+    assert clinical_service.closed_encounters == ["enc_b1"]
+    text, _ = callback.message.edits[-1]
+    assert "Booking completion unavailable." in text
+    assert "[Confirmed]" in text
 
 
 def test_encounter_complete_abort_returns_to_encounter_context_without_mutation() -> None:

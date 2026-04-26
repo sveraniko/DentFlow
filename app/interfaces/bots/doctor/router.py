@@ -1504,22 +1504,44 @@ def make_router(
         if encounter is None or not _encounter_is_active(status=encounter.status):
             await callback.answer(i18n.t("doctor.encounter.complete.unavailable", locale), show_alert=True)
             return
-        completed = await operations.complete_encounter(doctor_id=doctor_id, encounter_id=encounter_id)
-        if completed is None or _encounter_is_active(status=completed.status):
-            await callback.answer(i18n.t("doctor.encounter.complete.unavailable", locale), show_alert=True)
-            return
+        success_message = i18n.t("doctor.encounter.complete.success", locale)
+        completed = None
+        if booking_id:
+            coherence = await operations.complete_encounter_with_booking_coherence(
+                doctor_id=doctor_id,
+                encounter_id=encounter_id,
+                booking_id=booking_id,
+            )
+            if not coherence.encounter_completed:
+                await callback.answer(i18n.t("doctor.encounter.complete.unavailable", locale), show_alert=True)
+                return
+            completed = await _resolve_owned_encounter(doctor_id=doctor_id, encounter_id=encounter_id)
+            if completed is None or _encounter_is_active(status=completed.status):
+                await callback.answer(i18n.t("doctor.encounter.complete.unavailable", locale), show_alert=True)
+                return
+            if coherence.booking_completed:
+                success_message = i18n.t("doctor.encounter.complete.success_with_booking", locale)
+            elif coherence.booking_already_terminal:
+                success_message = i18n.t("doctor.encounter.complete.success_booking_unchanged", locale)
+            else:
+                success_message = i18n.t("doctor.encounter.complete.booking_completion_unavailable", locale)
+        else:
+            completed = await operations.complete_encounter(doctor_id=doctor_id, encounter_id=encounter_id)
+            if completed is None or _encounter_is_active(status=completed.status):
+                await callback.answer(i18n.t("doctor.encounter.complete.unavailable", locale), show_alert=True)
+                return
         if booking_id:
             detail = await operations.get_booking_detail(doctor_id=doctor_id, booking_id=booking_id)
             if detail is not None:
                 shell = await _doctor_booking_shell(detail=detail, locale=locale)
                 if shell is not None:
                     await callback.message.edit_text(
-                        f"{i18n.t('doctor.encounter.complete.success', locale)}\n\n{CardShellRenderer.to_panel(shell).text}",
+                        f"{success_message}\n\n{CardShellRenderer.to_panel(shell).text}",
                         reply_markup=await _doctor_booking_keyboard(detail=detail, locale=locale),
                     )
                     return
         await callback.message.edit_text(
-            f"{i18n.t('doctor.encounter.complete.success', locale)}\n\n"
+            f"{success_message}\n\n"
             + await _render_doctor_encounter_panel(
                 doctor_id=doctor_id,
                 patient_id=getattr(completed, "patient_id", ""),
