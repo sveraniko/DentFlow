@@ -5,6 +5,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+from app.application.care_catalog_sync.models import CatalogImportResult, CatalogIssue
 from app.application.access import AccessResolver, InMemoryAccessRepository
 from app.application.admin.workdesk import CarePickupQueueRow, OpsIssueQueueRow, WaitlistQueueRow
 from app.application.booking.orchestration_outcomes import OrchestrationSuccess
@@ -316,6 +317,23 @@ class _ReminderRecovery:
         return SimpleNamespace(outcome="scheduled", reminder_id=f"rem_mr_{reminder_id}")
 
 
+class _CatalogSyncService:
+    async def sync_google_sheet(self, *, clinic_id: str, sheet_url_or_id: str, tmp_path: str):
+        result = CatalogImportResult(source="google_sheets")
+        result.tabs_processed.extend(["product_i18n", "products"])
+        stats_products = result.ensure_tab("products")
+        stats_products.added = 2
+        stats_i18n = result.ensure_tab("product_i18n")
+        stats_i18n.updated = 1
+        result.warnings.append(CatalogIssue(level="warning", tab="products", row_number=3, code="trimmed_whitespace", message="trimmed"))
+        return result
+
+    async def import_xlsx(self, *, clinic_id: str, path: str, source: str = "xlsx"):
+        result = CatalogImportResult(source=source)
+        result.fatal_errors.append(CatalogIssue(level="fatal", tab="workbook", row_number=None, code="missing_tab", message="missing products"))
+        return result
+
+
 def _access() -> AccessResolver:
     repo = InMemoryAccessRepository()
     now = datetime(2026, 4, 17, tzinfo=timezone.utc)
@@ -341,6 +359,7 @@ def _router():
         stt_service=SimpleNamespace(),
         voice_mode_store=SimpleNamespace(),
         care_commerce_service=_CareService(),
+        care_catalog_sync_service=_CatalogSyncService(),
         admin_workdesk=_Workdesk(),
         reminder_recovery=recovery,
         default_locale="en",
@@ -367,6 +386,7 @@ def _router_with_flow():
         stt_service=SimpleNamespace(),
         voice_mode_store=SimpleNamespace(),
         care_commerce_service=_CareService(),
+        care_catalog_sync_service=_CatalogSyncService(),
         admin_workdesk=_Workdesk(),
         reminder_recovery=recovery,
         default_locale="en",
@@ -418,6 +438,36 @@ def test_admin_patients_search_and_open_card() -> None:
     decoded = asyncio.run(codec.decode(cb))
     assert decoded.source_context == SourceContext.ADMIN_PATIENTS
 
+
+def test_admin_catalog_sync_usage_and_result_surface() -> None:
+    router, _, _ = _router()
+    usage = _Message("/admin_catalog_sync")
+    asyncio.run(_handler(router, "admin_catalog_sync")(usage))
+    assert "Usage: /admin_catalog_sync" in usage.answers[-1][0]
+
+    ok_msg = _Message("/admin_catalog_sync sheets https://docs.google.com/spreadsheets/d/test/edit#gid=0")
+    asyncio.run(_handler(router, "admin_catalog_sync")(ok_msg))
+    response = ok_msg.answers[-1][0]
+    assert "source=google_sheets ok=true" in response
+    assert "tab=product_i18n added=0 updated=1 unchanged=0 skipped=0" in response
+    assert "tab=products added=2 updated=0 unchanged=0 skipped=0" in response
+    assert "warning [products:3] trimmed_whitespace: trimmed" in response
+
+
+def test_admin_catalog_sync_xlsx_failure_summary() -> None:
+    router, _, _ = _router()
+    msg = _Message("/admin_catalog_sync xlsx /tmp/catalog.xlsx")
+    asyncio.run(_handler(router, "admin_catalog_sync")(msg))
+    assert "source=xlsx ok=false" in msg.answers[-1][0]
+    assert "fatal [workbook] missing_tab: missing products" in msg.answers[-1][0]
+
+
+def test_admin_patients_open_active_booking_from_card() -> None:
+    router, _, _ = _router()
+    msg = _Message("/admin_patients jane")
+    asyncio.run(_handler(router, "admin_patients")(msg))
+    _, keyboard = msg.answers[-1]
+    cb = keyboard.inline_keyboard[0][0].callback_data
     callback = _Callback(cb)
     asyncio.run(_handler(router, "admin_runtime_card_callback", kind="callback")(callback))
     assert any("Jane Roe" in row[0] for row in callback.message.edits)
