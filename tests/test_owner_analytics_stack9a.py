@@ -31,6 +31,7 @@ class _OwnerAnalyticsStub:
         self.last_doctor_days: int | None = None
         self.last_service_days: int | None = None
         self.last_branch_days: int | None = None
+        self.last_care_days: int | None = None
 
     async def get_today_snapshot(self, *, clinic_id: str):
         return SimpleNamespace(
@@ -131,6 +132,20 @@ class _OwnerAnalyticsStub:
             ]
         )
 
+    async def get_care_metrics(self, *, clinic_id: str, days: int = 7):
+        self.last_care_days = days
+        return SimpleNamespace(
+            orders_created_count=9,
+            orders_confirmed_count=7,
+            orders_ready_for_pickup_count=5,
+            orders_issued_count=4,
+            orders_fulfilled_count=4,
+            orders_canceled_count=1,
+            orders_expired_count=1,
+            active_orders_count=3,
+            active_reservations_count=2,
+        )
+
 
 def _access(role: RoleCode) -> AccessResolver:
     repo = InMemoryAccessRepository()
@@ -178,6 +193,14 @@ def test_owner_router_commands_owner_only_and_localized() -> None:
     assert "Main branch" in branches.answers[-1]
     assert analytics.last_branch_days == 7
 
+    care = _Message("/owner_care")
+    asyncio.run(_handler_by_name(router, "owner_care")(care))
+    assert "Owner Care Metrics" in care.answers[-1]
+    assert "Active reservations: 2" in care.answers[-1]
+    assert analytics.last_care_days == 7
+    assert "Revenue" not in care.answers[-1]
+    assert "Payment" not in care.answers[-1]
+
     denied_router = make_router(i18n, _access(RoleCode.ADMIN), analytics=_OwnerAnalyticsStub(), default_locale="en")
     denied = _Message("/owner_services")
     asyncio.run(_handler_by_name(denied_router, "owner_services")(denied))
@@ -185,6 +208,9 @@ def test_owner_router_commands_owner_only_and_localized() -> None:
     denied_branches = _Message("/owner_branches")
     asyncio.run(_handler_by_name(denied_router, "owner_branches")(denied_branches))
     assert any("Access denied" in x for x in denied_branches.answers)
+    denied_care = _Message("/owner_care")
+    asyncio.run(_handler_by_name(denied_router, "owner_care")(denied_care))
+    assert any("Access denied" in x for x in denied_care.answers)
 
 
 class _FakeConn:
@@ -415,6 +441,20 @@ def test_owner_metrics_invalid_window_and_empty_states() -> None:
             self.last_branch_days = days
             return SimpleNamespace(rows=[])
 
+        async def get_care_metrics(self, *, clinic_id: str, days: int = 7):
+            self.last_care_days = days
+            return SimpleNamespace(
+                orders_created_count=0,
+                orders_confirmed_count=0,
+                orders_ready_for_pickup_count=0,
+                orders_issued_count=0,
+                orders_fulfilled_count=0,
+                orders_canceled_count=0,
+                orders_expired_count=0,
+                active_orders_count=0,
+                active_reservations_count=0,
+            )
+
     analytics = _EmptyAnalytics()
     router = make_router(i18n, _access(RoleCode.OWNER), analytics=analytics, default_locale="en")
 
@@ -443,6 +483,15 @@ def test_owner_metrics_invalid_window_and_empty_states() -> None:
     empty_branch = _Message("/owner_branches 30")
     asyncio.run(_handler_by_name(router, "owner_branches")(empty_branch))
     assert "No branch metrics" in empty_branch.answers[-1]
+
+    invalid_care = _Message("/owner_care 100")
+    asyncio.run(_handler_by_name(router, "owner_care")(invalid_care))
+    assert "Invalid window" in invalid_care.answers[0]
+    assert "Usage: /owner_care" in invalid_care.answers[1]
+
+    empty_care = _Message("/owner_care")
+    asyncio.run(_handler_by_name(router, "owner_care")(empty_care))
+    assert "No care-commerce activity" in empty_care.answers[-1]
 
 
 def test_owner_service_doctor_metrics_aggregate_and_bound(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -601,3 +650,80 @@ def test_owner_branch_metrics_aggregate_and_bound_with_label_fallback(monkeypatc
     assert any("LEFT JOIN core_reference.branches" in sql for sql in captured_sql)
     assert any("GROUP BY b.branch_id, cb.display_name" in sql for sql in captured_sql)
     assert captured_params[0]["limit"] == 10
+
+
+def test_owner_care_metrics_status_counts_and_active_counts(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = OwnerAnalyticsService(db_config=object())
+
+    async def _window(self, *, clinic_id: str, point: datetime):
+        return (
+            datetime(2026, 4, 17, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 4, 18, 0, 0, tzinfo=timezone.utc),
+            date(2026, 4, 17),
+        )
+
+    class _Res:
+        def __init__(self, row=None, scalar=None):
+            self._row = row
+            self._scalar = scalar
+
+        def mappings(self):
+            return self
+
+        def first(self):
+            return self._row
+
+        def scalar_one(self):
+            return self._scalar
+
+    captured_sql: list[str] = []
+
+    class _Conn:
+        async def execute(self, statement, params):
+            sql = str(statement)
+            captured_sql.append(sql)
+            if "FROM care_commerce.care_orders co" in sql:
+                return _Res(
+                    row={
+                        "orders_created_count": 9,
+                        "orders_confirmed_count": 7,
+                        "orders_ready_for_pickup_count": 5,
+                        "orders_issued_count": 4,
+                        "orders_fulfilled_count": 4,
+                        "orders_canceled_count": 1,
+                        "orders_expired_count": 2,
+                        "active_orders_count": 6,
+                    }
+                )
+            return _Res(scalar=3)
+
+    class _Engine:
+        def connect(self):
+            class _Ctx:
+                async def __aenter__(self_non):
+                    return _Conn()
+
+                async def __aexit__(self_non, exc_type, exc, tb):
+                    return False
+
+            return _Ctx()
+
+        async def dispose(self):
+            return None
+
+    monkeypatch.setattr(OwnerAnalyticsService, "_local_day_window", _window)
+    monkeypatch.setattr("app.application.owner.service.create_engine", lambda _: _Engine())
+
+    summary = asyncio.run(service.get_care_metrics(clinic_id="c1", days=30))
+    assert summary.days == 30
+    assert summary.orders_created_count == 9
+    assert summary.orders_confirmed_count == 7
+    assert summary.orders_ready_for_pickup_count == 5
+    assert summary.orders_issued_count == 4
+    assert summary.orders_fulfilled_count == 4
+    assert summary.orders_canceled_count == 1
+    assert summary.orders_expired_count == 2
+    assert summary.active_orders_count == 6
+    assert summary.active_reservations_count == 3
+    assert any("AT TIME ZONE (SELECT tz_name FROM tz)" in sql for sql in captured_sql)
+    assert any("cr.status IN ('created', 'active')" in sql for sql in captured_sql)
