@@ -650,5 +650,19 @@
   "admin.calendar.failures": "Сопоставления с ошибками проекции: {failed_projection}.",
   "admin.calendar.last_projection_activity": "Недавняя активность проекции: {last_synced_at}",
   "admin.calendar.last_projection_activity_unknown": "Недавняя активность проекции: неизвестно/недоступно.",
-  "admin.calendar.worker_liveness_unknown": "Состояние живости worker недоступно из runtime бота."
+  "admin.calendar.worker_liveness_unknown": "Состояние живости worker недоступно из runtime бота.",
+  "admin.integrations.title": "Индекс интеграций (ограниченный)",
+  "admin.integrations.catalog.header": "1) Синхронизация каталога ухода",
+  "admin.integrations.catalog.hint.sheets": "• Команда: /admin_catalog_sync sheets <url_or_id>",
+  "admin.integrations.catalog.hint.xlsx": "• Команда: /admin_catalog_sync xlsx <server_local_path>",
+  "admin.integrations.catalog.truth_note": "• Граница истины: Google Sheets/XLSX — поверхности импорта/авторинга, а не runtime-истина заказов/записей.",
+  "admin.integrations.catalog.surface.available": "• Поверхность подключена в этом runtime.",
+  "admin.integrations.catalog.surface.unavailable": "• Поверхность недоступна в этом runtime.",
+  "admin.integrations.calendar.header": "2) Осведомлённость о зеркале Google Calendar",
+  "admin.integrations.calendar.hint": "• Команда: /admin_calendar",
+  "admin.integrations.calendar.truth_note": "• Граница истины: данные записей DentFlow — источник истины; Google Calendar — только read-only зеркало.",
+  "admin.integrations.calendar.surface.available": "• Поверхность подключена в этом runtime.",
+  "admin.integrations.calendar.surface.unavailable": "• Поверхность недоступна в этом runtime.",
+  "admin.integrations.worker.header": "3) Примечание о worker/runtime",
+  "admin.integrations.worker.truth_note": "• Reminder/projector workers существуют. Liveness воркеров недоступен из bot runtime без отдельной healthcheck-подсистемы."
 }

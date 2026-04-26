@@ -173,21 +173,18 @@ Status meanings remain the same as in `docs/71_role_scenarios_and_acceptance.md`
 - **Primary actor(s):** Catalog operator, Admin, Owner.
 - **Purpose:** maintain care commerce master data without turning Telegram into an Excel punishment chamber.
 - **Current operating model:** workbook/XLSX/Sheets authoring is the intended model; DentFlow DB becomes runtime truth after import/sync.
-- **Current implementation status:** **Partial**.
-- **Evidence:** `docs/shop/62_care_catalog_workbook_spec.md`; `app/application/care_catalog_sync/*`; `scripts/sync_care_catalog.py`; care-commerce reports.
-- **Known gaps / comments:** backend import/sync baseline exists, but a polished first-class operator/bot sync surface is still incomplete.
+- **Current implementation status:** **Implemented (bounded operator surface)**.
+- **Evidence:** `docs/shop/62_care_catalog_workbook_spec.md`; `app/application/care_catalog_sync/*`; `scripts/sync_care_catalog.py`; `app/interfaces/bots/admin/router.py` (`/admin_catalog_sync`, `/admin_integrations`).
+- **Known gaps / comments:** bounded command surface is intentionally used; this is not a generic sync platform or persistent run-history dashboard.
 
 ### GOV-007 — Calendar mirror governance
 - **Governed object / topic:** Google Calendar schedule mirror.
 - **Primary actor(s):** Admin, Owner, composite lead-doctor persona.
 - **Purpose:** provide visual time-space awareness without introducing a second scheduling truth.
 - **Current operating model:** one-way DentFlow -> Calendar projection.
-- **Current implementation status:** **Partial**.
-- **Evidence:** `docs/69_google_calendar_schedule_projection.md`; `app/application/integration/google_calendar_projection.py`; projector worker/runtime docs.
-- **Known gaps / comments:**
-  - backend projection exists;
-  - admin mirror awareness inside Telegram is not yet a first-class finished surface;
-  - Calendar must stay read-oriented from a product point of view.
+- **Current implementation status:** **Implemented (bounded mirror awareness)**.
+- **Evidence:** `docs/69_google_calendar_schedule_projection.md`; `app/application/integration/google_calendar_projection.py`; `app/interfaces/bots/admin/router.py` (`/admin_calendar`, `/admin_integrations`); projector worker/runtime docs.
+- **Known gaps / comments:** awareness remains intentionally read-only and does not imply calendar-origin edits into DentFlow.
 
 ### GOV-008 — Generated document governance baseline
 - **Governed object / topic:** generated artifacts, export registry, staff access to exports.
@@ -353,8 +350,8 @@ The following decisions still need explicit product freezing:
 | GOV-003 | Staff roster read surface | Implemented / Partial | `/doctors` reference view | add true staff registry only if needed |
 | GOV-004 | Staff lifecycle mutation / offboarding | Missing | no dedicated runtime governance surface | design staff governance flow |
 | GOV-005 | Composite-role policy / chief doctor model | Partial | role codes + current role routers | freeze policy before widening owner/governance scope |
-| GOV-006 | Care catalog authoring via Sheets | Partial | workbook spec + sync services/scripts | add operator-facing sync surface if still needed |
-| GOV-007 | Calendar mirror governance | Partial | projection docs + integration code | build mirror awareness surface only if product still wants it |
+| GOV-006 | Care catalog authoring via Sheets | Implemented (bounded) | workbook spec + sync services + `/admin_catalog_sync` + `/admin_integrations` | keep command surface compact; no generic sync dashboard |
+| GOV-007 | Calendar mirror governance | Implemented (bounded) | projection docs/code + `/admin_calendar` + `/admin_integrations` | keep mirror read-only; no Calendar-to-DentFlow sync |
 | GOV-008 | Generated document governance baseline | Implemented | export services + staff doc routes | expand families carefully, do not let docs become truth |
 | GOV-009 | Patient-facing document delivery | Missing | staff-only artifact baseline | decide delivery model |
 | GOV-010 | Owner / chief-doctor governance console | Partial | owner digest/snapshot/alerts | decide if governance console is really needed now |

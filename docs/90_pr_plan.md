@@ -277,8 +277,13 @@ References:
 Outcome:
 - explicit sync jobs
 - controlled Sheets integration for master data
-- Google Calendar schedule projection groundwork where selected
+- Google Calendar schedule projection awareness surface
+- bounded admin integration control index (`/admin_integrations`)
 - external adapter readiness
+
+Status:
+- **Completed (bounded convergence after S13-A/S13-B/S13-C)**.
+- Scope closure is operational and intentionally narrow; it does not include a generic observability platform, persistent sync-run history, or worker-liveness subsystem.
 
 ## Stack 14. AI-assisted owner layer
 References:
