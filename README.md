@@ -303,6 +303,10 @@ Recommended reading order before implementation:
 33. `booking_docs/00_booking_readme.md`
 34. the rest of `booking_docs/*`
 
+### Pilot launch quick pointer
+- Runbook: `docs/PILOT_LAUNCH_RUNBOOK.md`
+- Safe preflight smoke checks: `make smoke-import`, `make smoke-settings`, `make smoke-worker-modes`, `make smoke-dispatcher`, or full `make smoke-launch`
+
 ---
 
 ## 7. Project document structure
