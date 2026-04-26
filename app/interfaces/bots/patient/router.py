@@ -574,6 +574,7 @@ def make_router(
                 message=message,
                 session_id="care",
                 text=i18n.t("patient.care.catalog.empty", locale),
+                keyboard=InlineKeyboardMarkup(inline_keyboard=[[_patient_home_nav_button(locale=locale)]]),
             )
             return
         state = await _care_state(actor_id)
@@ -2029,6 +2030,25 @@ def make_router(
             keyboard=InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
+    def _patient_home_nav_button(*, locale: str) -> InlineKeyboardButton:
+        return InlineKeyboardButton(text=i18n.t("patient.home.nav.home", locale), callback_data="phome:home")
+
+    def _patient_back_nav_text(*, locale: str) -> str:
+        return i18n.t("patient.home.nav.back", locale)
+
+    def _patient_contact_reply_keyboard(*, locale: str, include_back: bool) -> ReplyKeyboardMarkup:
+        rows: list[list[KeyboardButton]] = [[KeyboardButton(text=i18n.t("patient.booking.contact.share", locale), request_contact=True)]]
+        nav_row: list[KeyboardButton] = []
+        if include_back:
+            nav_row.append(KeyboardButton(text=_patient_back_nav_text(locale=locale)))
+        nav_row.append(KeyboardButton(text=i18n.t("patient.home.nav.home", locale)))
+        rows.append(nav_row)
+        return ReplyKeyboardMarkup(
+            keyboard=rows,
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        )
+
     async def _enter_new_booking(message: Message | CallbackQuery, *, actor_id: int) -> None:
         clinic_id = _primary_clinic_id()
         if not clinic_id:
@@ -2116,6 +2136,7 @@ def make_router(
             message=message,
             session_id=session.booking_session_id,
             text=i18n.t("patient.booking.my.contact_prompt", _locale()),
+            reply_keyboard=_patient_contact_reply_keyboard(locale=_locale(), include_back=False),
         )
 
     async def _enter_recommendations_list(message: Message | CallbackQuery, *, actor_id: int) -> None:
@@ -2261,6 +2282,12 @@ def make_router(
                 message=message,
                 session_id=session_id,
                 text=i18n.t("patient.recommendations.empty", locale),
+                keyboard=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text=i18n.t("patient.home.action.my_booking", locale), callback_data="phome:my_booking")],
+                        [_patient_home_nav_button(locale=locale)],
+                    ]
+                ),
             )
             return
         latest, history = _pick_latest_recommendation(rows)
@@ -2270,6 +2297,12 @@ def make_router(
                 message=message,
                 session_id=session_id,
                 text=i18n.t("patient.recommendations.empty", locale),
+                keyboard=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text=i18n.t("patient.home.action.my_booking", locale), callback_data="phome:my_booking")],
+                        [_patient_home_nav_button(locale=locale)],
+                    ]
+                ),
             )
             return
         lines = [
@@ -2314,7 +2347,7 @@ def make_router(
             message=message,
             session_id=session_id,
             text="\n".join(lines),
-            keyboard=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
+            keyboard=InlineKeyboardMarkup(inline_keyboard=[*keyboard_rows, [_patient_home_nav_button(locale=locale)]]),
         )
 
     async def _resume_active_reschedule_context(
@@ -3744,11 +3777,7 @@ def make_router(
         flow.booking_mode = "new_booking_contact"
         flow.reschedule_booking_id = ""
         await _save_flow_state(callback.from_user.id, flow)
-        contact_keyboard = ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text=i18n.t("patient.booking.contact.share", locale), request_contact=True)]],
-            resize_keyboard=True,
-            one_time_keyboard=True,
-        )
+        contact_keyboard = _patient_contact_reply_keyboard(locale=locale, include_back=True)
         await _send_or_edit_panel(
             actor_id=callback.from_user.id,
             message=callback,
@@ -4205,6 +4234,22 @@ def make_router(
         except Exception:
             pass
 
+    @router.message(F.text)
+    async def on_contact_navigation(message: Message) -> None:
+        if not message.from_user or not message.text:
+            return
+        locale = _locale()
+        flow = await _load_flow_state(message.from_user.id)
+        if message.text == i18n.t("patient.home.nav.home", locale):
+            await _render_patient_home_panel(message, actor_id=message.from_user.id)
+            return
+        if message.text != _patient_back_nav_text(locale=locale):
+            return
+        if flow.booking_mode == "new_booking_contact" and flow.booking_session_id:
+            await _render_slot_panel(message, actor_id=message.from_user.id, session_id=flow.booking_session_id)
+            return
+        await _render_patient_home_panel(message, actor_id=message.from_user.id)
+
     async def _handle_contact_submission(message: Message, *, actor_id: int, phone: str) -> None:
         locale = _locale()
         flow = await _load_flow_state(actor_id)
@@ -4312,11 +4357,7 @@ def make_router(
             flow.reschedule_booking_id = ""
             flow.quick_booking_prefill = {}
             await _save_flow_state(actor_id, flow)
-            contact_keyboard = ReplyKeyboardMarkup(
-                keyboard=[[KeyboardButton(text=i18n.t("patient.booking.contact.share", _locale()), request_contact=True)]],
-                resize_keyboard=True,
-                one_time_keyboard=True,
-            )
+            contact_keyboard = _patient_contact_reply_keyboard(locale=_locale(), include_back=True)
             await _send_or_edit_panel(
                 actor_id=actor_id,
                 message=message,
@@ -4631,7 +4672,18 @@ def make_router(
             await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=effective_session_id, text=i18n.t("patient.booking.escalated", locale))
             return
         if result.kind == "no_match":
-            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=effective_session_id, text=i18n.t("patient.booking.my.no_match", locale))
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id=effective_session_id,
+                text=i18n.t("patient.booking.my.no_match", locale),
+                keyboard=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text=i18n.t("patient.home.action.book", locale), callback_data="phome:book")],
+                        [_patient_home_nav_button(locale=locale)],
+                    ]
+                ),
+            )
             return
         if result.kind != "exact_match" or not result.bookings:
             await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=effective_session_id, text=i18n.t("patient.booking.finalize.invalid_state", locale))
