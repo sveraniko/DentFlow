@@ -253,6 +253,23 @@ def _resolve_media_ref(media_ref: str) -> _ResolvedMediaRef | None:
     return _ResolvedMediaRef(media_kind="photo", media_value=ref)
 
 
+def _service_button_emoji(*, service_code: str | None, service_title_key: str | None) -> str:
+    marker = f"{(service_code or '').lower()} {(service_title_key or '').lower()}"
+    if any(token in marker for token in ("consult", "консульт")):
+        return "🦷"
+    if any(token in marker for token in ("hygiene", "clean", "гигиен", "чист")):
+        return "🪥"
+    if any(token in marker for token in ("treat", "caries", "леч", "кариес")):
+        return "🛠"
+    if any(token in marker for token in ("white", "отбел")):
+        return "✨"
+    if any(token in marker for token in ("surgery", "implant", "хирург", "имплан")):
+        return "⚕️"
+    if any(token in marker for token in ("child", "pediatric", "дет")):
+        return "🧒"
+    return "🦷"
+
+
 def _parse_gallery_index(page_or_index: str, *, total: int) -> int:
     if total < 1:
         return 0
@@ -1596,20 +1613,39 @@ def make_router(
     async def _render_service_panel(message: Message | CallbackQuery, *, actor_id: int, session_id: str, clinic_id: str) -> None:
         locale = _locale()
         services = booking_flow.list_services(clinic_id=clinic_id)
-        buttons = [
-            [InlineKeyboardButton(
-                text=_resolve_service_label(
-                    service_title_key=svc.title_key,
-                    service_code=svc.code,
-                    fallback_id=svc.service_id,
-                    locale=locale,
-                    fallback_locale="en",
-                    i18n=i18n,
-                ),
-                callback_data=f"book:svc:{session_id}:{svc.service_id}",
-            )]
-            for svc in services[:8]
-        ]
+        if not services:
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id=session_id,
+                text=i18n.t("patient.booking.service.empty", locale),
+                keyboard=InlineKeyboardMarkup(inline_keyboard=[[ _patient_home_nav_button(locale=locale) ]]),
+            )
+            return
+        buttons: list[list[InlineKeyboardButton]] = []
+        for svc in services[:8]:
+            base_label = _resolve_service_label(
+                service_title_key=svc.title_key,
+                service_code=svc.code,
+                fallback_id=svc.service_id,
+                locale=locale,
+                fallback_locale="en",
+                i18n=i18n,
+            )
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"{_service_button_emoji(service_code=svc.code, service_title_key=svc.title_key)} {base_label}",
+                        callback_data=f"book:svc:{session_id}:{svc.service_id}",
+                    )
+                ]
+            )
+        buttons.append(
+            [
+                InlineKeyboardButton(text=i18n.t("patient.home.nav.back", locale), callback_data=f"book:back:services:{session_id}"),
+                _patient_home_nav_button(locale=locale),
+            ]
+        )
         await _send_or_edit_panel(
             actor_id=actor_id,
             message=message,
@@ -1646,6 +1682,7 @@ def make_router(
                 [InlineKeyboardButton(text=i18n.t("patient.booking.quick.repeat", locale), callback_data=f"qbook:repeat:{session_id}")],
                 [InlineKeyboardButton(text=i18n.t("patient.booking.quick.same_doctor", locale), callback_data=f"qbook:same_doctor:{session_id}")],
                 [InlineKeyboardButton(text=i18n.t("patient.booking.quick.other", locale), callback_data=f"qbook:other:{session_id}")],
+                [_patient_home_nav_button(locale=locale)],
             ]
         )
         await _send_or_edit_panel(
@@ -1785,12 +1822,45 @@ def make_router(
         doctors = booking_flow.list_doctors(clinic_id=clinic_id, branch_id=branch_id)
         rows = [[InlineKeyboardButton(text=i18n.t("patient.booking.doctor.any", locale), callback_data=f"book:doc:{session_id}:any")]]
         rows.extend([[InlineKeyboardButton(text=doctor.display_name, callback_data=f"book:doc:{session_id}:{doctor.doctor_id}")] for doctor in doctors[:6]])
+        rows.append([InlineKeyboardButton(text=i18n.t("patient.booking.doctor.code.cta", locale), callback_data=f"book:doc_code:{session_id}")])
+        rows.append(
+            [
+                InlineKeyboardButton(text=i18n.t("patient.home.nav.back", locale), callback_data=f"book:back:doctors:{session_id}"),
+                _patient_home_nav_button(locale=locale),
+            ]
+        )
         await _send_or_edit_panel(
             actor_id=actor_id,
             message=message,
             session_id=session_id,
             text=i18n.t("patient.booking.doctor.prompt", locale),
             keyboard=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _render_doctor_code_prompt(
+        message: Message | CallbackQuery,
+        *,
+        actor_id: int,
+        session_id: str,
+        error_key: str | None = None,
+    ) -> None:
+        locale = _locale()
+        text = i18n.t("patient.booking.doctor.code.prompt", locale)
+        if error_key:
+            text = f"{text}\n\n{i18n.t(error_key, locale)}"
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id=session_id,
+            text=text,
+            keyboard=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(text=i18n.t("patient.home.nav.back", locale), callback_data=f"book:back:doctors:{session_id}"),
+                        _patient_home_nav_button(locale=locale),
+                    ]
+                ]
+            ),
         )
 
     async def _render_slot_panel(
@@ -3762,6 +3832,70 @@ def make_router(
         except Exception:
             await callback.answer(i18n.t("patient.booking.unavailable", _locale()), show_alert=True)
 
+    @router.callback_query(F.data.startswith("book:back:services:"))
+    async def booking_back_to_services(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            await callback.answer()
+            return
+        _, _, _, callback_session_id = callback.data.split(":", 3)
+        if not await booking_flow.validate_active_session_callback(clinic_id=clinic_id, telegram_user_id=callback.from_user.id, callback_session_id=callback_session_id):
+            await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
+            return
+        flow = await _load_flow_state(callback.from_user.id)
+        flow.booking_mode = "new_booking_flow"
+        await _save_flow_state(callback.from_user.id, flow)
+        await _render_service_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id, clinic_id=clinic_id)
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("book:back:doctors:"))
+    async def booking_back_to_doctors(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            await callback.answer()
+            return
+        _, _, _, callback_session_id = callback.data.split(":", 3)
+        if not await booking_flow.validate_active_session_callback(clinic_id=clinic_id, telegram_user_id=callback.from_user.id, callback_session_id=callback_session_id):
+            await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
+            return
+        session = await booking_flow.get_booking_session(booking_session_id=callback_session_id)
+        if session is None:
+            await callback.answer(i18n.t("patient.booking.session.missing", _locale()), show_alert=True)
+            return
+        flow = await _load_flow_state(callback.from_user.id)
+        flow.booking_mode = "new_booking_flow"
+        await _save_flow_state(callback.from_user.id, flow)
+        await _render_doctor_pref_panel(
+            callback,
+            actor_id=callback.from_user.id,
+            session_id=callback_session_id,
+            clinic_id=session.clinic_id,
+            branch_id=session.branch_id,
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("book:doc_code:"))
+    async def booking_doctor_code_prompt(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            await callback.answer()
+            return
+        _, _, callback_session_id = callback.data.split(":", 2)
+        if not await booking_flow.validate_active_session_callback(clinic_id=clinic_id, telegram_user_id=callback.from_user.id, callback_session_id=callback_session_id):
+            await callback.answer(i18n.t("patient.booking.callback.stale", _locale()), show_alert=True)
+            return
+        flow = await _load_flow_state(callback.from_user.id)
+        flow.booking_mode = "new_booking_doctor_code"
+        await _save_flow_state(callback.from_user.id, flow)
+        await _render_doctor_code_prompt(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
+        await callback.answer()
+
     @router.callback_query(F.data.startswith("book:slot:"))
     async def select_slot(callback: CallbackQuery) -> None:
         if not callback.from_user:
@@ -4263,11 +4397,16 @@ def make_router(
     async def on_contact_text(message: Message) -> None:
         if not message.from_user or not message.text:
             return
-        await _handle_contact_submission(message, actor_id=message.from_user.id, phone=message.text)
-        try:
-            await message.delete()
-        except Exception:
-            pass
+        flow = await _load_flow_state(message.from_user.id)
+        if flow.booking_mode in {"new_booking_contact", "existing_lookup_contact"}:
+            await _handle_contact_submission(message, actor_id=message.from_user.id, phone=message.text)
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return
+        if flow.booking_mode == "new_booking_doctor_code":
+            await _handle_doctor_code_submission(message, actor_id=message.from_user.id, code=message.text)
 
     @router.message(F.text)
     async def on_contact_navigation(message: Message) -> None:
@@ -4279,11 +4418,58 @@ def make_router(
             await _render_patient_home_panel(message, actor_id=message.from_user.id)
             return
         if message.text != _patient_back_nav_text(locale=locale):
+            if flow.booking_mode == "new_booking_doctor_code":
+                await _handle_doctor_code_submission(message, actor_id=message.from_user.id, code=message.text)
             return
         if flow.booking_mode == "new_booking_contact" and flow.booking_session_id:
             await _render_slot_panel(message, actor_id=message.from_user.id, session_id=flow.booking_session_id)
             return
+        if flow.booking_mode == "new_booking_doctor_code" and flow.booking_session_id:
+            session = await booking_flow.get_booking_session(booking_session_id=flow.booking_session_id)
+            if session is not None:
+                flow.booking_mode = "new_booking_flow"
+                await _save_flow_state(message.from_user.id, flow)
+                await _render_doctor_pref_panel(
+                    message,
+                    actor_id=message.from_user.id,
+                    session_id=flow.booking_session_id,
+                    clinic_id=session.clinic_id,
+                    branch_id=session.branch_id,
+                )
+                return
+            return
         await _render_patient_home_panel(message, actor_id=message.from_user.id)
+
+    async def _handle_doctor_code_submission(message: Message, *, actor_id: int, code: str) -> None:
+        flow = await _load_flow_state(actor_id)
+        session_id = flow.booking_session_id
+        if flow.booking_mode != "new_booking_doctor_code" or not session_id:
+            return
+        session = await booking_flow.get_booking_session(booking_session_id=session_id)
+        if session is None:
+            return
+        resolved = reference.resolve_doctor_access_code(
+            clinic_id=session.clinic_id,
+            code=code,
+            service_id=session.service_id,
+            branch_id=session.branch_id,
+        )
+        if resolved is None:
+            await _render_doctor_code_prompt(
+                message,
+                actor_id=actor_id,
+                session_id=session_id,
+                error_key="patient.booking.doctor.code.invalid",
+            )
+            return
+        await booking_flow.update_doctor_preference(
+            booking_session_id=session_id,
+            doctor_preference_type="specific",
+            doctor_id=resolved.doctor_id,
+        )
+        flow.booking_mode = "new_booking_flow"
+        await _save_flow_state(actor_id, flow)
+        await _render_slot_panel(message, actor_id=actor_id, session_id=session_id)
 
     async def _handle_contact_submission(message: Message, *, actor_id: int, phone: str) -> None:
         locale = _locale()

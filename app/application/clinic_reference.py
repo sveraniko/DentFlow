@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
-from app.domain.clinic_reference.models import Branch, Clinic, Doctor, DoctorAccessCode, Service
+from app.domain.clinic_reference.models import Branch, Clinic, Doctor, DoctorAccessCode, RecordStatus, Service
 
 
 class InMemoryClinicReferenceRepository:
@@ -68,3 +69,35 @@ class ClinicReferenceService:
 
     def list_services(self, clinic_id: str) -> list[Service]:
         return [s for s in self.repository.services.values() if s.clinic_id == clinic_id]
+
+    def resolve_doctor_access_code(
+        self,
+        *,
+        clinic_id: str,
+        code: str,
+        service_id: str | None = None,
+        branch_id: str | None = None,
+        now: datetime | None = None,
+    ) -> DoctorAccessCode | None:
+        normalized = (code or "").strip().upper()
+        if not normalized:
+            return None
+        check_time = now or datetime.now(timezone.utc)
+        for access in self.repository.doctor_access_codes.values():
+            if access.clinic_id != clinic_id:
+                continue
+            if access.status != RecordStatus.ACTIVE:
+                continue
+            if access.code.strip().upper() != normalized:
+                continue
+            if access.expires_at is not None and access.expires_at <= check_time:
+                continue
+            if access.service_scope and (service_id is None or service_id not in set(access.service_scope)):
+                continue
+            if access.branch_scope and (branch_id is None or branch_id not in set(access.branch_scope)):
+                continue
+            doctor = self.get_doctor(clinic_id, access.doctor_id)
+            if doctor is None or not doctor.public_booking_enabled:
+                continue
+            return access
+        return None
