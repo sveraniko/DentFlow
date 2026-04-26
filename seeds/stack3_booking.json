@@ -49,6 +49,71 @@
       "service_scope": {"service_ids": ["service_consult"]},
       "source_ref": "seed",
       "updated_at": "2026-04-20T08:00:00Z"
+    },
+    {
+      "slot_id": "slot_anna_20260428_1000",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "doctor_id": "doctor_anna",
+      "start_at": "2026-04-28T10:00:00Z",
+      "end_at": "2026-04-28T10:30:00Z",
+      "status": "open",
+      "visibility_policy": "public",
+      "service_scope": {"service_ids": ["service_consult"]},
+      "source_ref": "seed",
+      "updated_at": "2026-04-26T08:00:00Z"
+    },
+    {
+      "slot_id": "slot_anna_20260428_1100",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "doctor_id": "doctor_anna",
+      "start_at": "2026-04-28T11:00:00Z",
+      "end_at": "2026-04-28T11:30:00Z",
+      "status": "open",
+      "visibility_policy": "public",
+      "service_scope": {"service_ids": ["service_consult"]},
+      "source_ref": "seed",
+      "updated_at": "2026-04-26T08:00:00Z"
+    },
+    {
+      "slot_id": "slot_anna_20260429_1000",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "doctor_id": "doctor_anna",
+      "start_at": "2026-04-29T10:00:00Z",
+      "end_at": "2026-04-29T10:30:00Z",
+      "status": "open",
+      "visibility_policy": "public",
+      "service_scope": {"service_ids": ["service_consult"]},
+      "source_ref": "seed",
+      "updated_at": "2026-04-26T08:00:00Z"
+    },
+    {
+      "slot_id": "slot_anna_20260430_1000",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "doctor_id": "doctor_anna",
+      "start_at": "2026-04-30T10:00:00Z",
+      "end_at": "2026-04-30T10:30:00Z",
+      "status": "open",
+      "visibility_policy": "public",
+      "service_scope": {"service_ids": ["service_consult"]},
+      "source_ref": "seed",
+      "updated_at": "2026-04-26T08:00:00Z"
+    },
+    {
+      "slot_id": "slot_anna_20260505_1000",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "doctor_id": "doctor_anna",
+      "start_at": "2026-05-05T10:00:00Z",
+      "end_at": "2026-05-05T10:30:00Z",
+      "status": "open",
+      "visibility_policy": "public",
+      "service_scope": {"service_ids": ["service_consult"]},
+      "source_ref": "seed",
+      "updated_at": "2026-04-26T08:00:00Z"
     }
   ],
   "slot_holds": [

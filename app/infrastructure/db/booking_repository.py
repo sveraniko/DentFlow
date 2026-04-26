@@ -248,8 +248,8 @@ class DbBookingRepository(BookingRepository):
               AND status='open'
               AND start_at >= :start_at
               AND start_at < :end_at
-              AND (:doctor_id IS NULL OR doctor_id=:doctor_id)
-              AND (:branch_id IS NULL OR branch_id=:branch_id)
+              AND (CAST(:doctor_id AS TEXT) IS NULL OR doctor_id=CAST(:doctor_id AS TEXT))
+              AND (CAST(:branch_id AS TEXT) IS NULL OR branch_id=CAST(:branch_id AS TEXT))
             ORDER BY start_at ASC, slot_id ASC
             LIMIT :limit
             """,
