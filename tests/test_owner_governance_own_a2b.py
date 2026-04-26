@@ -249,3 +249,30 @@ def test_owner_references_localization_fallback_empty_and_unavailable_safe() -> 
     broken_msg = _Message("/owner_references")
     asyncio.run(_handler_by_name(broken_router, "owner_references")(broken_msg))
     assert broken_msg.answers[-1] == "Clinic reference overview is temporarily unavailable."
+
+
+def test_owner_baseline_commands_registered_and_owner_guarded() -> None:
+    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+    owner_router = make_router(i18n, _access(RoleCode.OWNER), analytics=_PatientBaseStub(), default_locale="en")
+    admin_router = make_router(i18n, _access(RoleCode.ADMIN), analytics=_PatientBaseStub(), default_locale="en")
+
+    required_handlers = {
+        "owner_today": "/owner_today",
+        "owner_digest": "/owner_digest",
+        "owner_alerts": "/owner_alerts",
+        "owner_doctors": "/owner_doctors",
+        "owner_services": "/owner_services",
+        "owner_branches": "/owner_branches",
+        "owner_care": "/owner_care",
+        "owner_staff": "/owner_staff",
+        "owner_patients": "/owner_patients",
+        "owner_references": "/owner_references",
+    }
+
+    registered = {handler.callback.__name__ for handler in owner_router.message.handlers}
+    assert registered.issuperset(required_handlers.keys())
+
+    for handler_name, command_text in required_handlers.items():
+        denied_msg = _Message(command_text)
+        asyncio.run(_handler_by_name(admin_router, handler_name)(denied_msg))
+        assert any("Access denied" in x for x in denied_msg.answers), handler_name
