@@ -5,7 +5,12 @@ from datetime import datetime, timezone
 
 from sqlalchemy import text
 
-from app.application.integration.google_calendar_projection import CalendarEventMapping, CalendarProjectionBooking
+from app.application.integration.google_calendar_projection import (
+    CalendarEventMapping,
+    CalendarProjectionBooking,
+    CalendarProjectionRecentMapping,
+    CalendarProjectionSummary,
+)
 from app.infrastructure.db.engine import create_engine
 
 
@@ -146,5 +151,93 @@ class DbGoogleCalendarProjectionRepository:
                     )
                 ).scalars().all()
                 return [str(x) for x in rows]
+        finally:
+            await engine.dispose()
+
+    async def get_calendar_projection_summary(self, *, clinic_id: str) -> CalendarProjectionSummary:
+        engine = create_engine(self.db_config)
+        try:
+            async with engine.connect() as conn:
+                row = (
+                    await conn.execute(
+                        text(
+                            """
+                            WITH booking_scope AS (
+                              SELECT booking_id
+                              FROM booking.bookings
+                              WHERE clinic_id = :clinic_id
+                                AND status IN (
+                                  'pending_confirmation',
+                                  'confirmed',
+                                  'reschedule_requested',
+                                  'checked_in',
+                                  'in_service',
+                                  'completed',
+                                  'no_show'
+                                )
+                            )
+                            SELECT
+                              COALESCE((
+                                SELECT COUNT(*)
+                                FROM integration.google_calendar_booking_event_map m
+                                WHERE m.clinic_id = :clinic_id
+                              ), 0) AS mapped_events,
+                              COALESCE((
+                                SELECT COUNT(*)
+                                FROM booking_scope bs
+                                LEFT JOIN integration.google_calendar_booking_event_map m
+                                  ON m.booking_id = bs.booking_id
+                                WHERE m.booking_id IS NULL OR m.sync_status <> 'synced'
+                              ), 0) AS pending_projection,
+                              COALESCE((
+                                SELECT COUNT(*)
+                                FROM integration.google_calendar_booking_event_map m
+                                WHERE m.clinic_id = :clinic_id
+                                  AND m.sync_status IN ('failed', 'cancel_failed')
+                              ), 0) AS failed_projection
+                            """
+                        ),
+                        {"clinic_id": clinic_id},
+                    )
+                ).mappings().first()
+                if not row:
+                    return CalendarProjectionSummary(mapped_events=0, pending_projection=0, failed_projection=0)
+                return CalendarProjectionSummary(
+                    mapped_events=int(row["mapped_events"]),
+                    pending_projection=int(row["pending_projection"]),
+                    failed_projection=int(row["failed_projection"]),
+                )
+        finally:
+            await engine.dispose()
+
+    async def list_recent_calendar_mappings(
+        self,
+        *,
+        clinic_id: str,
+        limit: int = 5,
+    ) -> list[CalendarProjectionRecentMapping]:
+        engine = create_engine(self.db_config)
+        try:
+            async with engine.connect() as conn:
+                rows = (
+                    await conn.execute(
+                        text(
+                            """
+                            SELECT
+                              booking_id,
+                              sync_status,
+                              target_calendar_id,
+                              external_event_id,
+                              last_synced_at
+                            FROM integration.google_calendar_booking_event_map
+                            WHERE clinic_id=:clinic_id
+                            ORDER BY updated_at DESC
+                            LIMIT :limit
+                            """
+                        ),
+                        {"clinic_id": clinic_id, "limit": limit},
+                    )
+                ).mappings().all()
+                return [CalendarProjectionRecentMapping(**dict(row)) for row in rows]
         finally:
             await engine.dispose()

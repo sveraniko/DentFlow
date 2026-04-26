@@ -24,6 +24,7 @@ from app.application.export import (
 )
 from app.application.export.services import TemplateResolutionError
 from app.application.care_catalog_sync import CareCatalogSyncService
+from app.application.integration.google_calendar_projection import GoogleCalendarProjectionReadService
 from app.application.search.service import HybridSearchService
 from app.application.search.models import PatientSearchResult, SearchQuery
 from app.application.voice import SpeechToTextService, VoiceSearchModeStore
@@ -99,6 +100,7 @@ def make_router(
     media_asset_registry: MediaAssetRegistryService | None = None,
     artifact_delivery: GeneratedArtifactDeliveryService | None = None,
     care_catalog_sync_service: CareCatalogSyncService | None = None,
+    calendar_projection_read_service: GoogleCalendarProjectionReadService | None = None,
     *,
     default_locale: str,
     max_voice_duration_sec: int,
@@ -259,6 +261,16 @@ def make_router(
         if omitted > 0:
             lines.append(i18n.t("admin.catalog.sync.result.more_issues", locale).format(omitted=omitted))
         return "\n".join(lines)
+
+    def _worker_projection_hint() -> str | None:
+        import os
+
+        worker_mode = (os.environ.get("WORKER_MODE") or "").strip().lower()
+        if worker_mode in {"projector", "all"}:
+            return "configured"
+        if worker_mode in {"reminder"}:
+            return "not_configured"
+        return None
 
     async def _load_issue_escalation_statuses(
         *,
@@ -1692,6 +1704,69 @@ def make_router(
             await message.answer(i18n.t("admin.catalog.sync.error.unexpected", locale))
             return
         await message.answer(_render_catalog_sync_result(result=result, locale=locale))
+
+    @router.message(Command("admin_calendar"))
+    async def admin_calendar(message: Message) -> None:
+        allowed = await guard_roles(
+            message,
+            i18n=i18n,
+            access_resolver=access_resolver,
+            allowed_roles={RoleCode.ADMIN},
+            fallback_locale=default_locale,
+        )
+        if not allowed or not message.from_user:
+            return
+        actor_context = access_resolver.resolve_actor_context(message.from_user.id)
+        if not actor_context:
+            return
+        locale = await resolve_locale(
+            message,
+            access_resolver=access_resolver,
+            fallback_locale=default_locale,
+            clinic_locale_getter=lambda actor: _clinic_locale(reference_service, actor.clinic_id),
+        )
+        if calendar_projection_read_service is None:
+            await message.answer(i18n.t("admin.calendar.unavailable", locale))
+            return
+        try:
+            summary = await calendar_projection_read_service.get_calendar_projection_summary(clinic_id=actor_context.clinic_id)
+            recent = await calendar_projection_read_service.list_recent_calendar_mappings(
+                clinic_id=actor_context.clinic_id,
+                limit=5,
+            )
+        except Exception:
+            await message.answer(i18n.t("admin.calendar.unavailable", locale))
+            return
+
+        lines = [
+            i18n.t("admin.calendar.title", locale),
+            i18n.t("admin.calendar.source_of_truth_note", locale),
+            i18n.t("admin.calendar.summary", locale).format(
+                mapped_events=summary.mapped_events,
+                pending_projection=summary.pending_projection,
+                failed_projection=summary.failed_projection,
+            ),
+        ]
+        worker_hint = _worker_projection_hint()
+        if worker_hint == "configured":
+            lines.append(i18n.t("admin.calendar.worker_configured", locale))
+        elif worker_hint == "not_configured":
+            lines.append(i18n.t("admin.calendar.worker_not_configured", locale))
+        else:
+            lines.append(i18n.t("admin.calendar.worker_unknown", locale))
+        if not recent:
+            lines.append(i18n.t("admin.calendar.empty", locale))
+            await message.answer("\n".join(lines))
+            return
+        lines.append(i18n.t("admin.calendar.recent_mappings", locale))
+        for row in recent:
+            lines.append(
+                i18n.t("admin.calendar.recent_item", locale).format(
+                    booking_id=row.booking_id,
+                    sync_status=row.sync_status,
+                )
+            )
+        await message.answer("\n".join(lines))
 
     @router.message(Command("booking_escalations"))
     async def booking_escalations(message: Message) -> None:
