@@ -39,6 +39,21 @@ def make_router(
         locale = await resolve_locale(message, access_resolver=access_resolver, fallback_locale=default_locale)
         return allowed, locale
 
+
+
+    def _parse_window_days(raw_text: str | None) -> int | None:
+        if not raw_text:
+            return 7
+        parts = raw_text.strip().split(maxsplit=1)
+        if len(parts) == 1:
+            return 7
+        try:
+            days = int(parts[1])
+        except ValueError:
+            return None
+        if days < 1 or days > 90:
+            return None
+        return days
     @router.message(Command("owner_today"))
     async def owner_today(message: Message) -> None:
         allowed, locale = await _guard_owner(message)
@@ -142,4 +157,70 @@ def make_router(
             )
         )
 
+
+
+    @router.message(Command("owner_doctors"))
+    async def owner_doctors(message: Message) -> None:
+        allowed, locale = await _guard_owner(message)
+        if not allowed or not message.from_user:
+            return
+        actor = access_resolver.resolve_actor_context(message.from_user.id)
+        if actor is None:
+            return
+        days = _parse_window_days(message.text)
+        if days is None:
+            await message.answer(i18n.t("owner.metrics.invalid_window", locale))
+            await message.answer(i18n.t("owner.doctors.usage", locale))
+            return
+        summary = await analytics.get_doctor_metrics(clinic_id=actor.clinic_id, days=days)
+        if not summary.rows:
+            await message.answer(i18n.t("owner.doctors.empty", locale).format(days=days))
+            return
+        lines = [i18n.t("owner.doctors.title", locale).format(days=days)]
+        for row in summary.rows:
+            lines.append(
+                i18n.t("owner.doctors.item", locale).format(
+                    doctor_id=row.doctor_id,
+                    created=row.bookings_created_count,
+                    confirmed=row.bookings_confirmed_count,
+                    completed=row.bookings_completed_count,
+                    no_show=row.bookings_no_show_count,
+                    reschedule=row.bookings_reschedule_requested_count,
+                    reminders_sent=row.reminders_sent_count,
+                    reminders_failed=row.reminders_failed_count,
+                    encounters=row.encounters_created_count,
+                )
+            )
+        await message.answer("\n".join(lines))
+
+    @router.message(Command("owner_services"))
+    async def owner_services(message: Message) -> None:
+        allowed, locale = await _guard_owner(message)
+        if not allowed or not message.from_user:
+            return
+        actor = access_resolver.resolve_actor_context(message.from_user.id)
+        if actor is None:
+            return
+        days = _parse_window_days(message.text)
+        if days is None:
+            await message.answer(i18n.t("owner.metrics.invalid_window", locale))
+            await message.answer(i18n.t("owner.services.usage", locale))
+            return
+        summary = await analytics.get_service_metrics(clinic_id=actor.clinic_id, days=days)
+        if not summary.rows:
+            await message.answer(i18n.t("owner.services.empty", locale).format(days=days))
+            return
+        lines = [i18n.t("owner.services.title", locale).format(days=days)]
+        for row in summary.rows:
+            lines.append(
+                i18n.t("owner.services.item", locale).format(
+                    service_id=row.service_id,
+                    created=row.bookings_created_count,
+                    confirmed=row.bookings_confirmed_count,
+                    completed=row.bookings_completed_count,
+                    no_show=row.bookings_no_show_count,
+                    reschedule=row.bookings_reschedule_requested_count,
+                )
+            )
+        await message.answer("\n".join(lines))
     return router

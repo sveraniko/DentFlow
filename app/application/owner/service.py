@@ -52,9 +52,164 @@ class OwnerAlertRow:
     updated_at: datetime
 
 
+
+
+@dataclass(slots=True)
+class OwnerDoctorMetricRow:
+    doctor_id: str
+    bookings_created_count: int
+    bookings_confirmed_count: int
+    bookings_completed_count: int
+    bookings_no_show_count: int
+    bookings_reschedule_requested_count: int
+    reminders_sent_count: int
+    reminders_failed_count: int
+    encounters_created_count: int
+
+
+@dataclass(slots=True)
+class OwnerDoctorMetricsSummary:
+    clinic_id: str
+    days: int
+    limit: int
+    rows: list[OwnerDoctorMetricRow]
+
+
+@dataclass(slots=True)
+class OwnerServiceMetricRow:
+    service_id: str
+    bookings_created_count: int
+    bookings_confirmed_count: int
+    bookings_completed_count: int
+    bookings_no_show_count: int
+    bookings_reschedule_requested_count: int
+
+
+@dataclass(slots=True)
+class OwnerServiceMetricsSummary:
+    clinic_id: str
+    days: int
+    limit: int
+    rows: list[OwnerServiceMetricRow]
+
+
 @dataclass(slots=True)
 class OwnerAnalyticsService:
     db_config: object
+
+
+
+    async def get_doctor_metrics(self, *, clinic_id: str, days: int = 7, limit: int = 10) -> OwnerDoctorMetricsSummary:
+        _, _, local_date = await self._local_day_window(clinic_id=clinic_id, point=datetime.now(timezone.utc))
+        window_start = local_date - timedelta(days=max(days, 1) - 1)
+        bounded_limit = max(1, min(limit, 10))
+
+        engine = create_engine(self.db_config)
+        try:
+            async with engine.connect() as conn:
+                rows = (
+                    await conn.execute(
+                        text(
+                            """
+                            SELECT doctor_id,
+                                   SUM(bookings_created_count) AS bookings_created_count,
+                                   SUM(bookings_confirmed_count) AS bookings_confirmed_count,
+                                   SUM(bookings_completed_count) AS bookings_completed_count,
+                                   SUM(bookings_no_show_count) AS bookings_no_show_count,
+                                   SUM(bookings_reschedule_requested_count) AS bookings_reschedule_requested_count,
+                                   SUM(reminders_sent_count) AS reminders_sent_count,
+                                   SUM(reminders_failed_count) AS reminders_failed_count,
+                                   SUM(encounters_created_count) AS encounters_created_count
+                            FROM owner_views.daily_doctor_metrics
+                            WHERE clinic_id=:clinic_id
+                              AND metrics_date>=:window_start
+                              AND metrics_date<=:window_end
+                            GROUP BY doctor_id
+                            ORDER BY SUM(bookings_completed_count) DESC,
+                                     SUM(bookings_created_count) DESC,
+                                     SUM(bookings_confirmed_count) DESC,
+                                     doctor_id ASC
+                            LIMIT :limit
+                            """
+                        ),
+                        {"clinic_id": clinic_id, "window_start": window_start, "window_end": local_date, "limit": bounded_limit},
+                    )
+                ).mappings().all()
+        finally:
+            await engine.dispose()
+
+        return OwnerDoctorMetricsSummary(
+            clinic_id=clinic_id,
+            days=days,
+            limit=bounded_limit,
+            rows=[
+                OwnerDoctorMetricRow(
+                    doctor_id=str(row["doctor_id"]),
+                    bookings_created_count=int(row["bookings_created_count"] or 0),
+                    bookings_confirmed_count=int(row["bookings_confirmed_count"] or 0),
+                    bookings_completed_count=int(row["bookings_completed_count"] or 0),
+                    bookings_no_show_count=int(row["bookings_no_show_count"] or 0),
+                    bookings_reschedule_requested_count=int(row["bookings_reschedule_requested_count"] or 0),
+                    reminders_sent_count=int(row["reminders_sent_count"] or 0),
+                    reminders_failed_count=int(row["reminders_failed_count"] or 0),
+                    encounters_created_count=int(row["encounters_created_count"] or 0),
+                )
+                for row in rows
+            ],
+        )
+
+    async def get_service_metrics(self, *, clinic_id: str, days: int = 7, limit: int = 10) -> OwnerServiceMetricsSummary:
+        _, _, local_date = await self._local_day_window(clinic_id=clinic_id, point=datetime.now(timezone.utc))
+        window_start = local_date - timedelta(days=max(days, 1) - 1)
+        bounded_limit = max(1, min(limit, 10))
+
+        engine = create_engine(self.db_config)
+        try:
+            async with engine.connect() as conn:
+                rows = (
+                    await conn.execute(
+                        text(
+                            """
+                            SELECT service_id,
+                                   SUM(bookings_created_count) AS bookings_created_count,
+                                   SUM(bookings_confirmed_count) AS bookings_confirmed_count,
+                                   SUM(bookings_completed_count) AS bookings_completed_count,
+                                   SUM(bookings_no_show_count) AS bookings_no_show_count,
+                                   SUM(bookings_reschedule_requested_count) AS bookings_reschedule_requested_count
+                            FROM owner_views.daily_service_metrics
+                            WHERE clinic_id=:clinic_id
+                              AND metrics_date>=:window_start
+                              AND metrics_date<=:window_end
+                            GROUP BY service_id
+                            ORDER BY SUM(bookings_completed_count) DESC,
+                                     SUM(bookings_created_count) DESC,
+                                     SUM(bookings_confirmed_count) DESC,
+                                     service_id ASC
+                            LIMIT :limit
+                            """
+                        ),
+                        {"clinic_id": clinic_id, "window_start": window_start, "window_end": local_date, "limit": bounded_limit},
+                    )
+                ).mappings().all()
+        finally:
+            await engine.dispose()
+
+        return OwnerServiceMetricsSummary(
+            clinic_id=clinic_id,
+            days=days,
+            limit=bounded_limit,
+            rows=[
+                OwnerServiceMetricRow(
+                    service_id=str(row["service_id"]),
+                    bookings_created_count=int(row["bookings_created_count"] or 0),
+                    bookings_confirmed_count=int(row["bookings_confirmed_count"] or 0),
+                    bookings_completed_count=int(row["bookings_completed_count"] or 0),
+                    bookings_no_show_count=int(row["bookings_no_show_count"] or 0),
+                    bookings_reschedule_requested_count=int(row["bookings_reschedule_requested_count"] or 0),
+                )
+                for row in rows
+            ],
+        )
 
     async def get_today_snapshot(self, *, clinic_id: str, now: datetime | None = None) -> OwnerTodaySnapshot:
         point = now or datetime.now(timezone.utc)
