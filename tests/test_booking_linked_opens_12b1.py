@@ -654,15 +654,17 @@ def test_admin_linked_recommendation_hides_care_order_cta_when_absent_and_manual
 
 
 def test_doctor_linked_opens_render_panels_and_missing_state() -> None:
-    router, codec, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_care_service())
+    router, codec, _, recommendation_service = _doctor_router(recommendation_rows=[], care_service=_build_care_service())
     callback_handler = _handler(router, "doctor_runtime_booking_callback")
     rec_data = asyncio.run(codec.encode(_booking_callback_payload(page_or_index="open_recommendation", booking_id="b1", source_context=SourceContext.DOCTOR_QUEUE)))
     rec_callback = _Callback(rec_data, user_id=702)
     asyncio.run(callback_handler(rec_callback))
     rec_text, rec_kb = rec_callback.message.edits[-1]
     assert "No booking-linked recommendation found for this booking." in rec_text
-    assert rec_kb.inline_keyboard[0][0].text == "Back"
+    rec_actions = [row[0].text for row in rec_kb.inline_keyboard]
+    assert rec_actions == ["Chart", "Back to booking"]
     assert rec_text.strip() != "-"
+    assert recommendation_service.created == []
 
     router2, codec2, _, _ = _doctor_router(recommendation_rows=_build_recommendation_rows(), care_service=_build_empty_care_service())
     callback_handler2 = _handler(router2, "doctor_runtime_booking_callback")
@@ -672,7 +674,55 @@ def test_doctor_linked_opens_render_panels_and_missing_state() -> None:
     order_text, order_kb = order_callback.message.edits[-1]
     assert "No booking-linked care order found for this booking." in order_text
     assert "care_order :: patient=" not in order_text
-    assert order_kb.inline_keyboard[0][0].text == "Back"
+    order_actions = [row[0].text for row in order_kb.inline_keyboard]
+    assert order_actions == ["Chart", "Back to booking"]
+    assert all("pickup" not in action.lower() for action in order_actions)
+
+
+def test_doctor_linked_panels_show_encounter_and_recommendation_cta_only_for_active_context() -> None:
+    router, codec, _, recommendation_service = _doctor_router(
+        recommendation_rows=_build_recommendation_rows(),
+        care_service=_build_care_service(),
+        booking_status="in_service",
+    )
+    callback_handler = _handler(router, "doctor_runtime_booking_callback")
+
+    rec_data = asyncio.run(codec.encode(_booking_callback_payload(page_or_index="open_recommendation", booking_id="b1", source_context=SourceContext.DOCTOR_QUEUE)))
+    rec_callback = _Callback(rec_data, user_id=702)
+    asyncio.run(callback_handler(rec_callback))
+    rec_text, rec_kb = rec_callback.message.edits[-1]
+    assert "Recommendation rec_new" in rec_text
+    rec_actions = [row[0].text for row in rec_kb.inline_keyboard]
+    assert rec_actions == ["Chart", "Open encounter", "Issue follow-up recommendation", "Back to booking"]
+
+    add_recommendation_data = rec_kb.inline_keyboard[2][0].callback_data
+    add_recommendation_callback = _Callback(add_recommendation_data, user_id=702)
+    asyncio.run(callback_handler(add_recommendation_callback))
+    recommendation_type_text, _ = add_recommendation_callback.message.edits[-1]
+    assert "Choose recommendation type" in recommendation_type_text
+    assert recommendation_service.created == []
+
+    open_encounter_data = rec_kb.inline_keyboard[1][0].callback_data
+    open_encounter_callback = _Callback(open_encounter_data, user_id=702)
+    asyncio.run(callback_handler(open_encounter_callback))
+    encounter_text, _ = open_encounter_callback.message.edits[-1]
+    assert "Encounter context" in encounter_text
+    assert "Encounter: enc_b1" in encounter_text
+
+    order_data = asyncio.run(codec.encode(_booking_callback_payload(page_or_index="open_care_order", booking_id="b1", source_context=SourceContext.DOCTOR_QUEUE)))
+    order_callback = _Callback(order_data, user_id=702)
+    asyncio.run(callback_handler(order_callback))
+    _, order_kb = order_callback.message.edits[-1]
+    order_actions = [row[0].text for row in order_kb.inline_keyboard]
+    assert order_actions == ["Chart", "Open encounter", "Back to booking"]
+
+
+def test_doctor_linked_encounter_callback_is_bounded_when_context_unavailable() -> None:
+    router, _, _, _ = _doctor_router(recommendation_rows=[], care_service=_build_empty_care_service(), booking_status="confirmed")
+    callback_handler = _handler(router, "doctor_runtime_booking_callback_legacy")
+    callback = _Callback("doctorbk:open_linked_encounter:b1", user_id=702)
+    asyncio.run(callback_handler(callback))
+    assert callback.answers and "unavailable" in callback.answers[0].lower()
 
 
 def test_doctor_in_service_hands_off_into_encounter_context() -> None:
@@ -1173,3 +1223,10 @@ def test_doc_a3a_contains_no_new_migration_artifacts() -> None:
     if not migrations_root.exists():
         return
     assert not any("doc_a3a" in path.name.lower() for path in migrations_root.rglob("*"))
+
+
+def test_doc_a3c_contains_no_new_migration_artifacts() -> None:
+    migrations_root = Path("migrations")
+    if not migrations_root.exists():
+        return
+    assert not any("doc_a3c" in path.name.lower() for path in migrations_root.rglob("*"))

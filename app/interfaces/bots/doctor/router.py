@@ -273,6 +273,146 @@ def make_router(
             ]
         )
 
+    async def _resolve_linked_encounter(
+        *,
+        doctor_id: str,
+        clinic_id: str,
+        patient_id: str,
+        booking_id: str,
+    ):
+        if operations is None or booking_service is None:
+            return None
+        booking = await booking_service.load_booking(booking_id)
+        if booking is None or booking.doctor_id != doctor_id or booking.patient_id != patient_id:
+            return None
+        if booking.status not in {"checked_in", "in_service"}:
+            return None
+        encounter = await operations.open_or_get_encounter(
+            doctor_id=doctor_id,
+            clinic_id=clinic_id,
+            patient_id=patient_id,
+            booking_id=booking_id,
+        )
+        if encounter is None or not _encounter_is_active(status=getattr(encounter, "status", "")):
+            return None
+        return encounter
+
+    async def _doctor_linked_recommendation_keyboard(
+        *,
+        doctor_id: str,
+        clinic_id: str,
+        detail,
+        locale: str,
+    ) -> InlineKeyboardMarkup:
+        rows: list[list[InlineKeyboardButton]] = [
+            [
+                InlineKeyboardButton(
+                    text=i18n.t("card.booking.action.chart", locale),
+                    callback_data=await _encode_booking_callback(
+                        booking_id=detail.booking_id,
+                        action=CardAction.OPEN_CHART,
+                        page_or_index="open_chart",
+                    ),
+                )
+            ]
+        ]
+        linked_encounter = await _resolve_linked_encounter(
+            doctor_id=doctor_id,
+            clinic_id=clinic_id,
+            patient_id=detail.patient_card.patient_id,
+            booking_id=detail.booking_id,
+        )
+        if linked_encounter is not None:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("doctor.linked.open_encounter", locale),
+                        callback_data=await _encode_booking_callback(
+                            booking_id=detail.booking_id,
+                            action=CardAction.OPEN,
+                            page_or_index="open_linked_encounter",
+                        ),
+                    )
+                ]
+            )
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("doctor.linked.issue_follow_up_recommendation", locale),
+                        callback_data=await _encode_booking_callback(
+                            booking_id=detail.booking_id,
+                            action=CardAction.OPEN,
+                            page_or_index="add_recommendation",
+                        ),
+                    )
+                ]
+            )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=i18n.t("doctor.encounter.back_to_booking", locale),
+                    callback_data=await _encode_booking_callback(
+                        booking_id=detail.booking_id,
+                        action=CardAction.OPEN,
+                        page_or_index="open_booking",
+                    ),
+                )
+            ]
+        )
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    async def _doctor_linked_care_order_keyboard(
+        *,
+        doctor_id: str,
+        clinic_id: str,
+        detail,
+        locale: str,
+    ) -> InlineKeyboardMarkup:
+        rows: list[list[InlineKeyboardButton]] = [
+            [
+                InlineKeyboardButton(
+                    text=i18n.t("card.booking.action.chart", locale),
+                    callback_data=await _encode_booking_callback(
+                        booking_id=detail.booking_id,
+                        action=CardAction.OPEN_CHART,
+                        page_or_index="open_chart",
+                    ),
+                )
+            ]
+        ]
+        linked_encounter = await _resolve_linked_encounter(
+            doctor_id=doctor_id,
+            clinic_id=clinic_id,
+            patient_id=detail.patient_card.patient_id,
+            booking_id=detail.booking_id,
+        )
+        if linked_encounter is not None:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("doctor.linked.open_encounter", locale),
+                        callback_data=await _encode_booking_callback(
+                            booking_id=detail.booking_id,
+                            action=CardAction.OPEN,
+                            page_or_index="open_linked_encounter",
+                        ),
+                    )
+                ]
+            )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=i18n.t("doctor.encounter.back_to_booking", locale),
+                    callback_data=await _encode_booking_callback(
+                        booking_id=detail.booking_id,
+                        action=CardAction.OPEN,
+                        page_or_index="open_booking",
+                    ),
+                )
+            ]
+        )
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
     async def _doctor_encounter_keyboard(*, encounter, booking_id: str | None, locale: str) -> InlineKeyboardMarkup:
         encounter_id = encounter.encounter_id
         rows: list[list[InlineKeyboardButton]] = []
@@ -1312,7 +1452,12 @@ def make_router(
         elif decoded.page_or_index == "open_recommendation":
             await callback.message.edit_text(
                 await _render_linked_recommendation_panel(booking_id=detail.booking_id, locale=locale),
-                reply_markup=await _doctor_linked_back_keyboard(booking_id=detail.booking_id, locale=locale),
+                reply_markup=await _doctor_linked_recommendation_keyboard(
+                    doctor_id=doctor_id,
+                    clinic_id=clinic_id,
+                    detail=detail,
+                    locale=locale,
+                ),
             )
             return
         elif decoded.page_or_index == "open_care_order":
@@ -1323,7 +1468,33 @@ def make_router(
                     booking_id=detail.booking_id,
                     locale=locale,
                 ),
-                reply_markup=await _doctor_linked_back_keyboard(booking_id=detail.booking_id, locale=locale),
+                reply_markup=await _doctor_linked_care_order_keyboard(
+                    doctor_id=doctor_id,
+                    clinic_id=clinic_id,
+                    detail=detail,
+                    locale=locale,
+                ),
+            )
+            return
+        elif decoded.page_or_index == "open_linked_encounter":
+            encounter = await _resolve_linked_encounter(
+                doctor_id=doctor_id,
+                clinic_id=clinic_id,
+                patient_id=detail.patient_card.patient_id,
+                booking_id=detail.booking_id,
+            )
+            if encounter is None:
+                await callback.answer(i18n.t("doctor.linked.action.unavailable", locale), show_alert=True)
+                return
+            await callback.message.edit_text(
+                await _render_doctor_encounter_panel(
+                    doctor_id=doctor_id,
+                    patient_id=detail.patient_card.patient_id,
+                    encounter=encounter,
+                    locale=locale,
+                    booking_detail=detail,
+                ),
+                reply_markup=await _doctor_encounter_keyboard(encounter=encounter, booking_id=detail.booking_id, locale=locale),
             )
             return
         elif decoded.page_or_index == "add_quick_note":
@@ -1383,7 +1554,7 @@ def make_router(
             await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
             return
         _, page_or_index, booking_id = parts
-        if page_or_index not in {"open_booking", "in_service", "complete", "open_patient", "open_chart", "open_recommendation", "open_care_order", "add_quick_note", "add_recommendation"}:
+        if page_or_index not in {"open_booking", "in_service", "complete", "open_patient", "open_chart", "open_recommendation", "open_care_order", "add_quick_note", "add_recommendation", "open_linked_encounter"}:
             await callback.answer(i18n.t("common.card.callback.stale", locale), show_alert=True)
             return
         shell = await operations.get_booking_detail(doctor_id=doctor_id, booking_id=booking_id)
@@ -1424,6 +1595,27 @@ def make_router(
             await callback.message.edit_text(
                 i18n.t("doctor.recommend.context.choose_type", locale),
                 reply_markup=_recommendation_type_keyboard(encounter_id=encounter.encounter_id, booking_id=shell.booking_id, locale=locale),
+            )
+            return
+        if page_or_index == "open_linked_encounter":
+            encounter = await _resolve_linked_encounter(
+                doctor_id=doctor_id,
+                clinic_id=clinic_id,
+                patient_id=shell.patient_card.patient_id,
+                booking_id=shell.booking_id,
+            )
+            if encounter is None:
+                await callback.answer(i18n.t("doctor.linked.action.unavailable", locale), show_alert=True)
+                return
+            await callback.message.edit_text(
+                await _render_doctor_encounter_panel(
+                    doctor_id=doctor_id,
+                    patient_id=shell.patient_card.patient_id,
+                    encounter=encounter,
+                    locale=locale,
+                    booking_detail=shell,
+                ),
+                reply_markup=await _doctor_encounter_keyboard(encounter=encounter, booking_id=shell.booking_id, locale=locale),
             )
             return
         card = await _doctor_booking_shell(detail=shell, locale=locale)
