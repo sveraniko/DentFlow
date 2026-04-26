@@ -664,5 +664,14 @@
   "admin.integrations.calendar.surface.available": "• Surface wiring: available in this runtime.",
   "admin.integrations.calendar.surface.unavailable": "• Surface wiring: unavailable in this runtime.",
   "admin.integrations.worker.header": "3) Worker/runtime note",
-  "admin.integrations.worker.truth_note": "• Reminder/projector workers exist. Worker liveness is not available from bot runtime unless a dedicated healthcheck subsystem exists."
+  "admin.integrations.worker.truth_note": "• Reminder/projector workers exist. Worker liveness is not available from bot runtime unless a dedicated healthcheck subsystem exists.",
+  "owner.metrics.invalid_window": "Invalid window. Use days from 1 to 90.",
+  "owner.doctors.usage": "Usage: /owner_doctors [days 1..90]",
+  "owner.doctors.empty": "No doctor metrics for last {days} day(s).",
+  "owner.doctors.title": "Owner Doctor Metrics (last {days} day(s))",
+  "owner.doctors.item": "• {doctor_id} · c:{completed} cr:{created} cf:{confirmed} ns:{no_show} rr:{reschedule} rs:{reminders_sent} rf:{reminders_failed} e:{encounters}",
+  "owner.services.usage": "Usage: /owner_services [days 1..90]",
+  "owner.services.empty": "No service metrics for last {days} day(s).",
+  "owner.services.title": "Owner Service Metrics (last {days} day(s))",
+  "owner.services.item": "• {service_id} · c:{completed} cr:{created} cf:{confirmed} ns:{no_show} rr:{reschedule}"
 }

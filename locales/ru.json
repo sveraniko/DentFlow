@@ -664,5 +664,14 @@
   "admin.integrations.calendar.surface.available": "• Поверхность подключена в этом runtime.",
   "admin.integrations.calendar.surface.unavailable": "• Поверхность недоступна в этом runtime.",
   "admin.integrations.worker.header": "3) Примечание о worker/runtime",
-  "admin.integrations.worker.truth_note": "• Reminder/projector workers существуют. Liveness воркеров недоступен из bot runtime без отдельной healthcheck-подсистемы."
+  "admin.integrations.worker.truth_note": "• Reminder/projector workers существуют. Liveness воркеров недоступен из bot runtime без отдельной healthcheck-подсистемы.",
+  "owner.metrics.invalid_window": "Некорректное окно. Используйте дни от 1 до 90.",
+  "owner.doctors.usage": "Использование: /owner_doctors [дни 1..90]",
+  "owner.doctors.empty": "Нет метрик врачей за последние {days} дн.",
+  "owner.doctors.title": "Метрики врачей владельца (последние {days} дн.)",
+  "owner.doctors.item": "• {doctor_id} · з:{completed} с:{created} п:{confirmed} н:{no_show} пер:{reschedule} нп:{reminders_sent} ош:{reminders_failed} пр:{encounters}",
+  "owner.services.usage": "Использование: /owner_services [дни 1..90]",
+  "owner.services.empty": "Нет метрик услуг за последние {days} дн.",
+  "owner.services.title": "Метрики услуг владельца (последние {days} дн.)",
+  "owner.services.item": "• {service_id} · з:{completed} с:{created} п:{confirmed} н:{no_show} пер:{reschedule}"
 }

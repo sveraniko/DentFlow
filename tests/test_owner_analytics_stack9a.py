@@ -27,6 +27,10 @@ class _Message:
 
 
 class _OwnerAnalyticsStub:
+    def __init__(self) -> None:
+        self.last_doctor_days: int | None = None
+        self.last_service_days: int | None = None
+
     async def get_today_snapshot(self, *, clinic_id: str):
         return SimpleNamespace(
             local_date=date(2026, 4, 17),
@@ -63,6 +67,39 @@ class _OwnerAnalyticsStub:
             )
         ]
 
+    async def get_doctor_metrics(self, *, clinic_id: str, days: int = 7):
+        self.last_doctor_days = days
+        return SimpleNamespace(
+            rows=[
+                SimpleNamespace(
+                    doctor_id="d1",
+                    bookings_created_count=10,
+                    bookings_confirmed_count=8,
+                    bookings_completed_count=7,
+                    bookings_no_show_count=1,
+                    bookings_reschedule_requested_count=1,
+                    reminders_sent_count=6,
+                    reminders_failed_count=1,
+                    encounters_created_count=5,
+                )
+            ]
+        )
+
+    async def get_service_metrics(self, *, clinic_id: str, days: int = 7):
+        self.last_service_days = days
+        return SimpleNamespace(
+            rows=[
+                SimpleNamespace(
+                    service_id="srv1",
+                    bookings_created_count=12,
+                    bookings_confirmed_count=9,
+                    bookings_completed_count=8,
+                    bookings_no_show_count=1,
+                    bookings_reschedule_requested_count=2,
+                )
+            ]
+        )
+
     async def get_alert(self, *, clinic_id: str, owner_alert_id: str):
         if owner_alert_id != "o1":
             return None
@@ -87,23 +124,39 @@ def _access(role: RoleCode) -> AccessResolver:
     return AccessResolver(repo)
 
 
+def _handler_by_name(router, name: str):
+    for handler in router.message.handlers:
+        if handler.callback.__name__ == name:
+            return handler.callback
+    raise AssertionError(f"handler not found: {name}")
+
+
 def test_owner_router_commands_owner_only_and_localized() -> None:
     i18n = I18nService(locales_path=Path("locales"), default_locale="en")
-    router = make_router(i18n, _access(RoleCode.OWNER), analytics=_OwnerAnalyticsStub(), default_locale="en")
-    handlers = [h.callback for h in router.message.handlers]
+    analytics = _OwnerAnalyticsStub()
+    router = make_router(i18n, _access(RoleCode.OWNER), analytics=analytics, default_locale="en")
 
     today = _Message("/owner_today")
-    asyncio.run(handlers[1](today))
+    asyncio.run(_handler_by_name(router, "owner_today")(today))
     assert "Owner Today" in today.answers[-1]
 
     digest = _Message("/owner_digest")
-    asyncio.run(handlers[2](digest))
+    asyncio.run(_handler_by_name(router, "owner_digest")(digest))
     assert "Owner Digest" in digest.answers[-1]
 
+    doctors = _Message("/owner_doctors")
+    asyncio.run(_handler_by_name(router, "owner_doctors")(doctors))
+    assert "Owner Doctor Metrics" in doctors.answers[-1]
+    assert analytics.last_doctor_days == 7
+
+    services = _Message("/owner_services 30")
+    asyncio.run(_handler_by_name(router, "owner_services")(services))
+    assert "Owner Service Metrics" in services.answers[-1]
+    assert analytics.last_service_days == 30
+
     denied_router = make_router(i18n, _access(RoleCode.ADMIN), analytics=_OwnerAnalyticsStub(), default_locale="en")
-    denied_handlers = [h.callback for h in denied_router.message.handlers]
-    denied = _Message("/owner_today")
-    asyncio.run(denied_handlers[1](denied))
+    denied = _Message("/owner_services")
+    asyncio.run(_handler_by_name(denied_router, "owner_services")(denied))
     assert any("Access denied" in x for x in denied.answers)
 
 
@@ -317,3 +370,115 @@ def test_open_confirmation_backlog_uses_local_timezone_semantics() -> None:
     backlog_sql = next(s for s in captured_sql if "FROM booking.bookings" in s)
     assert "AT TIME ZONE COALESCE" in backlog_sql
     assert "AT TIME ZONE 'UTC'" not in backlog_sql
+
+
+def test_owner_metrics_invalid_window_and_empty_states() -> None:
+    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+
+    class _EmptyAnalytics(_OwnerAnalyticsStub):
+        async def get_doctor_metrics(self, *, clinic_id: str, days: int = 7):
+            self.last_doctor_days = days
+            return SimpleNamespace(rows=[])
+
+        async def get_service_metrics(self, *, clinic_id: str, days: int = 7):
+            self.last_service_days = days
+            return SimpleNamespace(rows=[])
+
+    analytics = _EmptyAnalytics()
+    router = make_router(i18n, _access(RoleCode.OWNER), analytics=analytics, default_locale="en")
+
+    invalid = _Message("/owner_doctors 0")
+    asyncio.run(_handler_by_name(router, "owner_doctors")(invalid))
+    assert "Invalid window" in invalid.answers[0]
+    assert "Usage: /owner_doctors" in invalid.answers[1]
+
+    empty_doc = _Message("/owner_doctors 14")
+    asyncio.run(_handler_by_name(router, "owner_doctors")(empty_doc))
+    assert "No doctor metrics" in empty_doc.answers[-1]
+
+    invalid_service = _Message("/owner_services q")
+    asyncio.run(_handler_by_name(router, "owner_services")(invalid_service))
+    assert "Invalid window" in invalid_service.answers[0]
+
+    empty_service = _Message("/owner_services")
+    asyncio.run(_handler_by_name(router, "owner_services")(empty_service))
+    assert "No service metrics" in empty_service.answers[-1]
+
+
+def test_owner_service_doctor_metrics_aggregate_and_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = OwnerAnalyticsService(db_config=object())
+
+    async def _window(self, *, clinic_id: str, point: datetime):
+        return (
+            datetime(2026, 4, 17, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 4, 18, 0, 0, tzinfo=timezone.utc),
+            date(2026, 4, 17),
+        )
+
+    class _Res:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def mappings(self):
+            return self
+
+        def all(self):
+            return self._rows
+
+    captured_params = []
+
+    class _Conn:
+        async def execute(self, statement, params):
+            sql = str(statement)
+            captured_params.append((sql, params))
+            if "daily_doctor_metrics" in sql:
+                return _Res([
+                    {
+                        "doctor_id": "d1",
+                        "bookings_created_count": 11,
+                        "bookings_confirmed_count": 9,
+                        "bookings_completed_count": 8,
+                        "bookings_no_show_count": 1,
+                        "bookings_reschedule_requested_count": 1,
+                        "reminders_sent_count": 7,
+                        "reminders_failed_count": 1,
+                        "encounters_created_count": 6,
+                    }
+                ])
+            return _Res([
+                {
+                    "service_id": "srv1",
+                    "bookings_created_count": 10,
+                    "bookings_confirmed_count": 8,
+                    "bookings_completed_count": 7,
+                    "bookings_no_show_count": 1,
+                    "bookings_reschedule_requested_count": 1,
+                }
+            ])
+
+    class _Engine:
+        def connect(self):
+            class _Ctx:
+                async def __aenter__(self_non):
+                    return _Conn()
+
+                async def __aexit__(self_non, exc_type, exc, tb):
+                    return False
+
+            return _Ctx()
+
+        async def dispose(self):
+            return None
+
+    monkeypatch.setattr(OwnerAnalyticsService, "_local_day_window", _window)
+    monkeypatch.setattr("app.application.owner.service.create_engine", lambda _: _Engine())
+
+    doctors = asyncio.run(service.get_doctor_metrics(clinic_id="c1", days=7, limit=25))
+    services = asyncio.run(service.get_service_metrics(clinic_id="c1", days=7, limit=25))
+
+    assert doctors.limit == 10
+    assert doctors.rows[0].doctor_id == "d1"
+    assert services.limit == 10
+    assert services.rows[0].service_id == "srv1"
+    assert any("GROUP BY doctor_id" in sql for sql, _ in captured_params)
+    assert any("GROUP BY service_id" in sql for sql, _ in captured_params)
