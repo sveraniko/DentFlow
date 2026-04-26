@@ -83,6 +83,30 @@ class _GovernanceStub:
                     branch_id=None,
                     branch_label=None,
                 ),
+                SimpleNamespace(
+                    actor_id="actor-3",
+                    display_name="No Binding",
+                    role_code="auditor",
+                    role_label=None,
+                    staff_kind="unknown",
+                    doctor_id=None,
+                    telegram_binding_state="no",
+                    active_state="active",
+                    branch_id=None,
+                    branch_label=None,
+                ),
+                SimpleNamespace(
+                    actor_id="actor-4",
+                    display_name="Strange Binding",
+                    role_code=None,
+                    role_label=None,
+                    staff_kind="unknown",
+                    doctor_id=None,
+                    telegram_binding_state="mystery",
+                    active_state="mystery",
+                    branch_id=None,
+                    branch_label=None,
+                ),
             ]
         )
 
@@ -140,6 +164,11 @@ def test_owner_staff_rows_include_role_and_telegram_and_safe_fallback() -> None:
     assert "tg:yes" in payload
     assert "kind:unknown" in payload
     assert "very-l…0002" in payload
+    assert "tg:no" in payload
+    assert "role:auditor" in payload
+    assert "Strange Binding" in payload
+    assert "owner.staff.telegram.mystery" not in payload
+    assert "owner.staff.active.mystery" not in payload
 
 
 def test_owner_staff_empty_state() -> None:

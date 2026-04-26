@@ -57,6 +57,7 @@ class OwnerAlertRow:
 @dataclass(slots=True)
 class OwnerDoctorMetricRow:
     doctor_id: str
+    doctor_label: str | None
     bookings_created_count: int
     bookings_confirmed_count: int
     bookings_completed_count: int
@@ -78,6 +79,7 @@ class OwnerDoctorMetricsSummary:
 @dataclass(slots=True)
 class OwnerServiceMetricRow:
     service_id: str
+    service_label: str | None
     bookings_created_count: int
     bookings_confirmed_count: int
     bookings_completed_count: int
@@ -169,7 +171,8 @@ class OwnerAnalyticsService:
                     await conn.execute(
                         text(
                             """
-                            SELECT doctor_id,
+                            SELECT m.doctor_id,
+                                   MAX(COALESCE(NULLIF(dp.display_name, ''), NULLIF(dp.full_name, ''))) AS doctor_label,
                                    SUM(bookings_created_count) AS bookings_created_count,
                                    SUM(bookings_confirmed_count) AS bookings_confirmed_count,
                                    SUM(bookings_completed_count) AS bookings_completed_count,
@@ -178,11 +181,14 @@ class OwnerAnalyticsService:
                                    SUM(reminders_sent_count) AS reminders_sent_count,
                                    SUM(reminders_failed_count) AS reminders_failed_count,
                                    SUM(encounters_created_count) AS encounters_created_count
-                            FROM owner_views.daily_doctor_metrics
-                            WHERE clinic_id=:clinic_id
-                              AND metrics_date>=:window_start
-                              AND metrics_date<=:window_end
-                            GROUP BY doctor_id
+                            FROM owner_views.daily_doctor_metrics m
+                            LEFT JOIN core_reference.doctors dp
+                              ON dp.doctor_id=m.doctor_id
+                             AND dp.clinic_id=m.clinic_id
+                            WHERE m.clinic_id=:clinic_id
+                              AND m.metrics_date>=:window_start
+                              AND m.metrics_date<=:window_end
+                            GROUP BY m.doctor_id
                             ORDER BY SUM(bookings_completed_count) DESC,
                                      SUM(bookings_created_count) DESC,
                                      SUM(bookings_confirmed_count) DESC,
@@ -203,6 +209,7 @@ class OwnerAnalyticsService:
             rows=[
                 OwnerDoctorMetricRow(
                     doctor_id=str(row["doctor_id"]),
+                    doctor_label=str(row["doctor_label"]) if row["doctor_label"] else None,
                     bookings_created_count=int(row["bookings_created_count"] or 0),
                     bookings_confirmed_count=int(row["bookings_confirmed_count"] or 0),
                     bookings_completed_count=int(row["bookings_completed_count"] or 0),
@@ -228,17 +235,21 @@ class OwnerAnalyticsService:
                     await conn.execute(
                         text(
                             """
-                            SELECT service_id,
+                            SELECT m.service_id,
+                                   MAX(NULLIF(cs.name, '')) AS service_label,
                                    SUM(bookings_created_count) AS bookings_created_count,
                                    SUM(bookings_confirmed_count) AS bookings_confirmed_count,
                                    SUM(bookings_completed_count) AS bookings_completed_count,
                                    SUM(bookings_no_show_count) AS bookings_no_show_count,
                                    SUM(bookings_reschedule_requested_count) AS bookings_reschedule_requested_count
-                            FROM owner_views.daily_service_metrics
-                            WHERE clinic_id=:clinic_id
-                              AND metrics_date>=:window_start
-                              AND metrics_date<=:window_end
-                            GROUP BY service_id
+                            FROM owner_views.daily_service_metrics m
+                            LEFT JOIN core_reference.services cs
+                              ON cs.service_id=m.service_id
+                             AND cs.clinic_id=m.clinic_id
+                            WHERE m.clinic_id=:clinic_id
+                              AND m.metrics_date>=:window_start
+                              AND m.metrics_date<=:window_end
+                            GROUP BY m.service_id
                             ORDER BY SUM(bookings_completed_count) DESC,
                                      SUM(bookings_created_count) DESC,
                                      SUM(bookings_confirmed_count) DESC,
@@ -259,6 +270,7 @@ class OwnerAnalyticsService:
             rows=[
                 OwnerServiceMetricRow(
                     service_id=str(row["service_id"]),
+                    service_label=str(row["service_label"]) if row["service_label"] else None,
                     bookings_created_count=int(row["bookings_created_count"] or 0),
                     bookings_confirmed_count=int(row["bookings_confirmed_count"] or 0),
                     bookings_completed_count=int(row["bookings_completed_count"] or 0),
