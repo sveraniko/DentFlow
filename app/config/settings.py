@@ -11,6 +11,7 @@ class AppConfig(BaseSettings):
     env: str = "dev"
     default_locale: str = "ru"
     default_timezone: str = "UTC"
+    run_mode: str = "bootstrap"
 
 
 class TelegramConfig(BaseSettings):
