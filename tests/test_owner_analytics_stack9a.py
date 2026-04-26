@@ -13,6 +13,7 @@ from app.common.i18n import I18nService
 from app.domain.access_identity.models import ActorIdentity, ActorStatus, ActorType, ClinicRoleAssignment, RoleCode, StaffMember, StaffStatus, TelegramBinding
 from app.domain.events import build_event
 from app.interfaces.bots.owner.router import make_router
+from app.infrastructure.db.bootstrap import STACK1_TABLES
 from app.projections.owner.daily_metrics_projector import OwnerDailyMetricsProjector, _refresh_alerts, _upsert_open_alert
 
 
@@ -95,6 +96,8 @@ class _OwnerAnalyticsStub:
                 SimpleNamespace(
                     service_id="srv1",
                     service_label="Consultation",
+                    service_title_key=None,
+                    service_code=None,
                     bookings_created_count=12,
                     bookings_confirmed_count=9,
                     bookings_completed_count=8,
@@ -527,6 +530,8 @@ def test_owner_metric_labels_fallback_to_compact_ids() -> None:
                     SimpleNamespace(
                         service_id="service-very-long-id-99999",
                         service_label=None,
+                        service_title_key=None,
+                        service_code=None,
                         bookings_created_count=1,
                         bookings_confirmed_count=1,
                         bookings_completed_count=1,
@@ -590,7 +595,8 @@ def test_owner_service_doctor_metrics_aggregate_and_bound(monkeypatch: pytest.Mo
             return _Res([
                 {
                     "service_id": "srv1",
-                    "service_label": "Service Label",
+                    "service_title_key": "service.cleaning",
+                    "service_code": "SVC-001",
                     "bookings_created_count": 10,
                     "bookings_confirmed_count": 8,
                     "bookings_completed_count": 7,
@@ -624,11 +630,78 @@ def test_owner_service_doctor_metrics_aggregate_and_bound(monkeypatch: pytest.Mo
     assert doctors.rows[0].doctor_label == "Dr. Label"
     assert services.limit == 10
     assert services.rows[0].service_id == "srv1"
-    assert services.rows[0].service_label == "Service Label"
+    assert services.rows[0].service_title_key == "service.cleaning"
+    assert services.rows[0].service_code == "SVC-001"
     assert any("GROUP BY m.doctor_id" in sql for sql, _ in captured_params)
     assert any("GROUP BY m.service_id" in sql for sql, _ in captured_params)
     assert any("LEFT JOIN core_reference.doctors" in sql for sql, _ in captured_params)
     assert any("LEFT JOIN core_reference.services" in sql for sql, _ in captured_params)
+    assert all("cs.name" not in sql for sql, _ in captured_params)
+    assert any("cs.title_key" in sql for sql, _ in captured_params)
+    assert any("cs.code" in sql for sql, _ in captured_params)
+
+
+def test_owner_services_label_prefers_localized_title_key() -> None:
+    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+
+    class _LocalizedServiceAnalytics(_OwnerAnalyticsStub):
+        async def get_service_metrics(self, *, clinic_id: str, days: int = 7):
+            return SimpleNamespace(
+                rows=[
+                    SimpleNamespace(
+                        service_id="srv-loc",
+                        service_label=None,
+                        service_title_key="service.cleaning",
+                        service_code="CLN-001",
+                        bookings_created_count=5,
+                        bookings_confirmed_count=4,
+                        bookings_completed_count=3,
+                        bookings_no_show_count=0,
+                        bookings_reschedule_requested_count=1,
+                    )
+                ]
+            )
+
+    router = make_router(i18n, _access(RoleCode.OWNER), analytics=_LocalizedServiceAnalytics(), default_locale="en")
+    msg = _Message("/owner_services")
+    asyncio.run(_handler_by_name(router, "owner_services")(msg))
+    assert "Teeth cleaning" in msg.answers[-1]
+    assert "CLN-001" not in msg.answers[-1]
+
+
+def test_owner_services_label_falls_back_to_code_when_translation_missing() -> None:
+    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+
+    class _CodeFallbackAnalytics(_OwnerAnalyticsStub):
+        async def get_service_metrics(self, *, clinic_id: str, days: int = 7):
+            return SimpleNamespace(
+                rows=[
+                    SimpleNamespace(
+                        service_id="srv-code",
+                        service_label=None,
+                        service_title_key="service.missing_translation_key",
+                        service_code="SVC-42",
+                        bookings_created_count=2,
+                        bookings_confirmed_count=2,
+                        bookings_completed_count=1,
+                        bookings_no_show_count=0,
+                        bookings_reschedule_requested_count=0,
+                    )
+                ]
+            )
+
+    router = make_router(i18n, _access(RoleCode.OWNER), analytics=_CodeFallbackAnalytics(), default_locale="en")
+    msg = _Message("/owner_services")
+    asyncio.run(_handler_by_name(router, "owner_services")(msg))
+    assert "SVC-42" in msg.answers[-1]
+    assert "service.missing_translation_key" not in msg.answers[-1]
+
+
+def test_services_reference_schema_has_safe_label_fields_and_no_name_column() -> None:
+    ddl = next(x for x in STACK1_TABLES if "CREATE TABLE IF NOT EXISTS core_reference.services" in x)
+    assert "title_key TEXT NOT NULL" in ddl
+    assert "code TEXT NOT NULL" in ddl
+    assert "name TEXT" not in ddl
 
 
 def test_owner_branch_metrics_aggregate_and_bound_with_label_fallback(monkeypatch: pytest.MonkeyPatch) -> None:

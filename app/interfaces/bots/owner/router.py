@@ -79,7 +79,15 @@ def make_router(
         doctor_id = getattr(row, "doctor_id")
         return str(label) if label else _compact_id(str(doctor_id))
 
-    def _service_metric_label(row: object) -> str:
+    def _service_metric_label(row: object, *, locale: str) -> str:
+        service_title_key = getattr(row, "service_title_key", None)
+        service_code = getattr(row, "service_code", None)
+        if service_title_key:
+            localized = i18n.t(str(service_title_key), locale)
+            if localized and localized != str(service_title_key):
+                return localized
+        if service_code:
+            return str(service_code)
         label = getattr(row, "service_label", None)
         service_id = getattr(row, "service_id")
         return str(label) if label else _compact_id(str(service_id))
@@ -243,7 +251,7 @@ def make_router(
         for row in summary.rows:
             lines.append(
                 i18n.t("owner.services.item", locale).format(
-                    service=_service_metric_label(row),
+                    service=_service_metric_label(row, locale=locale),
                     created=row.bookings_created_count,
                     confirmed=row.bookings_confirmed_count,
                     completed=row.bookings_completed_count,
