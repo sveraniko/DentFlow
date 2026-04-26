@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, Message, ReplyKeyboardMarkup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
 
 from app.application.communication import ReminderActionService
 from app.application.care_commerce import CareCommerceService
@@ -82,6 +82,9 @@ class _PatientFlowState:
     booking_session_id: str = ""
     booking_mode: str = "new_booking_flow"
     reschedule_booking_id: str = ""
+    slot_page: int = 0
+    slot_date_from: str = ""
+    slot_time_window: str = "all"
     quick_booking_prefill: dict[str, str] | None = None
     care: _CareViewState | None = None
 
@@ -409,6 +412,9 @@ def make_router(
             booking_session_id=payload.get("booking_session_id", ""),
             booking_mode=payload.get("booking_mode", "new_booking_flow"),
             reschedule_booking_id=payload.get("reschedule_booking_id", ""),
+            slot_page=int(payload.get("slot_page", 0) or 0),
+            slot_date_from=str(payload.get("slot_date_from", "") or ""),
+            slot_time_window=str(payload.get("slot_time_window", "all") or "all"),
             quick_booking_prefill=dict(payload.get("quick_booking_prefill") or {}),
             care=care_state,
         )
@@ -422,6 +428,9 @@ def make_router(
                 "booking_session_id": state.booking_session_id,
                 "booking_mode": state.booking_mode,
                 "reschedule_booking_id": state.reschedule_booking_id,
+                "slot_page": int(state.slot_page),
+                "slot_date_from": state.slot_date_from,
+                "slot_time_window": state.slot_time_window,
                 "quick_booking_prefill": dict(state.quick_booking_prefill or {}),
                 "care": {
                     "selected_category": care_state.selected_category,
@@ -458,6 +467,11 @@ def make_router(
         state.care = current
         await _save_flow_state(actor_id, state)
         return current
+
+    def _reset_slot_view_state(flow: _PatientFlowState) -> None:
+        flow.slot_page = 0
+        flow.slot_date_from = ""
+        flow.slot_time_window = "all"
 
     async def _encode_runtime_callback(
         *,
@@ -1642,7 +1656,7 @@ def make_router(
             )
         buttons.append(
             [
-                InlineKeyboardButton(text=i18n.t("patient.home.nav.back", locale), callback_data=f"book:back:services:{session_id}"),
+                InlineKeyboardButton(text=i18n.t("patient.home.nav.back", locale), callback_data="phome:home"),
                 _patient_home_nav_button(locale=locale),
             ]
         )
@@ -2154,6 +2168,16 @@ def make_router(
             one_time_keyboard=True,
         )
 
+    async def _remove_patient_reply_keyboard(message: Message) -> None:
+        try:
+            cleanup = await message.answer("↩️", reply_markup=ReplyKeyboardRemove())
+            try:
+                await cleanup.delete()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     async def _enter_new_booking(message: Message | CallbackQuery, *, actor_id: int) -> None:
         clinic_id = _primary_clinic_id()
         if not clinic_id:
@@ -2183,6 +2207,7 @@ def make_router(
         flow.booking_mode = "new_booking_flow"
         flow.reschedule_booking_id = ""
         flow.quick_booking_prefill = {}
+        _reset_slot_view_state(flow)
         if started.trusted_shortcut_applied and trusted_patient_id:
             recent_prefill = await booking_flow.get_recent_booking_prefill(clinic_id=clinic_id, patient_id=trusted_patient_id)
             if recent_prefill is not None:
@@ -3116,6 +3141,9 @@ def make_router(
             return
         try:
             session = await booking_flow.update_service(booking_session_id=callback_session_id, service_id=service_id)
+            flow = await _load_flow_state(callback.from_user.id)
+            _reset_slot_view_state(flow)
+            await _save_flow_state(callback.from_user.id, flow)
             await _render_doctor_pref_panel(
                 callback,
                 actor_id=callback.from_user.id,
@@ -3174,6 +3202,7 @@ def make_router(
             )
             return
         flow.quick_booking_prefill = {}
+        _reset_slot_view_state(flow)
         await _save_flow_state(callback.from_user.id, flow)
         await _render_slot_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
 
@@ -3214,6 +3243,7 @@ def make_router(
             branch_id=prefill["branch_id"],
         )
         flow.quick_booking_prefill = {}
+        _reset_slot_view_state(flow)
         await _save_flow_state(callback.from_user.id, flow)
         await _render_service_panel(
             callback,
@@ -3828,6 +3858,9 @@ def make_router(
                     doctor_preference_type="specific",
                     doctor_id=doctor_token,
                 )
+            flow = await _load_flow_state(callback.from_user.id)
+            _reset_slot_view_state(flow)
+            await _save_flow_state(callback.from_user.id, flow)
             await _render_slot_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
         except Exception:
             await callback.answer(i18n.t("patient.booking.unavailable", _locale()), show_alert=True)
@@ -3847,8 +3880,7 @@ def make_router(
         flow = await _load_flow_state(callback.from_user.id)
         flow.booking_mode = "new_booking_flow"
         await _save_flow_state(callback.from_user.id, flow)
-        await _render_service_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id, clinic_id=clinic_id)
-        await callback.answer()
+        await _render_patient_home_panel(callback, actor_id=callback.from_user.id)
 
     @router.callback_query(F.data.startswith("book:back:doctors:"))
     async def booking_back_to_doctors(callback: CallbackQuery) -> None:
@@ -3876,7 +3908,6 @@ def make_router(
             clinic_id=session.clinic_id,
             branch_id=session.branch_id,
         )
-        await callback.answer()
 
     @router.callback_query(F.data.startswith("book:doc_code:"))
     async def booking_doctor_code_prompt(callback: CallbackQuery) -> None:
@@ -3894,7 +3925,6 @@ def make_router(
         flow.booking_mode = "new_booking_doctor_code"
         await _save_flow_state(callback.from_user.id, flow)
         await _render_doctor_code_prompt(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
-        await callback.answer()
 
     @router.callback_query(F.data.startswith("book:slot:"))
     async def select_slot(callback: CallbackQuery) -> None:
@@ -4415,6 +4445,8 @@ def make_router(
         locale = _locale()
         flow = await _load_flow_state(message.from_user.id)
         if message.text == i18n.t("patient.home.nav.home", locale):
+            if flow.booking_mode in {"new_booking_contact", "existing_lookup_contact", "new_booking_doctor_code"}:
+                await _remove_patient_reply_keyboard(message)
             await _render_patient_home_panel(message, actor_id=message.from_user.id)
             return
         if message.text != _patient_back_nav_text(locale=locale):
@@ -4422,11 +4454,13 @@ def make_router(
                 await _handle_doctor_code_submission(message, actor_id=message.from_user.id, code=message.text)
             return
         if flow.booking_mode == "new_booking_contact" and flow.booking_session_id:
+            await _remove_patient_reply_keyboard(message)
             await _render_slot_panel(message, actor_id=message.from_user.id, session_id=flow.booking_session_id)
             return
         if flow.booking_mode == "new_booking_doctor_code" and flow.booking_session_id:
             session = await booking_flow.get_booking_session(booking_session_id=flow.booking_session_id)
             if session is not None:
+                await _remove_patient_reply_keyboard(message)
                 flow.booking_mode = "new_booking_flow"
                 await _save_flow_state(message.from_user.id, flow)
                 await _render_doctor_pref_panel(
@@ -4468,6 +4502,7 @@ def make_router(
             doctor_id=resolved.doctor_id,
         )
         flow.booking_mode = "new_booking_flow"
+        _reset_slot_view_state(flow)
         await _save_flow_state(actor_id, flow)
         await _render_slot_panel(message, actor_id=actor_id, session_id=session_id)
 
