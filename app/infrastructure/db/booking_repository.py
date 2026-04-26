@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from datetime import datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +15,31 @@ from app.domain.events import build_event
 from app.infrastructure.db.engine import create_engine
 from app.infrastructure.outbox.repository import OutboxRepository
 
+# Seed type-coercion helpers
+_SEED_DATE_COLUMNS: frozenset[str] = frozenset({"requested_date"})
+_SEED_TIMESTAMP_COLUMNS: frozenset[str] = frozenset({
+    "expires_at", "created_at", "updated_at", "start_at", "end_at",
+    "occurred_at", "queued_at", "sent_at",
+    "confirmed_at", "canceled_at", "checked_in_at", "in_service_at",
+    "completed_at", "no_show_at", "last_synced_at",
+})
+_SEED_JSONB_COLUMNS: frozenset[str] = frozenset({
+    "payload_json", "service_scope", "date_window", "payload_summary",
+})
+
+
+def _coerce_seed_value(col: str, value):
+    """Coerce JSON-loaded seed values to proper Python types for asyncpg."""
+    if value is None:
+        return None
+    if col in _SEED_DATE_COLUMNS and isinstance(value, str):
+        return date.fromisoformat(value)
+    # Any column ending in _at is TIMESTAMPTZ
+    if col.endswith("_at") and isinstance(value, str):
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if col in _SEED_JSONB_COLUMNS or isinstance(value, (dict, list)):
+        return json.dumps(value)
+    return value
 
 class DbBookingRepository(BookingRepository):
     def __init__(self, db_config) -> None:
@@ -1105,14 +1130,13 @@ async def _seed_rows(conn, payload: dict) -> None:
 
     for key, (table, columns) in statements.items():
         for row in payload.get(key, []):
-            serialized = {name: row.get(name) for name in columns}
-            for json_key in ("payload_json", "service_scope", "date_window", "payload_summary"):
-                if json_key in serialized and serialized[json_key] is not None:
-                    serialized[json_key] = json.dumps(serialized[json_key])
-            col_csv = ", ".join(columns)
-            values = ", ".join(f":{name}" for name in columns)
-            updates = ", ".join(f"{name}=EXCLUDED.{name}" for name in columns if name != columns[0])
+            # Omit None-valued non-PK columns so DB DEFAULT applies for absent fields
+            include_cols = [c for c in columns if c == columns[0] or row.get(c) is not None]
+            col_csv = ", ".join(include_cols)
+            values = ", ".join(f":{name}" for name in include_cols)
+            updates = ", ".join(f"{name}=EXCLUDED.{name}" for name in include_cols if name != include_cols[0])
+            params = {name: _coerce_seed_value(name, row.get(name)) for name in include_cols}
             await conn.execute(
                 text(f"INSERT INTO {table} ({col_csv}) VALUES ({values}) ON CONFLICT ({columns[0]}) DO UPDATE SET {updates}"),
-                serialized,
+                params,
             )

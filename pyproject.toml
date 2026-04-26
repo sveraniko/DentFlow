@@ -12,6 +12,7 @@ dependencies = [
   "redis>=5.0,<6.0",
   "google-api-python-client>=2.170,<3.0",
   "google-auth>=2.37,<3.0",
+  "tzdata>=2024.1",
 ]
 
 [dependency-groups]
