@@ -94,6 +94,26 @@ class OwnerServiceMetricsSummary:
 
 
 @dataclass(slots=True)
+class OwnerBranchMetricRow:
+    branch_id: str
+    branch_label: str | None
+    bookings_created_count: int
+    bookings_confirmed_count: int
+    bookings_completed_count: int
+    bookings_canceled_count: int
+    bookings_no_show_count: int
+    bookings_reschedule_requested_count: int
+
+
+@dataclass(slots=True)
+class OwnerBranchMetricsSummary:
+    clinic_id: str
+    days: int
+    limit: int
+    rows: list[OwnerBranchMetricRow]
+
+
+@dataclass(slots=True)
 class OwnerAnalyticsService:
     db_config: object
 
@@ -204,6 +224,114 @@ class OwnerAnalyticsService:
                     bookings_created_count=int(row["bookings_created_count"] or 0),
                     bookings_confirmed_count=int(row["bookings_confirmed_count"] or 0),
                     bookings_completed_count=int(row["bookings_completed_count"] or 0),
+                    bookings_no_show_count=int(row["bookings_no_show_count"] or 0),
+                    bookings_reschedule_requested_count=int(row["bookings_reschedule_requested_count"] or 0),
+                )
+                for row in rows
+            ],
+        )
+
+    async def get_branch_metrics(self, *, clinic_id: str, days: int = 7, limit: int = 10) -> OwnerBranchMetricsSummary:
+        day_start_utc, day_end_utc, local_date = await self._local_day_window(clinic_id=clinic_id, point=datetime.now(timezone.utc))
+        window_start = local_date - timedelta(days=max(days, 1) - 1)
+        bounded_limit = max(1, min(limit, 10))
+
+        engine = create_engine(self.db_config)
+        try:
+            async with engine.connect() as conn:
+                rows = (
+                    await conn.execute(
+                        text(
+                            """
+                            WITH window AS (
+                              SELECT
+                                CAST(:window_start AS date) AS window_start,
+                                CAST(:window_end AS date) AS window_end
+                            )
+                            SELECT
+                              b.branch_id,
+                              cb.display_name AS branch_label,
+                              SUM(CASE WHEN DATE(
+                                   b.created_at AT TIME ZONE COALESCE(
+                                     NULLIF(cb.timezone, ''),
+                                     NULLIF(cc.timezone, ''),
+                                     'UTC'
+                                   )
+                                 ) BETWEEN (SELECT window_start FROM window) AND (SELECT window_end FROM window) THEN 1 ELSE 0 END) AS bookings_created_count,
+                              SUM(CASE WHEN b.confirmed_at IS NOT NULL AND DATE(
+                                   b.confirmed_at AT TIME ZONE COALESCE(
+                                     NULLIF(cb.timezone, ''),
+                                     NULLIF(cc.timezone, ''),
+                                     'UTC'
+                                   )
+                                 ) BETWEEN (SELECT window_start FROM window) AND (SELECT window_end FROM window) THEN 1 ELSE 0 END) AS bookings_confirmed_count,
+                              SUM(CASE WHEN b.completed_at IS NOT NULL AND DATE(
+                                   b.completed_at AT TIME ZONE COALESCE(
+                                     NULLIF(cb.timezone, ''),
+                                     NULLIF(cc.timezone, ''),
+                                     'UTC'
+                                   )
+                                 ) BETWEEN (SELECT window_start FROM window) AND (SELECT window_end FROM window) THEN 1 ELSE 0 END) AS bookings_completed_count,
+                              SUM(CASE WHEN b.canceled_at IS NOT NULL AND DATE(
+                                   b.canceled_at AT TIME ZONE COALESCE(
+                                     NULLIF(cb.timezone, ''),
+                                     NULLIF(cc.timezone, ''),
+                                     'UTC'
+                                   )
+                                 ) BETWEEN (SELECT window_start FROM window) AND (SELECT window_end FROM window) THEN 1 ELSE 0 END) AS bookings_canceled_count,
+                              SUM(CASE WHEN b.no_show_at IS NOT NULL AND DATE(
+                                   b.no_show_at AT TIME ZONE COALESCE(
+                                     NULLIF(cb.timezone, ''),
+                                     NULLIF(cc.timezone, ''),
+                                     'UTC'
+                                   )
+                                 ) BETWEEN (SELECT window_start FROM window) AND (SELECT window_end FROM window) THEN 1 ELSE 0 END) AS bookings_no_show_count,
+                              SUM(CASE WHEN b.status='reschedule_requested' AND DATE(
+                                   b.updated_at AT TIME ZONE COALESCE(
+                                     NULLIF(cb.timezone, ''),
+                                     NULLIF(cc.timezone, ''),
+                                     'UTC'
+                                   )
+                                 ) BETWEEN (SELECT window_start FROM window) AND (SELECT window_end FROM window) THEN 1 ELSE 0 END) AS bookings_reschedule_requested_count
+                            FROM booking.bookings b
+                            JOIN core_reference.clinics cc ON cc.clinic_id=b.clinic_id
+                            LEFT JOIN core_reference.branches cb ON cb.branch_id=b.branch_id
+                            WHERE b.clinic_id=:clinic_id
+                              AND b.scheduled_start_at >= :window_start_utc
+                              AND b.scheduled_start_at < :window_end_utc
+                            GROUP BY b.branch_id, cb.display_name
+                            ORDER BY
+                              SUM(CASE WHEN b.completed_at IS NOT NULL THEN 1 ELSE 0 END) DESC,
+                              SUM(CASE WHEN b.created_at IS NOT NULL THEN 1 ELSE 0 END) DESC,
+                              b.branch_id ASC
+                            LIMIT :limit
+                            """
+                        ),
+                        {
+                            "clinic_id": clinic_id,
+                            "window_start": window_start,
+                            "window_end": local_date,
+                            "window_start_utc": day_start_utc - timedelta(days=max(days, 1) - 1),
+                            "window_end_utc": day_end_utc,
+                            "limit": bounded_limit,
+                        },
+                    )
+                ).mappings().all()
+        finally:
+            await engine.dispose()
+
+        return OwnerBranchMetricsSummary(
+            clinic_id=clinic_id,
+            days=days,
+            limit=bounded_limit,
+            rows=[
+                OwnerBranchMetricRow(
+                    branch_id=str(row["branch_id"] or "-"),
+                    branch_label=str(row["branch_label"]) if row["branch_label"] else None,
+                    bookings_created_count=int(row["bookings_created_count"] or 0),
+                    bookings_confirmed_count=int(row["bookings_confirmed_count"] or 0),
+                    bookings_completed_count=int(row["bookings_completed_count"] or 0),
+                    bookings_canceled_count=int(row["bookings_canceled_count"] or 0),
                     bookings_no_show_count=int(row["bookings_no_show_count"] or 0),
                     bookings_reschedule_requested_count=int(row["bookings_reschedule_requested_count"] or 0),
                 )

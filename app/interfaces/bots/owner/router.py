@@ -223,4 +223,36 @@ def make_router(
                 )
             )
         await message.answer("\n".join(lines))
+
+    @router.message(Command("owner_branches"))
+    async def owner_branches(message: Message) -> None:
+        allowed, locale = await _guard_owner(message)
+        if not allowed or not message.from_user:
+            return
+        actor = access_resolver.resolve_actor_context(message.from_user.id)
+        if actor is None:
+            return
+        days = _parse_window_days(message.text)
+        if days is None:
+            await message.answer(i18n.t("owner.metrics.invalid_window", locale))
+            await message.answer(i18n.t("owner.branches.usage", locale))
+            return
+        summary = await analytics.get_branch_metrics(clinic_id=actor.clinic_id, days=days)
+        if not summary.rows:
+            await message.answer(i18n.t("owner.branches.empty", locale).format(days=days))
+            return
+        lines = [i18n.t("owner.branches.title", locale).format(days=days)]
+        for row in summary.rows:
+            lines.append(
+                i18n.t("owner.branches.item", locale).format(
+                    branch=row.branch_label or row.branch_id,
+                    created=row.bookings_created_count,
+                    confirmed=row.bookings_confirmed_count,
+                    completed=row.bookings_completed_count,
+                    canceled=row.bookings_canceled_count,
+                    no_show=row.bookings_no_show_count,
+                    reschedule=row.bookings_reschedule_requested_count,
+                )
+            )
+        await message.answer("\n".join(lines))
     return router
