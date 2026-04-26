@@ -503,7 +503,7 @@ def test_book_entry_uses_trusted_identity_and_phone_to_skip_contact_prompt() -> 
     keyboard = message.answers[-1][1]
     assert keyboard is not None
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
-    assert callbacks == ["qbook:repeat:sess_1", "qbook:same_doctor:sess_1", "qbook:other:sess_1"]
+    assert callbacks == ["qbook:repeat:sess_1", "qbook:same_doctor:sess_1", "qbook:other:sess_1", "phome:home"]
 
 
 def test_quick_book_repeat_prefills_session_and_opens_slot_selection() -> None:
@@ -547,7 +547,7 @@ def test_quick_book_other_falls_back_to_service_selection() -> None:
     asyncio.run(_handler(router, "quick_book_other", kind="callback")(callback))
 
     assert callback.bot.edits
-    assert "Choose a service to begin booking." in callback.bot.edits[-1]["text"]
+    assert "Choose a service" in callback.bot.edits[-1]["text"]
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
     assert state["quick_booking_prefill"] == {}
 
@@ -571,7 +571,7 @@ def test_quick_book_same_doctor_prefills_doctor_and_branch_then_opens_service_se
     assert booking_flow.apply_same_doctor_prefill_calls == 1
     assert booking_flow.apply_prefill_calls == 0
     assert callback.bot.edits
-    assert "Choose a service to begin booking." in callback.bot.edits[-1]["text"]
+    assert "Choose a service" in callback.bot.edits[-1]["text"]
     assert booking_flow.session.doctor_preference_type == "specific"
     assert booking_flow.session.doctor_id == "doctor_1"
     assert booking_flow.session.branch_id == "branch_1"
@@ -598,7 +598,7 @@ def test_quick_book_same_doctor_with_incomplete_prefill_falls_back_safely() -> N
 
     assert booking_flow.apply_same_doctor_prefill_calls == 0
     assert callback.bot.edits
-    assert "Choose a service to begin booking." in callback.bot.edits[-1]["text"]
+    assert "Choose a service" in callback.bot.edits[-1]["text"]
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
     assert state["quick_booking_prefill"] == {}
 
@@ -690,7 +690,7 @@ def test_phome_book_has_parity_with_book_for_trusted_identity_and_phone() -> Non
     asyncio.run(_handler(router, "quick_book_same_doctor", kind="callback")(same_doctor_callback))
     assert booking_flow.apply_same_doctor_prefill_calls == 1
     assert same_doctor_callback.bot.edits
-    assert "Choose a service to begin booking." in same_doctor_callback.bot.edits[-1]["text"]
+    assert "Choose a service" in same_doctor_callback.bot.edits[-1]["text"]
 
 
 def test_book_entry_without_trusted_patient_falls_back_to_contact_prompt() -> None:

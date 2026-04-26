@@ -13,7 +13,7 @@ from app.application.booking.telegram_flow import BookingResumePanel
 from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
 from app.common.i18n import I18nService
 from app.domain.booking import BookingSession
-from app.domain.clinic_reference.models import Branch, Clinic
+from app.domain.clinic_reference.models import Branch, Clinic, Doctor, DoctorAccessCode, RecordStatus, Service
 from app.interfaces.bots.patient.router import make_router
 from app.interfaces.cards import CardCallbackCodec, CardRuntimeCoordinator, CardRuntimeStateStore
 from app.interfaces.cards.runtime_state import InMemoryRedis
@@ -155,10 +155,24 @@ class _BookingFlowStub:
         return BookingResumePanel(panel_key="contact_collection", booking_session=self.session)
 
     def list_services(self, *, clinic_id: str):
-        return []
+        return [Service(service_id="service_consult", clinic_id=clinic_id, code="CONSULT", title_key="service.consultation", duration_minutes=30)]
 
     def list_doctors(self, *, clinic_id: str, branch_id: str | None = None):
-        return []
+        return [Doctor(doctor_id="doctor_1", clinic_id=clinic_id, display_name="Dr One", specialty_code="dent", branch_id="branch_1")]
+
+    async def update_doctor_preference(self, **kwargs):  # noqa: ANN003
+        self.session = BookingSession(**{**asdict(self.session), "doctor_id": kwargs.get("doctor_id"), "doctor_preference_type": kwargs.get("doctor_preference_type", "specific")})
+        return self.session
+
+    async def update_service(self, **kwargs):  # noqa: ANN003
+        self.session = BookingSession(**{**asdict(self.session), "service_id": kwargs.get("service_id")})
+        return self.session
+
+    async def get_booking_session(self, *, booking_session_id: str):
+        return self.session if booking_session_id == self.session.booking_session_id else None
+
+    async def validate_active_session_callback(self, **kwargs):  # noqa: ANN003
+        return True
 
     async def list_slots_for_session(self, **kwargs):  # noqa: ANN003
         return []
@@ -352,6 +366,17 @@ def _reference() -> ClinicReferenceService:
     repo = InMemoryClinicReferenceRepository()
     repo.upsert_clinic(Clinic(clinic_id="clinic_main", code="MAIN", display_name="Main", timezone="UTC", default_locale="en"))
     repo.upsert_branch(Branch(branch_id="branch_1", clinic_id="clinic_main", display_name="Main Branch", address_text="-", timezone="UTC"))
+    repo.upsert_service(Service(service_id="service_consult", clinic_id="clinic_main", code="CONSULT", title_key="service.consultation", duration_minutes=30))
+    repo.upsert_doctor(Doctor(doctor_id="doctor_1", clinic_id="clinic_main", display_name="Dr One", specialty_code="dent", branch_id="branch_1"))
+    repo.upsert_doctor_access_code(
+        DoctorAccessCode(
+            doctor_access_code_id="dac_1",
+            clinic_id="clinic_main",
+            doctor_id="doctor_1",
+            code="ANNA-001",
+            status=RecordStatus.ACTIVE,
+        )
+    )
     return ClinicReferenceService(repo)
 
 
@@ -392,9 +417,84 @@ def test_start_renders_inline_home_panel_with_localized_actions() -> None:
     asyncio.run(_handler(router, "start")(msg))
 
     text, keyboard = msg.answers[-1]
+    assert "DentFlow" in text
     assert "Choose an action" in text
+    button_texts = [row[0].text for row in keyboard.inline_keyboard]
+    assert button_texts[0].startswith("🦷")
+    assert button_texts[1].startswith("📅")
     callbacks = [row[0].callback_data for row in keyboard.inline_keyboard]
     assert callbacks == ["phome:book", "phome:my_booking", "phome:recommendations", "phome:care"]
+
+
+def test_service_and_doctor_panels_include_navigation_and_code_flow() -> None:
+    router, runtime, _, _, _ = _build_router(with_recommendations=False, with_care=False)
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_flow", "care": {}},
+        )
+    )
+    callback = _Callback(data="book:back:services:sess_1", user_id=1001)
+    asyncio.run(_handler(router, "booking_back_to_services", kind="callback")(callback))
+    text, markup = _latest_callback_panel(callback)
+    assert "Choose a service" in text
+    svc_actions = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "book:back:services:sess_1" in svc_actions
+    assert "phome:home" in svc_actions
+
+    svc_callback = _Callback(data="book:svc:sess_1:service_consult", user_id=1001)
+    asyncio.run(_handler(router, "select_service", kind="callback")(svc_callback))
+    doc_text, doc_markup = _latest_callback_panel(svc_callback)
+    assert "Choose a doctor" in doc_text
+    doc_actions = [button.callback_data for row in doc_markup.inline_keyboard for button in row]
+    assert "book:doc:sess_1:any" in doc_actions
+    assert "book:doc_code:sess_1" in doc_actions
+    assert "book:back:doctors:sess_1" in doc_actions
+    assert "phome:home" in doc_actions
+
+
+def test_doctor_code_prompt_and_resolution_path() -> None:
+    router, runtime, booking_flow, _, _ = _build_router(with_recommendations=False, with_care=False)
+    callback = _Callback(data="book:doc_code:sess_1", user_id=1001)
+    asyncio.run(_handler(router, "booking_doctor_code_prompt", kind="callback")(callback))
+    text, markup = _latest_callback_panel(callback)
+    assert "Doctor code" in text
+    actions = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "book:back:doctors:sess_1" in actions
+    assert "phome:home" in actions
+
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_doctor_code", "care": {}},
+        )
+    )
+    msg = _Message(text="ANNA-001")
+    asyncio.run(_handler(router, "on_contact_navigation")(msg))
+    assert booking_flow.session.doctor_id == "doctor_1"
+
+
+def test_doctor_code_invalid_keeps_retry_navigation() -> None:
+    router, runtime, _, _, _ = _build_router(with_recommendations=False, with_care=False)
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_doctor_code", "care": {}},
+        )
+    )
+    msg = _Message(text="BAD-CODE")
+    asyncio.run(_handler(router, "on_contact_navigation")(msg))
+    if msg.answers:
+        text, markup = msg.answers[-1]
+    else:
+        text, markup = msg.bot.edits[-1]["text"], msg.bot.edits[-1]["reply_markup"]
+    assert "Code not found" in text
+    actions = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "book:back:doctors:sess_1" in actions
+    assert "phome:home" in actions
 
 
 def test_book_and_home_book_callback_have_equivalent_entry_state() -> None:
