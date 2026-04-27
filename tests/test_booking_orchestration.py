@@ -974,6 +974,7 @@ def test_canceled_booking_no_longer_blocks_live_slot_conflict_checks() -> None:
 
 
 def test_reminder_policy_uses_patient_preferences_then_clinic_fallback() -> None:
+    scheduled_start = datetime.now(timezone.utc).replace(second=0, microsecond=0) + timedelta(days=3)
     policy_repo = InMemoryPolicyRepository()
     resolver = PolicyResolver(policy_repo)
 
@@ -1006,8 +1007,8 @@ def test_reminder_policy_uses_patient_preferences_then_clinic_fallback() -> None
         slot_id="slot1",
         booking_mode="patient_bot",
         source_channel="telegram",
-        scheduled_start_at=datetime(2026, 4, 22, 10, 0, tzinfo=timezone.utc),
-        scheduled_end_at=datetime(2026, 4, 22, 10, 30, tzinfo=timezone.utc),
+        scheduled_start_at=scheduled_start,
+        scheduled_end_at=scheduled_start + timedelta(minutes=30),
         status="confirmed",
         reason_for_visit_short=None,
         patient_note=None,

@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
 
 from app.application.booking.orchestration_outcomes import ConflictOutcome, InvalidStateOutcome, OrchestrationSuccess, SlotUnavailableOutcome
 from app.application.booking.telegram_flow import BookingCardView, BookingResumePanel, PatientResolutionFlowResult
@@ -187,6 +187,10 @@ class _BookingFlowStub:
         self.finalize_calls += 1
         if self.finalize_result == "invalid":
             return InvalidStateOutcome(kind="invalid_state", reason="session terminal")
+        if self.finalize_result == "slot_unavailable":
+            return SlotUnavailableOutcome(kind="slot_unavailable", reason="taken")
+        if self.finalize_result == "conflict":
+            return ConflictOutcome(kind="conflict", reason="already booked")
         booking = Booking(
             booking_id="bk_1",
             clinic_id="clinic_main",
@@ -242,8 +246,8 @@ def _handler(router, name: str, *, kind: str = "message"):
     raise AssertionError(name)
 
 
-def _build_router_and_flow() -> tuple[object, _BookingFlowStub, CardRuntimeCoordinator]:
-    i18n = I18nService(locales_path=Path("locales"), default_locale="en")
+def _build_router_and_flow(*, locale: str = "en") -> tuple[object, _BookingFlowStub, CardRuntimeCoordinator]:
+    i18n = I18nService(locales_path=Path("locales"), default_locale=locale)
     runtime = CardRuntimeCoordinator(store=CardRuntimeStateStore(redis_client=InMemoryRedis()))
     codec = CardCallbackCodec(runtime=runtime)
     booking_flow = _BookingFlowStub()
@@ -255,7 +259,7 @@ def _build_router_and_flow() -> tuple[object, _BookingFlowStub, CardRuntimeCoord
         recommendation_service=None,
         care_commerce_service=None,
         recommendation_repository=None,
-        default_locale="en",
+        default_locale=locale,
         card_runtime=runtime,
         card_callback_codec=codec,
     )
@@ -277,10 +281,22 @@ def test_contact_submission_stops_at_review_ready_panel() -> None:
 
     assert booking_flow.finalize_calls == 0
     assert booking_flow.session.status == "review_ready"
-    assert "Review your booking before confirming" in msg.answers[-1][0]
+    assert "📋 Review your booking" in msg.answers[-1][0]
     assert "Teeth cleaning" in msg.answers[-1][0]
-    assert "2026-04-22 12:00 CEST" in msg.answers[-1][0]
-    assert msg.answers[-1][1].inline_keyboard[0][0].callback_data == "book:confirm:sess_1"
+    assert "Date: 22 Apr 2026" in msg.answers[-1][0]
+    assert "Time: 12:00" in msg.answers[-1][0]
+    assert "2026-" not in msg.answers[-1][0]
+    assert "UTC" not in msg.answers[-1][0]
+    assert "CEST" not in msg.answers[-1][0]
+    assert "service_consult" not in msg.answers[-1][0]
+    assert "doctor_1" not in msg.answers[-1][0]
+    assert "branch_1" not in msg.answers[-1][0]
+    assert " -\n" not in msg.answers[-1][0]
+    keyboard = msg.answers[-1][1]
+    assert keyboard.inline_keyboard[0][0].callback_data == "book:confirm:sess_1"
+    assert keyboard.inline_keyboard[1][0].callback_data == "book:review:back:sess_1"
+    assert keyboard.inline_keyboard[2][0].callback_data == "phome:home"
+    assert any(isinstance(reply_markup, ReplyKeyboardRemove) for _, reply_markup in msg.answers[:-1])
 
 
 def test_start_renders_inline_patient_home_panel() -> None:
@@ -436,15 +452,26 @@ def test_explicit_confirm_callback_finalizes_booking() -> None:
     assert callback.answers == []
     assert callback.bot.edits
     success_text = callback.bot.edits[-1]["text"]
-    assert isinstance(callback.bot.edits[-1]["reply_markup"], InlineKeyboardMarkup)
+    success_markup = callback.bot.edits[-1]["reply_markup"]
+    assert isinstance(success_markup, InlineKeyboardMarkup)
+    assert "✅ Booking created" in success_text
     assert "Doctor: Dr One" in success_text
     assert "Service: Teeth cleaning" in success_text
-    assert "Time: 2026-04-22 12:00 CEST" in success_text
+    assert "Date: 22 Apr 2026" in success_text
+    assert "Time: 12:00" in success_text
     assert "Branch: Main Branch" in success_text
-    assert "Status: Pending confirmation" in success_text
+    assert "Status: pending clinic confirmation" in success_text
+    assert "UTC" not in success_text
+    assert "CEST" not in success_text
+    assert "pending_confirmation" not in success_text
+    assert "telegram" not in success_text
+    assert "Actions:" not in success_text
+    assert "branch: -" not in success_text
     assert "doctor_1" not in success_text
     assert "service_consult" not in success_text
     assert "branch_1" not in success_text
+    assert success_markup.inline_keyboard[0][0].callback_data == "phome:my_booking"
+    assert success_markup.inline_keyboard[1][0].callback_data == "phome:home"
 
 
 def test_resume_review_ready_session_renders_review_panel() -> None:
@@ -462,7 +489,7 @@ def test_resume_review_ready_session_renders_review_panel() -> None:
     msg = _Message(text="/book", user_id=1001)
     asyncio.run(_handler(router, "book_entry")(msg))
 
-    assert "Review your booking before confirming" in msg.answers[-1][0]
+    assert "📋 Review your booking" in msg.answers[-1][0]
     assert msg.answers[-1][1].inline_keyboard[0][0].callback_data == "book:confirm:sess_1"
 
 
@@ -518,7 +545,83 @@ def test_finalize_invalid_path_is_safe_and_localized() -> None:
     asyncio.run(_handler(router, "confirm_new_booking", kind="callback")(callback))
 
     assert booking_flow.finalize_calls == 1
-    assert callback.answers[-1] == "Booking could not be finalized from the current state."
+    text, markup = _latest_callback_payload(callback)
+    assert "could not confirm your booking" in text.lower()
+    assert markup.inline_keyboard[0][0].callback_data == "phome:home"
+
+
+def test_review_back_callback_returns_contact_prompt_reply_keyboard() -> None:
+    router, _, runtime = _build_router_and_flow()
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_flow", "care": {}},
+        )
+    )
+    callback = _Callback(data="book:review:back:sess_1", user_id=1001, message_id=501)
+    asyncio.run(_handler(router, "booking_review_back", kind="callback")(callback))
+
+    text, keyboard = _latest_callback_payload(callback)
+    assert "Contact for booking" in text
+    assert isinstance(keyboard, ReplyKeyboardMarkup)
+    assert len(callback.answer_payloads) == 1
+    assert callback.answer_payloads[0][1] is False
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "new_booking_contact"
+
+
+def test_finalize_slot_unavailable_renders_recovery_panel_without_popup() -> None:
+    router, booking_flow, runtime = _build_router_and_flow()
+    booking_flow.finalize_result = "slot_unavailable"
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_contact", "care": {}},
+        )
+    )
+    callback = _Callback(data="book:confirm:sess_1", user_id=1001, message_id=501)
+    asyncio.run(_handler(router, "confirm_new_booking", kind="callback")(callback))
+
+    text, markup = _latest_callback_payload(callback)
+    assert "no longer available" in text.lower()
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row if button.callback_data]
+    assert "book:slots:back:sess_1" in callbacks
+    assert "phome:home" in callbacks
+    assert len(callback.answer_payloads) == 1
+
+
+def test_review_and_success_panels_ru_formatting() -> None:
+    router, booking_flow, runtime = _build_router_and_flow(locale="ru")
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_contact", "care": {}},
+        )
+    )
+    msg = _Message(text="+7 999 123 1234", user_id=1001)
+    asyncio.run(_handler(router, "on_contact_text")(msg))
+    review_text = msg.answers[-1][0]
+    assert "📋 Проверьте запись" in review_text
+    assert "🦷 Услуга:" in review_text
+    assert "👩‍⚕️ Врач:" in review_text
+    assert "📅 Дата: 22 апреля 2026" in review_text
+    assert "🕒 Время: 12:00" in review_text
+    assert "📍 Филиал:" in review_text
+    assert "📞 Телефон:" in review_text
+    assert all(token not in review_text for token in ("UTC", "MSK", "service:", "doctor:", "branch:", "2026-"))
+
+    callback = _Callback(data="book:confirm:sess_1", user_id=1001, message_id=501)
+    asyncio.run(_handler(router, "confirm_new_booking", kind="callback")(callback))
+    success_text = callback.bot.edits[-1]["text"]
+    assert "✅ Запись создана" in success_text
+    assert "📅 Дата: 22 апреля 2026" in success_text
+    assert "🕒 Время: 12:00" in success_text
+    assert "Статус: ожидает подтверждения клиники" in success_text
+    assert "Мы напомним вам о приёме заранее." in success_text
+    assert all(token not in success_text for token in ("UTC", "MSK", "pending_confirmation", "telegram", "Actions:"))
 
 
 def test_contact_submission_with_stale_session_id_is_ignored_and_state_is_normalized() -> None:

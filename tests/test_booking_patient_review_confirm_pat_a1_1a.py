@@ -221,8 +221,10 @@ def test_contact_submission_shows_review_and_defers_finalize_until_confirm() -> 
     asyncio.run(_handler(router, "on_contact_text")(msg))
 
     assert booking_flow.finalize_calls == 0
-    assert "Review your booking before confirming" in msg.answers[-1][0]
+    assert "📋 Review your booking" in msg.answers[-1][0]
     review_keyboard = msg.answers[-1][1]
     assert review_keyboard.inline_keyboard[0][0].callback_data == "book:confirm:sess_1"
+    assert review_keyboard.inline_keyboard[1][0].callback_data == "book:review:back:sess_1"
+    assert review_keyboard.inline_keyboard[2][0].callback_data == "phome:home"
 
     assert booking_flow.finalize_calls == 0
