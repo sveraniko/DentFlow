@@ -995,8 +995,10 @@ def test_recommendation_actions_keep_continuity_for_ack_accept_decline() -> None
         recommendation_service.rows[1].status = "viewed"
         callback = _Callback(data=f"prec:act:{action}:rec_latest", user_id=1001, message_id=501)
         asyncio.run(_handler(router, "recommendation_action_callback", kind="callback")(callback))
-        assert callback.answers
-        assert f"Current status: {expected_status}" in callback.answers[-1]
+        text, _ = _latest_callback_panel(callback)
+        assert "✅ Action saved." in text
+        assert f"Current status: {expected_status}" in text
+        assert len(callback.answer_payloads) <= 1
 
 
 def test_recommendation_callback_rejects_malformed_payload_safely() -> None:
@@ -1032,8 +1034,10 @@ def test_recommendation_open_and_actions_reject_other_patient_recommendation() -
     asyncio.run(_handler(router, "recommendation_open_callback", kind="callback")(open_callback))
     asyncio.run(_handler(router, "recommendation_action_callback", kind="callback")(action_callback))
 
-    assert "Recommendation not found" in open_callback.answers[-1]
-    assert "Recommendation not found." in action_callback.answers[-1]
+    open_text, _ = _latest_callback_panel(open_callback)
+    action_text, _ = _latest_callback_panel(action_callback)
+    assert "Recommendation not found" in open_text
+    assert "Recommendation not found" in action_text
 
 
 def test_recommendation_detail_shows_products_cta_only_when_targets_resolvable() -> None:
