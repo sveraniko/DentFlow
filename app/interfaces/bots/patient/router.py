@@ -2423,6 +2423,62 @@ def make_router(
             ]
         )
 
+    def _care_catalog_nav_button(*, locale: str) -> InlineKeyboardButton:
+        return InlineKeyboardButton(text=i18n.t("patient.care.nav.open_catalog", locale), callback_data="phome:care")
+
+    async def _render_care_orders_patient_resolution_failed_panel(message: Message | CallbackQuery, *, actor_id: int) -> None:
+        locale = _locale()
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id="care",
+            text=i18n.t("patient.care.orders.patient_resolution_failed.panel", locale),
+            keyboard=_care_entry_nav_keyboard(locale=locale),
+        )
+
+    async def _render_care_reserve_patient_resolution_failed_panel(message: Message | CallbackQuery, *, actor_id: int) -> None:
+        locale = _locale()
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id="care",
+            text=i18n.t("patient.care.reserve.patient_resolution_failed.panel", locale),
+            keyboard=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text=i18n.t("patient.care.nav.my_booking", locale), callback_data="phome:my_booking")],
+                    [_care_catalog_nav_button(locale=locale)],
+                    [InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")],
+                ]
+            ),
+        )
+
+    async def _render_recommendation_products_recovery_panel(
+        message: Message | CallbackQuery,
+        *,
+        actor_id: int,
+        recommendation_id: str,
+        text_key: str,
+    ) -> None:
+        locale = _locale()
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id="care",
+            text=i18n.t(text_key, locale),
+            keyboard=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=i18n.t("patient.care.products.back_to_recommendation", locale),
+                            callback_data=f"prec:open:{recommendation_id}",
+                        )
+                    ],
+                    [InlineKeyboardButton(text=i18n.t("patient.care.products.open_catalog", locale), callback_data="phome:care")],
+                    [InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")],
+                ]
+            ),
+        )
+
     def _patient_back_nav_text(*, locale: str) -> str:
         return i18n.t("patient.home.nav.back", locale)
 
@@ -3306,16 +3362,21 @@ def make_router(
             flow = await _load_flow_state(callback.from_user.id)
             flow.care = state
             await _save_flow_state(callback.from_user.id, flow)
-            await callback.answer(
-                i18n.t("patient.care.products.manual_target_invalid", _locale()).format(
-                    recommendation_id=recommendation.recommendation_id
-                ),
-                show_alert=True,
+            await _render_recommendation_products_recovery_panel(
+                callback,
+                actor_id=callback.from_user.id,
+                recommendation_id=recommendation.recommendation_id,
+                text_key="patient.care.products.manual_target_invalid.panel",
             )
             return
         resolved = resolution.products
         if not resolved:
-            await callback.answer(i18n.t("patient.care.products.empty", _locale()), show_alert=True)
+            await _render_recommendation_products_recovery_panel(
+                callback,
+                actor_id=callback.from_user.id,
+                recommendation_id=recommendation.recommendation_id,
+                text_key="patient.care.products.empty.panel",
+            )
             return
         state = await _care_state(callback.from_user.id)
         state.recommendation_id = recommendation.recommendation_id
@@ -3354,7 +3415,7 @@ def make_router(
         patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
         clinic_id = _primary_clinic_id()
         if not patient_id or clinic_id is None:
-            await callback.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()), show_alert=True)
+            await _render_care_orders_patient_resolution_failed_panel(callback, actor_id=callback.from_user.id)
             return
         await _render_care_orders_panel(
             callback,
@@ -4116,7 +4177,7 @@ def make_router(
             return
         patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
         if not patient_id:
-            await callback.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()), show_alert=True)
+            await _render_care_reserve_patient_resolution_failed_panel(callback, actor_id=callback.from_user.id)
             return
         product_id = callback.data.split(":", 2)[2]
         rec_id = (await _care_state(callback.from_user.id)).recommendation_id
