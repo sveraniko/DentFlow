@@ -574,6 +574,10 @@ def make_router(
     def _format_patient_datetime_parts(dt: datetime, *, locale: str) -> tuple[str, str]:
         return _format_patient_date(dt, locale=locale), _format_patient_time(dt, locale=locale)
 
+    def _format_patient_datetime_line(dt: datetime, *, locale: str) -> str:
+        date_label, time_label = _format_patient_datetime_parts(dt, locale=locale)
+        return f"{date_label} · {time_label}"
+
     def _parse_iso_date(value: str) -> date | None:
         if not value:
             return None
@@ -2165,11 +2169,17 @@ def make_router(
             i18n=i18n,
         )
         timezone_name = _resolve_booking_timezone_name(clinic_id=session.clinic_id, branch_id=session.branch_id)
-        current_time = source_booking.scheduled_start_at.astimezone(_zone_or_utc(timezone_name)).strftime("%Y-%m-%d %H:%M %Z")
+        current_time = _format_patient_datetime_line(
+            source_booking.scheduled_start_at.astimezone(_zone_or_utc(timezone_name)),
+            locale=locale,
+        )
         selected_slot = await booking_flow.get_availability_slot(slot_id=session.selected_slot_id)
         new_time = i18n.t("patient.booking.review.value.missing", locale)
         if selected_slot is not None:
-            new_time = selected_slot.start_at.astimezone(_zone_or_utc(timezone_name)).strftime("%Y-%m-%d %H:%M %Z")
+            new_time = _format_patient_datetime_line(
+                selected_slot.start_at.astimezone(_zone_or_utc(timezone_name)),
+                locale=locale,
+            )
         text = i18n.t("patient.booking.reschedule.review.panel", locale).format(
             current_time=current_time,
             new_time=new_time,
@@ -2184,7 +2194,11 @@ def make_router(
                         text=i18n.t("patient.booking.reschedule.review.confirm_cta", locale),
                         callback_data=f"rsch:confirm:{session_id}",
                     )
-                ]
+                ],
+                [
+                    InlineKeyboardButton(text=i18n.t("patient.home.nav.back", locale), callback_data=f"book:slots:back:{session_id}"),
+                    _patient_home_nav_button(locale=locale),
+                ],
             ]
         )
         await _send_or_edit_panel(
