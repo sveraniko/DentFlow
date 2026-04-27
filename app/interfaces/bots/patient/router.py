@@ -40,7 +40,7 @@ from app.interfaces.cards import (
     SourceRef,
 )
 
-_TERMINAL_RECOMMENDATION_STATUSES = {"accepted", "declined", "withdrawn", "expired"}
+_TERMINAL_RECOMMENDATION_STATUSES = {"accepted", "declined", "withdrawn", "expired", "completed"}
 _TERMINAL_CARE_ORDER_STATUSES = {"fulfilled", "canceled", "expired"}
 
 
@@ -2858,6 +2858,92 @@ def make_router(
             return translated
         return status.replace("_", " ").strip().title() or i18n.t("patient.booking.review.value.missing", locale)
 
+    def _recommendation_value_or_missing(value: str | None, *, locale: str) -> str:
+        trusted = (value or "").strip()
+        return trusted or i18n.t("patient.recommendations.detail.value_missing", locale)
+
+    def _recommendation_readable_body(body: str | None, *, locale: str) -> str:
+        trusted = _recommendation_value_or_missing(body, locale=locale)
+        if trusted == i18n.t("patient.recommendations.detail.value_missing", locale):
+            return trusted
+        max_len = 1200
+        if len(trusted) <= max_len:
+            return trusted
+        suffix = i18n.t("patient.recommendations.detail.body_trimmed_suffix", locale)
+        return f"{trusted[:max_len].rstrip()}\n\n{suffix}"
+
+    def _recommendation_is_terminal(status: str) -> bool:
+        return status in _TERMINAL_RECOMMENDATION_STATUSES
+
+    def _recommendation_status_badge(*, status: str, locale: str) -> str:
+        key = f"patient.recommendations.detail.status_badge.{status}"
+        translated = i18n.t(key, locale)
+        if translated != key:
+            return translated
+        return _recommendation_status_label(status=status, locale=locale)
+
+    def _recommendation_next_step(*, status: str, locale: str) -> str:
+        key = f"patient.recommendations.detail.next.{status}"
+        translated = i18n.t(key, locale)
+        if translated != key:
+            return translated
+        return ""
+
+    def _recommendation_action_buttons_for_status(*, recommendation: Any, locale: str) -> list[list[InlineKeyboardButton]]:
+        status = (getattr(recommendation, "status", "") or "").strip()
+        rows: list[list[InlineKeyboardButton]] = []
+        if _recommendation_is_terminal(status):
+            return rows
+        mutation_buttons: list[InlineKeyboardButton] = []
+        if status in {"issued", "viewed"}:
+            mutation_buttons.append(
+                InlineKeyboardButton(
+                    text=i18n.t("patient.recommendations.action.ack.button", locale),
+                    callback_data=f"prec:act:ack:{recommendation.recommendation_id}",
+                )
+            )
+        if status in {"issued", "viewed", "acknowledged"}:
+            mutation_buttons.extend(
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.recommendations.action.accept.button", locale),
+                        callback_data=f"prec:act:accept:{recommendation.recommendation_id}",
+                    ),
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.recommendations.action.decline.button", locale),
+                        callback_data=f"prec:act:decline:{recommendation.recommendation_id}",
+                    ),
+                ]
+            )
+        if mutation_buttons:
+            rows.append(mutation_buttons)
+        return rows
+
+    async def _recommendation_detail_keyboard(*, recommendation: Any, locale: str) -> InlineKeyboardMarkup:
+        rows = _recommendation_action_buttons_for_status(recommendation=recommendation, locale=locale)
+        products_allowed = recommendation.status not in {"withdrawn", "expired"}
+        if products_allowed and await _has_recommendation_products_target(recommendation=recommendation):
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.recommendations.action.products.button", locale),
+                        callback_data=f"prec:products:{recommendation.recommendation_id}",
+                    )
+                ]
+            )
+        rows.append([InlineKeyboardButton(text=i18n.t("patient.recommendations.nav.back_to_list", locale), callback_data="phome:recommendations")])
+        rows.append([InlineKeyboardButton(text=i18n.t("patient.recommendations.nav.home", locale), callback_data="phome:home")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def _recommendation_not_found_keyboard(*, locale: str) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=i18n.t("patient.recommendations.command.nav.recommendations", locale), callback_data="phome:recommendations")],
+                [InlineKeyboardButton(text=i18n.t("patient.recommendations.command.nav.my_booking", locale), callback_data="phome:my_booking")],
+                [InlineKeyboardButton(text=i18n.t("patient.recommendations.command.nav.home", locale), callback_data="phome:home")],
+            ]
+        )
+
     def _pick_latest_recommendation(rows: list[Any]) -> tuple[Any, list[Any]]:
         if not rows:
             return None, []
@@ -2902,52 +2988,40 @@ def make_router(
         session_id: str = "patient_home",
     ) -> None:
         locale = _locale()
+        status_key = (recommendation.status or "").strip()
         type_label = _recommendation_type_label(recommendation_type=recommendation.recommendation_type, locale=locale)
-        status_label = _recommendation_status_label(status=recommendation.status, locale=locale)
-        text = i18n.t("patient.recommendations.detail.panel", locale).format(
-            title=recommendation.title or i18n.t("patient.booking.review.value.missing", locale),
+        status_label = _recommendation_status_label(status=status_key, locale=locale)
+        status_badge = _recommendation_status_badge(status=status_key, locale=locale)
+        next_step = _recommendation_next_step(status=status_key, locale=locale)
+        next_step_block = f"\n\n{next_step}" if next_step else ""
+        text = i18n.t("patient.recommendations.detail.card", locale).format(
+            panel_title=i18n.t("patient.recommendations.detail.title", locale),
+            status_badge=status_badge,
+            topic_field=i18n.t("patient.recommendations.detail.field.topic", locale),
+            type_field=i18n.t("patient.recommendations.detail.field.type", locale),
+            status_field=i18n.t("patient.recommendations.detail.field.status", locale),
+            title_value=_recommendation_value_or_missing(recommendation.title, locale=locale),
             recommendation_type=type_label,
             status=status_label,
-            body=(recommendation.body_text or i18n.t("patient.booking.review.value.missing", locale)),
-        )
-        keyboard_rows: list[list[InlineKeyboardButton]] = []
-        keyboard_rows.append(
-            [
-                InlineKeyboardButton(
-                    text=i18n.t("patient.recommendations.action.ack.button", locale),
-                    callback_data=f"prec:act:ack:{recommendation.recommendation_id}",
-                ),
-                InlineKeyboardButton(
-                    text=i18n.t("patient.recommendations.action.accept.button", locale),
-                    callback_data=f"prec:act:accept:{recommendation.recommendation_id}",
-                ),
-                InlineKeyboardButton(
-                    text=i18n.t("patient.recommendations.action.decline.button", locale),
-                    callback_data=f"prec:act:decline:{recommendation.recommendation_id}",
-                ),
-            ]
-        )
-        if await _has_recommendation_products_target(recommendation=recommendation):
-            keyboard_rows.append(
-                [
-                    InlineKeyboardButton(
-                        text=i18n.t("patient.recommendations.action.products.button", locale),
-                        callback_data=f"prec:products:{recommendation.recommendation_id}",
-                    )
-                ]
-            )
-        keyboard_rows.append(
-            [InlineKeyboardButton(text=i18n.t("patient.recommendations.nav.back_to_list", locale), callback_data="phome:recommendations")]
-        )
-        keyboard_rows.append(
-            [InlineKeyboardButton(text=i18n.t("patient.recommendations.nav.home", locale), callback_data="phome:home")]
+            body=_recommendation_readable_body(recommendation.body_text, locale=locale),
+            next_step_optional=next_step_block,
         )
         await _send_or_edit_panel(
             actor_id=actor_id,
             message=message,
             session_id=session_id,
             text=text,
-            keyboard=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
+            keyboard=await _recommendation_detail_keyboard(recommendation=recommendation, locale=locale),
+        )
+
+    async def _render_recommendation_not_found_panel(message: Message | CallbackQuery, *, actor_id: int) -> None:
+        locale = _locale()
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id="patient_home",
+            text=i18n.t("patient.recommendations.command.not_found.panel", locale),
+            keyboard=_recommendation_not_found_keyboard(locale=locale),
         )
 
     async def _render_recommendations_panel(
@@ -3640,14 +3714,17 @@ def make_router(
             return
         recommendation_id = parts[2]
         patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
+        if not patient_id:
+            await _render_recommendations_patient_resolution_failed_panel(callback, actor_id=callback.from_user.id)
+            return
         recommendation = await recommendation_service.get(recommendation_id)
-        if not patient_id or recommendation is None or recommendation.patient_id != patient_id:
-            await callback.answer(i18n.t("patient.recommendations.not_found", _locale()), show_alert=True)
+        if recommendation is None or recommendation.patient_id != patient_id:
+            await _render_recommendation_not_found_panel(callback, actor_id=callback.from_user.id)
             return
         if recommendation.status == "issued":
             recommendation = await recommendation_service.mark_viewed(recommendation_id=recommendation.recommendation_id)
         if recommendation is None:
-            await callback.answer(i18n.t("patient.recommendations.not_found", _locale()), show_alert=True)
+            await _render_recommendation_not_found_panel(callback, actor_id=callback.from_user.id)
             return
         await _render_recommendation_detail_panel(
             message=callback,

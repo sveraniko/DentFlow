@@ -1020,7 +1020,7 @@ def test_recommendation_open_callback_rejects_stale_or_manually_replayed_payload
     assert malformed.answers
     assert "no longer available" in malformed.answers[-1]
     assert missing.answers
-    assert "Recommendation not found." in missing.answers[-1]
+    assert "Recommendation not found" in missing.answers[-1]
 
 
 def test_recommendation_open_and_actions_reject_other_patient_recommendation() -> None:
@@ -1032,7 +1032,7 @@ def test_recommendation_open_and_actions_reject_other_patient_recommendation() -
     asyncio.run(_handler(router, "recommendation_open_callback", kind="callback")(open_callback))
     asyncio.run(_handler(router, "recommendation_action_callback", kind="callback")(action_callback))
 
-    assert "Recommendation not found." in open_callback.answers[-1]
+    assert "Recommendation not found" in open_callback.answers[-1]
     assert "Recommendation not found." in action_callback.answers[-1]
 
 
@@ -1044,7 +1044,7 @@ def test_recommendation_detail_shows_products_cta_only_when_targets_resolvable()
 
     asyncio.run(_handler(router, "recommendations_open")(message))
     with_target_buttons = [button.text for row in message.answers[-1][1].inline_keyboard for button in row]
-    assert "Open recommended products" in with_target_buttons
+    assert "🪥 Open recommended products" in with_target_buttons
 
     care_service.resolution_by_recommendation_id["rec_latest"] = []
     message_no_target = _Message(text="/recommendation_open rec_latest", user_id=1001)
