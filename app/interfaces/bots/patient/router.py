@@ -2538,6 +2538,47 @@ def make_router(
     def _care_catalog_nav_button(*, locale: str) -> InlineKeyboardButton:
         return InlineKeyboardButton(text=i18n.t("patient.care.nav.open_catalog", locale), callback_data="phome:care")
 
+    def _recommendation_command_recovery_keyboard(
+        *,
+        locale: str,
+        include_care_catalog: bool = False,
+    ) -> InlineKeyboardMarkup:
+        rows: list[list[InlineKeyboardButton]] = [
+            [
+                InlineKeyboardButton(
+                    text=i18n.t("patient.recommendations.command.nav.recommendations", locale),
+                    callback_data="phome:recommendations",
+                )
+            ]
+        ]
+        if include_care_catalog:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.recommendations.command.nav.care_catalog", locale),
+                        callback_data="phome:care",
+                    )
+                ]
+            )
+        else:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.recommendations.command.nav.my_booking", locale),
+                        callback_data="phome:my_booking",
+                    )
+                ]
+            )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=i18n.t("patient.recommendations.command.nav.home", locale),
+                    callback_data="phome:home",
+                )
+            ]
+        )
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
     async def _render_care_orders_patient_resolution_failed_panel(message: Message | CallbackQuery, *, actor_id: int) -> None:
         locale = _locale()
         await _send_or_edit_panel(
@@ -3130,18 +3171,40 @@ def make_router(
         if not message.from_user or not message.text or recommendation_service is None:
             return
         parts = message.text.split(maxsplit=1)
+        locale = _locale()
         if len(parts) != 2:
-            await message.answer(i18n.t("patient.recommendations.open.usage", _locale()))
+            await _send_or_edit_panel(
+                actor_id=message.from_user.id,
+                message=message,
+                session_id="patient_home",
+                text=i18n.t("patient.recommendations.command.open.usage.panel", locale),
+                keyboard=_recommendation_command_recovery_keyboard(locale=locale),
+            )
             return
         patient_id = await _resolve_patient_id_for_user(message.from_user.id)
+        if not patient_id:
+            await _render_recommendations_patient_resolution_failed_panel(message, actor_id=message.from_user.id)
+            return
         recommendation = await recommendation_service.get(parts[1].strip())
-        if not patient_id or recommendation is None or recommendation.patient_id != patient_id:
-            await message.answer(i18n.t("patient.recommendations.not_found", _locale()))
+        if recommendation is None or recommendation.patient_id != patient_id:
+            await _send_or_edit_panel(
+                actor_id=message.from_user.id,
+                message=message,
+                session_id="patient_home",
+                text=i18n.t("patient.recommendations.command.not_found.panel", locale),
+                keyboard=_recommendation_command_recovery_keyboard(locale=locale),
+            )
             return
         if recommendation.status == "issued":
             recommendation = await recommendation_service.mark_viewed(recommendation_id=recommendation.recommendation_id)
         if recommendation is None:
-            await message.answer(i18n.t("patient.recommendations.not_found", _locale()))
+            await _send_or_edit_panel(
+                actor_id=message.from_user.id,
+                message=message,
+                session_id="patient_home",
+                text=i18n.t("patient.recommendations.command.not_found.panel", locale),
+                keyboard=_recommendation_command_recovery_keyboard(locale=locale),
+            )
             return
         await _render_recommendation_detail_panel(
             message=message,
@@ -3154,16 +3217,32 @@ def make_router(
     async def recommendations_action(message: Message) -> None:
         if not message.from_user or not message.text or recommendation_service is None:
             return
+        locale = _locale()
         parts = message.text.split(maxsplit=3)
-        if len(parts) != 4:
-            await message.answer(i18n.t("patient.recommendations.action.usage", _locale()))
+        if len(parts) != 3:
+            await _send_or_edit_panel(
+                actor_id=message.from_user.id,
+                message=message,
+                session_id="patient_home",
+                text=i18n.t("patient.recommendations.command.action.usage.panel", locale),
+                keyboard=_recommendation_command_recovery_keyboard(locale=locale),
+            )
             return
         action = parts[1].strip()
         recommendation_id = parts[2].strip()
         patient_id = await _resolve_patient_id_for_user(message.from_user.id)
+        if not patient_id:
+            await _render_recommendations_patient_resolution_failed_panel(message, actor_id=message.from_user.id)
+            return
         recommendation = await recommendation_service.get(recommendation_id)
-        if not patient_id or recommendation is None or recommendation.patient_id != patient_id:
-            await message.answer(i18n.t("patient.recommendations.not_found", _locale()))
+        if recommendation is None or recommendation.patient_id != patient_id:
+            await _send_or_edit_panel(
+                actor_id=message.from_user.id,
+                message=message,
+                session_id="patient_home",
+                text=i18n.t("patient.recommendations.command.not_found.panel", locale),
+                keyboard=_recommendation_command_recovery_keyboard(locale=locale),
+            )
             return
         try:
             if action == "ack":
@@ -3173,14 +3252,32 @@ def make_router(
             elif action == "decline":
                 updated = await recommendation_service.decline(recommendation_id=recommendation_id)
             else:
-                await message.answer(i18n.t("patient.recommendations.action.usage", _locale()))
+                await _send_or_edit_panel(
+                    actor_id=message.from_user.id,
+                    message=message,
+                    session_id="patient_home",
+                    text=i18n.t("patient.recommendations.command.action.usage.panel", locale),
+                    keyboard=_recommendation_command_recovery_keyboard(locale=locale),
+                )
                 return
         except ValueError:
-            await message.answer(i18n.t("patient.recommendations.action.invalid_state", _locale()))
+            await _send_or_edit_panel(
+                actor_id=message.from_user.id,
+                message=message,
+                session_id="patient_home",
+                text=i18n.t("patient.recommendations.command.action.invalid_state.panel", locale),
+                keyboard=_recommendation_command_recovery_keyboard(locale=locale),
+            )
             return
         resolved = updated or recommendation
         if resolved is None:
-            await message.answer(i18n.t("patient.recommendations.not_found", _locale()))
+            await _send_or_edit_panel(
+                actor_id=message.from_user.id,
+                message=message,
+                session_id="patient_home",
+                text=i18n.t("patient.recommendations.command.not_found.panel", locale),
+                keyboard=_recommendation_command_recovery_keyboard(locale=locale),
+            )
             return
         await _render_recommendation_detail_panel(
             message=message,
@@ -3193,17 +3290,30 @@ def make_router(
     async def recommendation_products(message: Message) -> None:
         if not message.from_user or not message.text or recommendation_service is None or care_commerce_service is None:
             return
+        locale = _locale()
         parts = message.text.split(maxsplit=1)
         if len(parts) != 2:
-            await message.answer(i18n.t("patient.care.products.open.usage", _locale()))
+            await _send_or_edit_panel(
+                actor_id=message.from_user.id,
+                message=message,
+                session_id="care",
+                text=i18n.t("patient.recommendations.command.products.usage.panel", locale),
+                keyboard=_recommendation_command_recovery_keyboard(locale=locale, include_care_catalog=True),
+            )
             return
         patient_id = await _resolve_patient_id_for_user(message.from_user.id)
         if not patient_id:
-            await message.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()))
+            await _render_recommendations_patient_resolution_failed_panel(message, actor_id=message.from_user.id)
             return
         recommendation = await recommendation_service.get(parts[1].strip())
         if recommendation is None or recommendation.patient_id != patient_id:
-            await message.answer(i18n.t("patient.recommendations.not_found", _locale()))
+            await _send_or_edit_panel(
+                actor_id=message.from_user.id,
+                message=message,
+                session_id="patient_home",
+                text=i18n.t("patient.recommendations.command.not_found.panel", locale),
+                keyboard=_recommendation_command_recovery_keyboard(locale=locale),
+            )
             return
         resolution = await care_commerce_service.resolve_recommendation_target_result(
             clinic_id=_primary_clinic_id() or recommendation.clinic_id,
@@ -3219,15 +3329,21 @@ def make_router(
             flow = await _load_flow_state(message.from_user.id)
             flow.care = state
             await _save_flow_state(message.from_user.id, flow)
-            await message.answer(
-                i18n.t("patient.care.products.manual_target_invalid", _locale()).format(
-                    recommendation_id=recommendation.recommendation_id
-                )
+            await _render_recommendation_products_recovery_panel(
+                message,
+                actor_id=message.from_user.id,
+                recommendation_id=recommendation.recommendation_id,
+                text_key="patient.care.products.manual_target_invalid.panel",
             )
             return
         resolved = resolution.products
         if not resolved:
-            await message.answer(i18n.t("patient.care.products.empty", _locale()))
+            await _render_recommendation_products_recovery_panel(
+                message,
+                actor_id=message.from_user.id,
+                recommendation_id=recommendation.recommendation_id,
+                text_key="patient.care.products.empty.panel",
+            )
             return
         state = await _care_state(message.from_user.id)
         state.recommendation_id = recommendation.recommendation_id
