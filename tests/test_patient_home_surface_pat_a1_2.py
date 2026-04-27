@@ -1109,7 +1109,7 @@ def test_care_orders_command_and_callback_share_canonical_orders_surface() -> No
     message_text, _ = message.answers[-1]
     callback_text, _ = _latest_callback_panel(callback)
     assert message_text == callback_text
-    assert "no care reserves or orders" in message_text
+    assert "You have no reserves yet" in message_text
 
 
 def test_care_orders_empty_state_includes_browse_catalog_cta() -> None:
@@ -1119,9 +1119,9 @@ def test_care_orders_empty_state_includes_browse_catalog_cta() -> None:
     asyncio.run(_handler(router, "care_orders_callback", kind="callback")(callback))
 
     text, markup = _latest_callback_panel(callback)
-    assert "no care reserves or orders" in text
+    assert "You have no reserves yet" in text
     actions = [button.callback_data for row in markup.inline_keyboard for button in row]
-    assert "care:catalog" in actions
+    assert "phome:care" in actions
 
 
 
@@ -1134,7 +1134,7 @@ def test_care_reserve_success_panel_includes_current_order_and_orders_ctas() -> 
 
     text, markup = _latest_callback_panel(callback)
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
-    assert "Reservation created ✅" in text
+    assert "✅ Product reserved" in text
     assert "Status: Confirmed" in text
     assert "careo:open:co_new_1" in callbacks
     assert "care:orders" in callbacks
@@ -1193,12 +1193,12 @@ def test_careo_open_callback_is_ownership_safe_and_reuses_canonical_detail() -> 
     open_callback = _Callback(data="careo:open:co_new_1", user_id=1001)
     asyncio.run(_handler(router, "care_order_open_callback", kind="callback")(open_callback))
     owner_text, _ = _latest_callback_panel(open_callback)
-    assert "Order co_new_1" in owner_text
+    assert "📦 Care reserve / order" in owner_text
 
     foreign_callback = _Callback(data="careo:open:co_new_1", user_id=2002)
     asyncio.run(_handler(router, "care_order_open_callback", kind="callback")(foreign_callback))
     assert foreign_callback.answers
-    assert "no longer accessible" in foreign_callback.answers[-1]
+    assert "Order not found" in foreign_callback.answers[-1]
 
 
 def test_proactive_careo_open_and_manual_orders_open_share_same_canonical_surface() -> None:
@@ -1224,7 +1224,7 @@ def test_proactive_careo_open_and_manual_orders_open_share_same_canonical_surfac
     proactive_text, _ = _latest_callback_panel(proactive_open)
     manual_text, _ = _latest_callback_panel(manual_open)
     assert proactive_text == manual_text
-    assert "Order co_new_1" in proactive_text
+    assert "📦 Care reserve / order" in proactive_text
 
 
 def test_careo_open_callback_rejects_malformed_and_stale_payloads_safely() -> None:
@@ -1238,7 +1238,7 @@ def test_careo_open_callback_rejects_malformed_and_stale_payloads_safely() -> No
     assert malformed.answers
     assert "no longer accessible" in malformed.answers[-1]
     assert stale.answers
-    assert "no longer accessible" in stale.answers[-1]
+    assert "Order not found" in stale.answers[-1]
 
 
 def test_pat_a8_2b_contains_no_new_migration_artifacts() -> None:
