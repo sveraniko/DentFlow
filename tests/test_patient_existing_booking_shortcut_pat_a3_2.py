@@ -449,10 +449,10 @@ def test_my_booking_reschedule_moves_to_reschedule_start_panel() -> None:
     assert callback.bot.edits
     text = callback.bot.edits[-1]["text"]
     keyboard = callback.bot.edits[-1]["reply_markup"]
-    assert "Reschedule mode started." in text
+    assert "🔁 Reschedule booking" in text
     assert keyboard is not None
     labels = [button.text for row in keyboard.inline_keyboard for button in row]
-    assert labels == ["Select new time"]
+    assert labels == ["Select new time", "📅 Your booking", "🏠 Main menu"]
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
     assert state["booking_session_id"] == "sess_rsch_1"
     assert state["booking_mode"] == "reschedule_booking_control"
