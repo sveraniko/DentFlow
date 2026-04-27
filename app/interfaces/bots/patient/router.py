@@ -694,8 +694,8 @@ def make_router(
                 actor_id=actor_id,
                 message=message,
                 session_id="care",
-                text=i18n.t("patient.care.catalog.empty", locale),
-                keyboard=InlineKeyboardMarkup(inline_keyboard=[[_patient_home_nav_button(locale=locale)]]),
+                text=i18n.t("patient.care.catalog.empty.panel", locale),
+                keyboard=_care_entry_nav_keyboard(locale=locale),
             )
             return
         state = await _care_state(actor_id)
@@ -784,12 +784,12 @@ def make_router(
                 actor_id=actor_id,
                 message=message,
                 session_id="care",
-                text=i18n.t("patient.care.catalog.category.empty", locale),
+                text=i18n.t("patient.care.catalog.category.empty.panel", locale),
                 keyboard=InlineKeyboardMarkup(
                     inline_keyboard=[
                         [
                             InlineKeyboardButton(
-                                text=i18n.t("common.back", locale),
+                                text=i18n.t("patient.care.nav.back_to_categories", locale),
                                 callback_data=await _encode_runtime_callback(
                                     profile=CardProfile.PRODUCT,
                                     entity_type=EntityType.CARE_PRODUCT,
@@ -801,7 +801,8 @@ def make_router(
                                     state_token=f"care:{actor_id}",
                                 ),
                             )
-                        ]
+                        ],
+                        [InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")],
                     ]
                 ),
             )
@@ -2414,6 +2415,14 @@ def make_router(
     def _patient_home_nav_button(*, locale: str) -> InlineKeyboardButton:
         return InlineKeyboardButton(text=i18n.t("patient.home.nav.home", locale), callback_data="phome:home")
 
+    def _care_entry_nav_keyboard(*, locale: str) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=i18n.t("patient.care.nav.my_booking", locale), callback_data="phome:my_booking")],
+                [InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")],
+            ]
+        )
+
     def _patient_back_nav_text(*, locale: str) -> str:
         return i18n.t("patient.home.nav.back", locale)
 
@@ -2781,11 +2790,13 @@ def make_router(
 
     async def _enter_care_catalog(message: Message | CallbackQuery, *, actor_id: int) -> None:
         if care_commerce_service is None:
+            locale = _locale()
             await _send_or_edit_panel(
                 actor_id=actor_id,
                 message=message,
                 session_id="patient_home",
-                text=i18n.t("patient.home.action.unavailable", _locale()),
+                text=i18n.t("patient.care.unavailable.panel", locale),
+                keyboard=_care_entry_nav_keyboard(locale=locale),
             )
             return
         clinic_id = _primary_clinic_id()
@@ -3314,14 +3325,12 @@ def make_router(
         if not callback.from_user:
             return
         await _enter_care_catalog(callback, actor_id=callback.from_user.id)
-        await callback.answer()
 
     @router.callback_query(F.data == "care:catalog")
     async def care_catalog_callback(callback: CallbackQuery) -> None:
         if not callback.from_user:
             return
         await _enter_care_catalog(callback, actor_id=callback.from_user.id)
-        await callback.answer()
 
     @router.callback_query(F.data == "care:orders")
     async def care_orders_callback(callback: CallbackQuery) -> None:
