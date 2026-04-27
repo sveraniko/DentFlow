@@ -26,6 +26,7 @@ _ALLOWED_CALLBACK_PREFIXES = (
     "book:back:services:",
     "book:back:doctors:",
     "book:slot:",
+    "book:review:back:",
     "book:slots:more:",
     "book:slots:dates:",
     "book:slots:date:",

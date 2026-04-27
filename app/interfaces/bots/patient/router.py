@@ -562,6 +562,18 @@ def make_router(
     def _slot_datetime_label(*, value: datetime, locale: str) -> str:
         return f"{_slot_date_label(value=value.date(), locale=locale)} · {value:%H:%M}"
 
+    def _format_patient_date(dt: datetime, *, locale: str) -> str:
+        value = dt.date()
+        if _is_ru_locale(locale):
+            return f"{value.day} {_month_label(value=value, locale=locale)} {value.year}"
+        return f"{value.day} {_month_label(value=value, locale=locale)} {value.year}"
+
+    def _format_patient_time(dt: datetime, *, locale: str) -> str:  # noqa: ARG001
+        return f"{dt:%H:%M}"
+
+    def _format_patient_datetime_parts(dt: datetime, *, locale: str) -> tuple[str, str]:
+        return _format_patient_date(dt, locale=locale), _format_patient_time(dt, locale=locale)
+
     def _parse_iso_date(value: str) -> date | None:
         if not value:
             return None
@@ -2202,7 +2214,7 @@ def make_router(
             service_label = _resolve_service_label(
                 service_title_key=(service.title_key if service is not None else None),
                 service_code=(service.code if service is not None else None),
-                fallback_id=session.service_id,
+                fallback_id=None,
                 locale=locale,
                 fallback_locale=fallback_locale,
                 i18n=i18n,
@@ -2213,7 +2225,7 @@ def make_router(
             doctor = reference.get_doctor(session.clinic_id, session.doctor_id or "") if session.doctor_id else None
             doctor_label = _resolve_reference_label(
                 display_name=(doctor.display_name if doctor is not None else None),
-                fallback_id=session.doctor_id,
+                fallback_id=None,
                 locale=locale,
                 i18n=i18n,
             )
@@ -2221,23 +2233,27 @@ def make_router(
         branch = reference.get_branch(session.clinic_id, session.branch_id or "") if session.branch_id else None
         branch_label = _resolve_reference_label(
             display_name=(branch.display_name if branch is not None else None),
-            fallback_id=session.branch_id,
+            fallback_id=None,
             locale=locale,
             i18n=i18n,
         )
+        if branch_label == i18n.t("patient.booking.review.value.missing", locale):
+            branch_label = i18n.t("patient.booking.review.field.branch_missing", locale)
 
-        datetime_label = i18n.t("patient.booking.review.value.missing", locale)
+        date_label = i18n.t("patient.booking.review.value.missing", locale)
+        time_label = i18n.t("patient.booking.review.value.missing", locale)
         if session.selected_slot_id:
             slot = await booking_flow.get_availability_slot(slot_id=session.selected_slot_id)
             if slot is not None:
                 timezone_name = _resolve_booking_timezone_name(clinic_id=session.clinic_id, branch_id=slot.branch_id or session.branch_id)
-                datetime_label = slot.start_at.astimezone(_zone_or_utc(timezone_name)).strftime("%Y-%m-%d %H:%M %Z")
+                date_label, time_label = _format_patient_datetime_parts(slot.start_at.astimezone(_zone_or_utc(timezone_name)), locale=locale)
 
-        phone_label = session.contact_phone_snapshot or i18n.t("patient.booking.review.value.missing", locale)
-        text = i18n.t("patient.booking.review.panel", locale).format(
+        phone_label = (session.contact_phone_snapshot or "").strip() or i18n.t("patient.booking.review.field.phone_missing", locale)
+        text = i18n.t("patient.booking.review.panel_v2", locale).format(
             service=service_label,
             doctor=doctor_label,
-            datetime=datetime_label,
+            date=date_label,
+            time=time_label,
             branch=branch_label,
             phone=phone_label,
         )
@@ -2248,7 +2264,9 @@ def make_router(
                         text=i18n.t("patient.booking.review.confirm_cta", locale),
                         callback_data=f"book:confirm:{session_id}",
                     )
-                ]
+                ],
+                [InlineKeyboardButton(text=i18n.t("patient.booking.review.back", locale), callback_data=f"book:review:back:{session_id}")],
+                [_patient_home_nav_button(locale=locale)],
             ]
         )
         await _send_or_edit_panel(
@@ -2259,17 +2277,24 @@ def make_router(
             keyboard=keyboard,
         )
 
+    def _resolve_patient_booking_status_label(*, status: str, locale: str) -> str:
+        key = f"patient.booking.status.{status}"
+        translated = i18n.t(key, locale)
+        if translated and translated != key:
+            return translated
+        fallback = i18n.t("patient.booking.status.fallback", locale)
+        return fallback.format(status=status.replace("_", " ").strip())
+
     async def _render_finalize_outcome(message: Message | CallbackQuery, *, actor_id: int, session_id: str, finalized) -> None:
         locale = _locale()
         if isinstance(finalized, OrchestrationSuccess):
             booking = finalized.entity
-            card = booking_flow.build_booking_card(booking=booking)
             clinic_fallback_locale = _fallback_locale_for_clinic(booking.clinic_id)
             service = reference.get_service(booking.clinic_id, booking.service_id)
             service_label = _resolve_service_label(
                 service_title_key=(service.title_key if service is not None else None),
                 service_code=(service.code if service is not None else None),
-                fallback_id=booking.service_id,
+                fallback_id=None,
                 locale=locale,
                 fallback_locale=clinic_fallback_locale,
                 i18n=i18n,
@@ -2277,27 +2302,33 @@ def make_router(
             doctor = reference.get_doctor(booking.clinic_id, booking.doctor_id or "") if booking.doctor_id else None
             doctor_label = _resolve_reference_label(
                 display_name=(doctor.display_name if doctor is not None else None),
-                fallback_id=booking.doctor_id,
+                fallback_id=None,
                 locale=locale,
                 i18n=i18n,
             )
             branch = reference.get_branch(booking.clinic_id, booking.branch_id or "") if booking.branch_id else None
             branch_label = _resolve_reference_label(
                 display_name=(branch.display_name if branch is not None else None),
-                fallback_id=booking.branch_id,
+                fallback_id=None,
                 locale=locale,
                 i18n=i18n,
             )
+            if branch_label == i18n.t("patient.booking.review.value.missing", locale):
+                branch_label = i18n.t("patient.booking.review.field.branch_missing", locale)
+            timezone_name = _resolve_booking_timezone_name(clinic_id=booking.clinic_id, branch_id=booking.branch_id)
+            date_label, time_label = _format_patient_datetime_parts(booking.scheduled_start_at.astimezone(_zone_or_utc(timezone_name)), locale=locale)
             await _send_or_edit_panel(
                 actor_id=actor_id,
                 message=message,
                 session_id=session_id,
-                text=i18n.t("patient.booking.success", locale).format(
+                text=i18n.t("patient.booking.success.panel_v2", locale).format(
                     doctor=doctor_label,
                     service=service_label,
-                    datetime=card.datetime_label,
+                    date=date_label,
+                    time=time_label,
                     branch=branch_label,
-                    status=_resolve_status_label(status=booking.status, locale=locale, i18n=i18n),
+                    status=_resolve_patient_booking_status_label(status=booking.status, locale=locale),
+                    reminder_hint=i18n.t("patient.booking.success.reminder_hint", locale),
                 ),
                 keyboard=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
@@ -2311,13 +2342,36 @@ def make_router(
                 ]),
             )
             return
-        key = {
-            "invalid_state": "patient.booking.finalize.invalid_state",
-            "slot_unavailable": "patient.booking.finalize.slot_unavailable",
-            "conflict": "patient.booking.finalize.conflict",
-            "escalated": "patient.booking.escalated",
-        }.get(finalized.kind, "patient.booking.finalize.invalid_state")
-        await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=session_id, text=i18n.t(key, locale))
+        if isinstance(finalized, InvalidStateOutcome):
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id=session_id,
+                text=i18n.t("patient.booking.finalize.failure.invalid.panel", locale),
+                keyboard=InlineKeyboardMarkup(inline_keyboard=[[_patient_home_nav_button(locale=locale)]]),
+            )
+            return
+        if isinstance(finalized, (SlotUnavailableOutcome, ConflictOutcome)):
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id=session_id,
+                text=i18n.t("patient.booking.finalize.failure.slot_unavailable.panel", locale),
+                keyboard=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text=i18n.t("patient.booking.finalize.failure.choose_another_time", locale), callback_data=f"book:slots:back:{session_id}")],
+                        [_patient_home_nav_button(locale=locale)],
+                    ]
+                ),
+            )
+            return
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id=session_id,
+            text=i18n.t("patient.booking.escalated", locale),
+            keyboard=InlineKeyboardMarkup(inline_keyboard=[[_patient_home_nav_button(locale=locale)]]),
+        )
 
     async def _render_patient_home_panel(message: Message | CallbackQuery, *, actor_id: int) -> None:
         locale = _locale()
@@ -4321,6 +4375,33 @@ def make_router(
             finalized=finalized,
         )
 
+    @router.callback_query(F.data.startswith("book:review:back:"))
+    async def booking_review_back(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        locale = _locale()
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            return
+        _, _, _, callback_session_id = callback.data.split(":", 3)
+        if not await booking_flow.validate_active_session_callback(
+            clinic_id=clinic_id,
+            telegram_user_id=callback.from_user.id,
+            callback_session_id=callback_session_id,
+        ):
+            await callback.answer(i18n.t("patient.booking.callback.stale", locale), show_alert=True)
+            return
+        flow = await _load_flow_state(callback.from_user.id)
+        flow.booking_mode = "new_booking_contact"
+        await _save_flow_state(callback.from_user.id, flow)
+        await _send_or_edit_panel(
+            actor_id=callback.from_user.id,
+            message=callback,
+            session_id=callback_session_id,
+            text=i18n.t("patient.booking.contact.prompt", locale),
+            reply_keyboard=_patient_contact_reply_keyboard(locale=locale, include_back=True),
+        )
+
     @router.callback_query(F.data.startswith("mybk:reschedule:"))
     async def request_reschedule(callback: CallbackQuery) -> None:
         if not callback.from_user:
@@ -4867,6 +4948,7 @@ def make_router(
                 text=i18n.t("patient.booking.review.invalid", locale),
             )
             return
+        await _remove_patient_reply_keyboard(message)
         await _render_review_finalize_panel(message, actor_id=actor_id, session_id=session_id)
 
     async def _render_resume_panel(message: Message | CallbackQuery, *, actor_id: int, session_id: str, clinic_id: str) -> None:

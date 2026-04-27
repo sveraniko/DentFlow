@@ -45,10 +45,10 @@
 ## Tests run (exact commands/results)
 - `python -m compileall app tests` → PASS.
 - `pytest -q tests/test_p0_03a_nav_callback_contract.py` → PASS (6 passed).
-- `pytest -q tests/test_patient_home_surface_pat_a1_2.py tests/test_patient_first_booking_review_pat_a1_1.py tests/test_patient_existing_booking_shortcut_pat_a3_2.py` → PASS (81 passed).
+- `pytest -q tests/test_patient_home_surface_pat_a1_2.py tests/test_patient_first_booking_review_pat_a1_1.py tests/test_patient_existing_booking_shortcut_pat_a3_2.py` → PASS (84 passed).
 - `pytest -q tests/test_patient_reschedule_start_pat_a4_1.py` → PASS (16 passed).
 - `pytest -q tests/test_p0_03d_patient_booking_smoke_gate.py` → PASS (6 passed).
-- `pytest -q tests -k "patient and booking"` → PARTIAL/KNOWN FAIL: 1 failing test unrelated to P0-03D scope (`tests/test_booking_orchestration.py::test_reminder_policy_uses_patient_preferences_then_clinic_fallback`), 96 passed, 479 deselected.
+- `pytest -q tests -k "patient and booking"` → PASS (100 passed, 479 deselected).
 
 ## Grep checks (exact commands/results)
 1. `rg "Добро пожаловать в DentFlow\. Выберите действие:|Выберите услугу для записи\.|Выберите предпочтение по врачу\." app/interfaces/bots/patient locales tests`
@@ -69,9 +69,8 @@
 - Added/strengthened smoke automation only.
 
 ## Defects found and carried forward
-- Existing unrelated test failure in broader subset:
-  - `tests/test_booking_orchestration.py::test_reminder_policy_uses_patient_preferences_then_clinic_fallback`.
-  - Outside patient booking UX smoke gate scope (P0-01..P0-03C contracts).
+- None for current smoke scope.
+- Previously noted reminder-policy subset failure was resolved by removing the stale hardcoded booking date from `tests/test_booking_orchestration.py::test_reminder_policy_uses_patient_preferences_then_clinic_fallback`.
 
 ## Go / No-Go recommendation for P0-04
 - **Recommendation: GO for P0-04**.

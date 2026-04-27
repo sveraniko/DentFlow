@@ -248,7 +248,7 @@ def test_success_uses_human_labels_and_localized_status_in_normal_path() -> None
     assert "Doctor: Dr One" in success_text
     assert "Service: Teeth cleaning" in success_text
     assert "Branch: Main Branch" in success_text
-    assert "Status: Pending confirmation" in success_text
+    assert "Status: pending clinic confirmation" in success_text
     assert "doctor_1" not in success_text
     assert "service_consult" not in success_text
     assert "branch_1" not in success_text
@@ -258,15 +258,17 @@ def test_review_fallback_is_safe_when_slot_and_reference_rows_are_missing() -> N
     router, booking_flow, runtime = _build(include_refs=False)
     booking_flow.session = BookingSession(**{**asdict(booking_flow.session), "selected_slot_id": "slot_missing"})
     review_text = _prepare_review(router, runtime, booking_flow)
-    assert "Doctor: doctor_1" in review_text
-    assert "Branch: branch_1" in review_text
+    assert "Doctor: -" in review_text
+    assert "Branch: not selected" in review_text
     assert "Time: -" in review_text
 
 
 def test_invalid_timezone_falls_back_to_utc_without_crash() -> None:
     router, booking_flow, runtime = _build(clinic_tz="Mars/Phobos")
     review_text = _prepare_review(router, runtime, booking_flow)
-    assert "2026-04-22 10:00 UTC" in review_text
+    assert "Date: 22 Apr 2026" in review_text
+    assert "Time: 10:00" in review_text
+    assert "UTC" not in review_text
 
 
 def test_title_key_does_not_leak_when_service_localization_is_missing() -> None:
