@@ -224,3 +224,14 @@ DentFlow seed data must be:
 - synthetic enough to avoid privacy stupidity.
 
 That is how the team tests a real system instead of a cardboard prop.
+
+---
+
+## 11. Stack3 booking seed date mode
+
+- `scripts/seed_stack3_booking.py` keeps static/default behavior by default.
+- Optional relative mode is available for stale-fixture resilience:
+  - `python scripts/seed_stack3_booking.py --relative-dates`
+  - `python scripts/seed_stack3_booking.py --relative-dates --start-offset-days 2`
+  - `python scripts/seed_stack3_booking.py --relative-dates --source-anchor-date 2026-04-20`
+- Relative mode shifts booking/session/slot/waitlist date fields while preserving time-of-day, durations, and IDs.
