@@ -24,9 +24,6 @@ from app.application.recommendation import RecommendationService
 from app.interfaces.cards import (
     BookingCardAdapter,
     BookingRuntimeViewBuilder,
-    CareOrderCardAdapter,
-    CareOrderRuntimeSnapshot,
-    CareOrderRuntimeViewBuilder,
     CardAction,
     CardCallback,
     CardCallbackCodec,
@@ -34,7 +31,6 @@ from app.interfaces.cards import (
     CardMode,
     CardProfile,
     CardRuntimeCoordinator,
-    CardShellRenderer,
     EntityType,
     PanelFamily,
     ProductCardAdapter,
@@ -200,33 +196,45 @@ class _RepeatActionView:
 @dataclass(slots=True)
 class _CompactCareOrderRowCard:
     care_order_id: str
-    shell: Any
-
-    def button_label(self) -> str:
-        meta = {row.key: row.value for row in self.shell.meta_lines}
-        parts = [self.shell.title, meta.get("item", ""), meta.get("branch", ""), meta.get("pickup", "")]
-        parts = [part for part in parts if part]
-        return " · ".join(parts)[:62]
+    short_ref: str = ""
+    item_summary: str = ""
+    branch_label: str = ""
+    status_label: str = ""
+    amount_label: str = ""
+    pickup_hint: str | None = None
+    reservation_hint: str | None = None
+    shell: Any | None = None
 
     def reserve_label(self) -> str:
+        if self.shell is None:
+            return ""
         action = next((item for item in self.shell.actions if item.action == CardAction.RESERVE), None)
         return action.label if action else ""
 
     def object_block_lines(self, *, index: int) -> list[str]:
-        meta = {row.key: row.value for row in self.shell.meta_lines}
-        lines = [f"{index}. {self.shell.title}"]
-        item = meta.get("item")
-        if item:
-            lines.append(f"   - {item}")
-        branch = meta.get("branch")
-        if branch:
-            lines.append(f"   - {branch}")
-        status = self.shell.badges[0].text if self.shell.badges else None
-        if status:
-            lines.append(f"   - {status}")
-        pickup = meta.get("pickup")
-        if pickup:
-            lines.append(f"   - {pickup}")
+        if self.shell is not None:
+            meta = {row.key: row.value for row in self.shell.meta_lines}
+            lines = [f"{index}. {self.shell.title}"]
+            for key in ("item", "branch"):
+                value = meta.get(key)
+                if value:
+                    lines.append(f"   - {value}")
+            status = self.shell.badges[0].text if self.shell.badges else None
+            if status:
+                lines.append(f"   - {status}")
+            pickup = meta.get("pickup")
+            if pickup:
+                lines.append(f"   - {pickup}")
+            return lines
+        lines = [f"{index}. {self.short_ref}"]
+        if self.item_summary:
+            lines.append(f"   - {self.item_summary}")
+        if self.branch_label:
+            lines.append(f"   - {self.branch_label}")
+        if self.status_label:
+            lines.append(f"   - {self.status_label}")
+        if self.pickup_hint:
+            lines.append(f"   - {self.pickup_hint}")
         return lines
 
 
@@ -356,7 +364,6 @@ def make_router(
     _SESSION_SCOPE = "patient_flow"
     booking_builder = BookingRuntimeViewBuilder()
     product_builder = ProductRuntimeViewBuilder()
-    care_order_builder = CareOrderRuntimeViewBuilder()
 
     def _locale() -> str:
         return default_locale
@@ -1151,12 +1158,16 @@ def make_router(
             await _render_branch_picker(message, actor_id=actor_id, clinic_id=clinic_id, product_id=product_id)
             return
         free_qty = await care_commerce_service.compute_free_qty(branch_id=branch_id, care_product_id=product_id)
+        branch_label = _resolve_care_order_branch_label(clinic_id=clinic_id, branch_id=branch_id, locale=locale)
         if free_qty < 1:
             await _send_or_edit_panel(
                 actor_id=actor_id,
                 message=message,
                 session_id="care",
-                text=i18n.t("patient.care.order.out_of_stock", locale).format(branch_id=branch_id, title=i18n.t(product.title_key, locale)),
+                text=i18n.t("patient.care.order.out_of_stock.panel", locale).format(
+                    product=i18n.t(product.title_key, locale),
+                    branch=branch_label,
+                ),
                 keyboard=InlineKeyboardMarkup(
                     inline_keyboard=[
                         [
@@ -1173,7 +1184,9 @@ def make_router(
                                     state_token=f"care:{actor_id}",
                                 ),
                             )
-                        ]
+                        ],
+                        [_care_catalog_nav_button(locale=locale)],
+                        [InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")],
                     ]
                 ),
             )
@@ -1195,15 +1208,13 @@ def make_router(
             branch_id=branch_id,
             reserved_qty=1,
         )
-        branch = next((item for item in reference.list_branches(clinic_id) if item.branch_id == branch_id), None)
-        branch_label = branch.display_name if branch else branch_id
         status_label = _resolve_care_order_status_label(status="confirmed", locale=locale, i18n=i18n)
         next_step = i18n.t("patient.care.order.next_step", locale)
         await _send_or_edit_panel(
             actor_id=actor_id,
             message=message,
             session_id="care",
-            text=i18n.t("patient.care.order.result", locale).format(
+            text=i18n.t("patient.care.order.result.panel", locale).format(
                 product=i18n.t(product.title_key, locale),
                 branch=branch_label,
                 status=status_label,
@@ -1213,16 +1224,18 @@ def make_router(
                 inline_keyboard=[
                     [
                         InlineKeyboardButton(
-                            text=i18n.t("patient.care.order.open_current.action", locale),
+                            text=i18n.t("patient.care.order.result.open_current", locale),
                             callback_data=f"careo:open:{order.care_order_id}",
                         )
                     ],
                     [
                         InlineKeyboardButton(
-                            text=i18n.t("patient.care.order.open_orders.action", locale),
+                            text=i18n.t("patient.care.order.result.open_orders", locale),
                             callback_data="care:orders",
                         )
                     ],
+                    [InlineKeyboardButton(text=i18n.t("patient.care.order.result.open_catalog", locale), callback_data="phome:care")],
+                    [InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")],
                 ]
             ),
         )
@@ -1389,8 +1402,10 @@ def make_router(
             requested_branch_id=selected_branch_id,
             allowed_branch_ids=candidate_branch_ids,
         )
+        branch_map = {branch.branch_id: branch.display_name for branch in reference.list_branches(clinic_id)}
+        selected_branch_label = branch_map.get(outcome.selected_branch_id or "", outcome.selected_branch_id or "")
         if outcome.ok and outcome.created_order and outcome.selected_branch_id:
-            product_name = "-"
+            product_name = i18n.t("patient.booking.review.value.missing", locale)
             if outcome.product is not None:
                 content = await care_commerce_service.resolve_product_content(
                     clinic_id=clinic_id,
@@ -1399,13 +1414,10 @@ def make_router(
                     fallback_locale=locale,
                 )
                 product_name = content.title or i18n.t(outcome.product.title_key, locale)
-            quantity = outcome.source_item.quantity if outcome.source_item is not None else 1
             return _RepeatActionView(
-                text=i18n.t("patient.care.orders.repeat.result", locale).format(
-                    care_order_id=outcome.created_order.care_order_id,
+                text=i18n.t("patient.care.orders.repeat.success.panel", locale).format(
                     product=product_name,
-                    quantity=quantity,
-                    branch_id=outcome.selected_branch_id,
+                    branch=selected_branch_label or _resolve_reference_label(display_name=None, fallback_id=None, locale=locale, i18n=i18n),
                     status=i18n.t(f"care.order.status.{outcome.created_order.status}", locale),
                     next_step=i18n.t("patient.care.orders.repeat.next_step", locale),
                 ),
@@ -1415,40 +1427,45 @@ def make_router(
         if outcome.reason in {"source_not_found", "source_empty"}:
             return _RepeatActionView(text=i18n.t("patient.care.orders.repeat.not_found", locale))
         if outcome.reason == "product_unavailable":
-            return _RepeatActionView(text=i18n.t("patient.care.orders.repeat.unavailable", locale))
+            return _RepeatActionView(text=i18n.t("patient.care.orders.repeat.unavailable.panel", locale))
         if outcome.reason in {"branch_selection_required", "branch_required"} and outcome.available_branch_ids:
             return _RepeatActionView(
-                text=i18n.t("patient.care.orders.repeat.branch_select_required", locale),
+                text=i18n.t("patient.care.orders.repeat.choose_branch.panel", locale),
                 choose_branch=True,
                 branch_choices=outcome.available_branch_ids,
             )
         if outcome.reason == "branch_invalid":
             if outcome.available_branch_ids:
                 return _RepeatActionView(
-                    text=i18n.t("patient.care.orders.repeat.branch_changed", locale),
+                    text=i18n.t("patient.care.orders.repeat.choose_branch.panel", locale),
                     choose_branch=True,
                     branch_choices=outcome.available_branch_ids,
                 )
-            return _RepeatActionView(text=i18n.t("patient.care.orders.repeat.branch_required", locale))
+            return _RepeatActionView(text=i18n.t("patient.care.orders.repeat.unavailable.panel", locale))
         if outcome.reason in {"availability_inactive", "insufficient_stock", "branch_unavailable"}:
-            if outcome.selected_branch_id:
-                message = i18n.t("patient.care.orders.repeat.out_of_stock", locale).format(branch_id=outcome.selected_branch_id)
-            else:
-                message = i18n.t("patient.care.orders.repeat.branch_required", locale)
             if outcome.available_branch_ids:
-                message = f"{message}\n{i18n.t('patient.care.orders.repeat.branch_select_required', locale)}"
-                return _RepeatActionView(text=message, choose_branch=True, branch_choices=outcome.available_branch_ids)
-            return _RepeatActionView(text=message)
-        return _RepeatActionView(text=i18n.t("patient.care.orders.repeat.branch_required", locale))
+                return _RepeatActionView(
+                    text=i18n.t("patient.care.orders.repeat.choose_branch.panel", locale),
+                    choose_branch=True,
+                    branch_choices=outcome.available_branch_ids,
+                )
+            return _RepeatActionView(text=i18n.t("patient.care.orders.repeat.unavailable.panel", locale))
+        return _RepeatActionView(text=i18n.t("patient.care.orders.repeat.unavailable.panel", locale))
 
     async def _repeat_action_keyboard(*, actor_id: int, care_order_id: str, view: _RepeatActionView) -> InlineKeyboardMarkup | None:
+        locale = _locale()
         rows: list[list[InlineKeyboardButton]] = []
+        clinic_id = _primary_clinic_id()
+        branch_map = {branch.branch_id: branch.display_name for branch in reference.list_branches(clinic_id)} if clinic_id else {}
         if view.choose_branch and view.branch_choices:
             for branch_id in view.branch_choices:
                 rows.append(
                     [
                         InlineKeyboardButton(
-                            text=i18n.t("patient.care.orders.repeat.branch_option", _locale()).format(branch_id=branch_id),
+                            text=i18n.t("patient.care.orders.repeat.branch_option", locale).format(
+                                branch=branch_map.get(branch_id, branch_id),
+                                branch_id=branch_map.get(branch_id, branch_id),
+                            ),
                             callback_data=await _encode_runtime_callback(
                                 profile=CardProfile.CARE_ORDER,
                                 entity_type=EntityType.CARE_ORDER,
@@ -1466,7 +1483,7 @@ def make_router(
             rows.append(
                 [
                     InlineKeyboardButton(
-                        text=i18n.t("patient.care.orders.repeat.open_new", _locale()),
+                        text=i18n.t("patient.care.orders.repeat.open_new", locale),
                         callback_data=await _encode_runtime_callback(
                             profile=CardProfile.CARE_ORDER,
                             entity_type=EntityType.CARE_ORDER,
@@ -1483,7 +1500,7 @@ def make_router(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=i18n.t("patient.care.orders.repeat.back_to_orders", _locale()),
+                    text=i18n.t("patient.care.orders.repeat.back_to_orders", locale),
                     callback_data=await _encode_runtime_callback(
                         profile=CardProfile.CARE_ORDER,
                         entity_type=EntityType.CARE_ORDER,
@@ -1497,64 +1514,74 @@ def make_router(
                 )
             ]
         )
+        rows.append([InlineKeyboardButton(text=i18n.t("patient.care.orders.repeat.open_catalog", locale), callback_data="phome:care")])
+        rows.append([InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")])
         return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
+    def _safe_order_ref(care_order_id: str, *, locale: str) -> str:
+        ref = (care_order_id or "").strip()
+        if not ref:
+            return i18n.t("patient.booking.review.value.missing", locale)
+        return f"№ …{ref[-6:]}" if len(ref) > 6 else f"№ {ref}"
+
+    def _resolve_care_order_branch_label(*, clinic_id: str, branch_id: str | None, locale: str) -> str:
+        if branch_id:
+            branch = reference.get_branch(clinic_id, branch_id)
+            if branch and branch.display_name:
+                return branch.display_name
+        return i18n.t("patient.care.order.card.branch_missing", locale)
+
+    def _format_care_money(amount: Any, currency_code: str | None, *, locale: str) -> str:
+        if amount is None:
+            return i18n.t("patient.care.order.card.amount_missing", locale)
+        try:
+            value = float(amount)
+        except (TypeError, ValueError):
+            return i18n.t("patient.care.order.card.amount_missing", locale)
+        rendered = f"{value:.2f}".rstrip("0").rstrip(".")
+        currency = (currency_code or "").strip()
+        return f"{rendered} {currency}".strip()
+
+    async def _build_care_order_items_summary(*, clinic_id: str, order_id: str, locale: str) -> str:
+        items = await care_commerce_service.repository.list_order_items(order_id)
+        if not items:
+            return i18n.t("patient.booking.review.value.missing", locale)
+        first = items[0]
+        title = i18n.t("patient.booking.review.value.missing", locale)
+        product = await care_commerce_service.repository.get_product(first.care_product_id)
+        if product is not None:
+            content = await care_commerce_service.resolve_product_content(
+                clinic_id=clinic_id,
+                product=product,
+                locale=locale,
+                fallback_locale=locale,
+            )
+            title = content.title or i18n.t(product.title_key, locale)
+        suffix = f" +{len(items) - 1}" if len(items) > 1 else ""
+        return f"{title} x{first.quantity}{suffix}"
+
     async def _build_care_order_row_card(*, clinic_id: str, actor_id: int, order: Any, locale: str) -> _CompactCareOrderRowCard:
+        _ = actor_id
+        item_summary = await _build_care_order_items_summary(clinic_id=clinic_id, order_id=order.care_order_id, locale=locale)
         items = await care_commerce_service.repository.list_order_items(order.care_order_id)
-        item_summary = "-"
         reservation_hint = None
-        pickup_ready = order.status in {"ready_for_pickup", "issued", "fulfilled"}
-        if items:
-            first = items[0]
-            product = await care_commerce_service.repository.get_product(first.care_product_id)
-            title = "-"
-            if product is not None:
-                content = await care_commerce_service.resolve_product_content(
-                    clinic_id=clinic_id,
-                    product=product,
-                    locale=locale,
-                    fallback_locale=locale,
-                )
-                title = content.title or i18n.t(product.title_key, locale)
-            suffix = ""
-            if len(items) > 1:
-                suffix = f" +{len(items) - 1}"
-            item_summary = f"{title} x{first.quantity}{suffix}"
-            if order.pickup_branch_id:
-                row = await care_commerce_service.get_branch_product_availability(
-                    branch_id=order.pickup_branch_id,
-                    care_product_id=first.care_product_id,
-                )
-                if row is not None and row.status == "active" and row.free_qty >= first.quantity:
-                    reservation_hint = i18n.t("patient.care.orders.repeat.availability_ok", locale).format(branch_id=order.pickup_branch_id)
-                else:
-                    reservation_hint = i18n.t("patient.care.orders.repeat.out_of_stock", locale).format(branch_id=order.pickup_branch_id)
-        branch_label = order.pickup_branch_id or "-"
-        seed = care_order_builder.build_seed(
-            snapshot=CareOrderRuntimeSnapshot(
-                care_order_id=order.care_order_id,
-                status=order.status,
-                total_amount=order.total_amount,
-                currency_code=order.currency_code,
-                item_summary=item_summary,
-                branch_label=branch_label,
-                pickup_ready=pickup_ready,
-                reservation_hint=reservation_hint,
-                issued=order.status in {"issued", "fulfilled"},
-                fulfilled=order.status == "fulfilled",
-                state_token=f"care:{actor_id}",
-            ),
-            i18n=i18n,
-            locale=locale,
+        if items and order.pickup_branch_id:
+            row = await care_commerce_service.get_branch_product_availability(
+                branch_id=order.pickup_branch_id,
+                care_product_id=items[0].care_product_id,
+            )
+            if row is not None and row.status == "active" and row.free_qty >= items[0].quantity:
+                reservation_hint = i18n.t("patient.care.order.card.reservation_hint", locale)
+        return _CompactCareOrderRowCard(
+            care_order_id=order.care_order_id,
+            short_ref=_safe_order_ref(order.care_order_id, locale=locale),
+            item_summary=item_summary,
+            branch_label=_resolve_care_order_branch_label(clinic_id=clinic_id, branch_id=order.pickup_branch_id, locale=locale),
+            status_label=_resolve_care_order_status_label(status=order.status, locale=locale, i18n=i18n),
+            amount_label=_format_care_money(order.total_amount, order.currency_code, locale=locale),
+            pickup_hint=i18n.t("patient.care.order.card.pickup_hint", locale) if order.status in {"ready_for_pickup", "issued", "fulfilled"} else None,
+            reservation_hint=reservation_hint,
         )
-        shell = CareOrderCardAdapter.build(
-            seed=seed,
-            source=SourceRef(context=SourceContext.CARE_ORDER_LIST, source_ref="care.orders.row"),
-            i18n=i18n,
-            locale=locale,
-            mode=CardMode.LIST_ROW,
-        )
-        return _CompactCareOrderRowCard(care_order_id=order.care_order_id, shell=shell)
 
     async def _render_care_orders_panel(
         message: Message | CallbackQuery,
@@ -1571,10 +1598,11 @@ def make_router(
                 actor_id=actor_id,
                 message=message,
                 session_id="care",
-                text=i18n.t("patient.care.orders.empty", locale),
+                text=i18n.t("patient.care.orders.list.empty.panel", locale),
                 keyboard=InlineKeyboardMarkup(
                     inline_keyboard=[
-                        [InlineKeyboardButton(text=i18n.t("patient.care.orders.empty.browse", locale), callback_data="care:catalog")]
+                        [_care_catalog_nav_button(locale=locale)],
+                        [InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")],
                     ]
                 ),
             )
@@ -1588,35 +1616,47 @@ def make_router(
         flow.care = state
         await _save_flow_state(actor_id, flow)
 
-        current_cards: list[_CompactCareOrderRowCard] = []
-        for order in live_rows[:1]:
-            current_cards.append(await _build_care_order_row_card(clinic_id=clinic_id, actor_id=actor_id, order=order, locale=locale))
-        history_cards: list[_CompactCareOrderRowCard] = []
-        for order in history_rows[start:end]:
-            history_cards.append(await _build_care_order_row_card(clinic_id=clinic_id, actor_id=actor_id, order=order, locale=locale))
+        current_cards = [
+            await _build_care_order_row_card(clinic_id=clinic_id, actor_id=actor_id, order=order, locale=locale)
+            for order in live_rows[:1]
+        ]
+        history_cards = [
+            await _build_care_order_row_card(clinic_id=clinic_id, actor_id=actor_id, order=order, locale=locale)
+            for order in history_rows[start:end]
+        ]
 
-        lines: list[str] = [i18n.t("patient.care.orders.title", locale)]
+        lines: list[str] = [i18n.t("patient.care.orders.list.title", locale)]
+
+        def _append_row(row: _CompactCareOrderRowCard) -> None:
+            lines.append(f"• {row.short_ref}")
+            lines.append(f"  {row.item_summary}")
+            lines.append(f"  {i18n.t('patient.care.order.card.field.status', locale)}: {row.status_label}")
+            lines.append(f"  {i18n.t('patient.care.order.card.field.branch', locale)}: {row.branch_label}")
+            lines.append(f"  {i18n.t('patient.care.order.card.field.total', locale)}: {row.amount_label}")
+            if row.pickup_hint:
+                lines.append(f"  {row.pickup_hint}")
+            if row.reservation_hint:
+                lines.append(f"  {row.reservation_hint}")
+
         if current_cards:
             lines.append("")
-            lines.append(i18n.t("patient.care.orders.current.label", locale))
-            lines.extend(current_cards[0].object_block_lines(index=1))
+            lines.append(i18n.t("patient.care.orders.list.current", locale))
+            _append_row(current_cards[0])
         if history_rows:
             lines.append("")
-            lines.append(i18n.t("patient.care.orders.history.label", locale))
+            lines.append(i18n.t("patient.care.orders.list.history", locale))
+            for idx, card in enumerate(history_cards):
+                _append_row(card)
+                if idx < len(history_cards) - 1:
+                    lines.append("")
             if history_cards:
-                for idx, card in enumerate(history_cards, start=1):
-                    lines.extend(card.object_block_lines(index=idx))
-                    if idx < len(history_cards):
-                        lines.append("")
                 lines.append("")
                 lines.append(i18n.t("patient.care.catalog.page_indicator", locale).format(page=active_page + 1))
-            else:
-                lines.append(i18n.t("patient.care.orders.history.empty", locale))
 
         keyboard_rows: list[list[InlineKeyboardButton]] = []
 
         async def _order_row_buttons(*, row_card: _CompactCareOrderRowCard) -> list[InlineKeyboardButton]:
-            return [
+            buttons = [
                 InlineKeyboardButton(
                     text=i18n.t("patient.care.orders.open.action", locale),
                     callback_data=await _encode_runtime_callback(
@@ -1629,21 +1669,26 @@ def make_router(
                         page_or_index="open",
                         state_token=f"care:{actor_id}",
                     ),
-                ),
-                InlineKeyboardButton(
-                    text=row_card.reserve_label(),
-                    callback_data=await _encode_runtime_callback(
-                        profile=CardProfile.CARE_ORDER,
-                        entity_type=EntityType.CARE_ORDER,
-                        entity_id=row_card.care_order_id,
-                        action=CardAction.RESERVE,
-                        source_context=SourceContext.CARE_ORDER_LIST,
-                        source_ref="care.orders.list.repeat",
-                        page_or_index="repeat",
-                        state_token=f"care:{actor_id}",
-                    ),
-                ),
+                )
             ]
+            order = await care_commerce_service.get_order(row_card.care_order_id)
+            if order is not None and _is_live_care_order_status(order.status):
+                buttons.append(
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.care.orders.repeat.action", locale),
+                        callback_data=await _encode_runtime_callback(
+                            profile=CardProfile.CARE_ORDER,
+                            entity_type=EntityType.CARE_ORDER,
+                            entity_id=row_card.care_order_id,
+                            action=CardAction.RESERVE,
+                            source_context=SourceContext.CARE_ORDER_LIST,
+                            source_ref="care.orders.list.repeat",
+                            page_or_index="repeat",
+                            state_token=f"care:{actor_id}",
+                        ),
+                    )
+                )
+            return buttons
 
         for row_card in current_cards:
             keyboard_rows.append(await _order_row_buttons(row_card=row_card))
@@ -1685,7 +1730,8 @@ def make_router(
             )
         if nav:
             keyboard_rows.append(nav)
-        keyboard_rows.append([InlineKeyboardButton(text=i18n.t("patient.care.orders.empty.browse", locale), callback_data="care:catalog")])
+        keyboard_rows.append([_care_catalog_nav_button(locale=locale)])
+        keyboard_rows.append([InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")])
 
         await _send_or_edit_panel(
             actor_id=actor_id,
@@ -1705,82 +1751,92 @@ def make_router(
         care_order_id: str,
         mode: CardMode = CardMode.COMPACT,
     ) -> None:
+        _ = mode
         locale = _locale()
         order = await care_commerce_service.get_order(care_order_id)
         if order is None or order.patient_id != patient_id:
-            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id="care", text=i18n.t("patient.care.orders.repeat.not_found", locale))
-            return
-        row_card = await _build_care_order_row_card(clinic_id=clinic_id, actor_id=actor_id, order=order, locale=locale)
-        reservation_hint = None
-        items = await care_commerce_service.repository.list_order_items(order.care_order_id)
-        if items and order.pickup_branch_id:
-            availability = await care_commerce_service.get_branch_product_availability(
-                branch_id=order.pickup_branch_id,
-                care_product_id=items[0].care_product_id,
-            )
-            if availability is not None and availability.status == "active" and availability.free_qty >= items[0].quantity:
-                reservation_hint = i18n.t("patient.care.orders.repeat.availability_ok", locale).format(branch_id=order.pickup_branch_id)
-            else:
-                reservation_hint = i18n.t("patient.care.orders.repeat.out_of_stock", locale).format(branch_id=order.pickup_branch_id)
-        shell = CareOrderCardAdapter.build(
-            seed=care_order_builder.build_seed(
-                snapshot=CareOrderRuntimeSnapshot(
-                    care_order_id=order.care_order_id,
-                    status=order.status,
-                    total_amount=order.total_amount,
-                    currency_code=order.currency_code,
-                    item_summary=next((meta.value for meta in row_card.shell.meta_lines if meta.key == "item"), "-"),
-                    branch_label=order.pickup_branch_id or "-",
-                    pickup_ready=order.status in {"ready_for_pickup", "issued", "fulfilled"},
-                    reservation_hint=reservation_hint,
-                    issued=order.status in {"issued", "fulfilled"},
-                    fulfilled=order.status == "fulfilled",
-                    state_token=f"care:{actor_id}",
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id="care",
+                text=i18n.t("patient.care.order.card.not_found.panel", locale),
+                keyboard=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text=i18n.t("patient.care.order.result.open_orders", locale), callback_data="care:orders")],
+                        [InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")],
+                    ]
                 ),
-                i18n=i18n,
-                locale=locale,
-            ),
-            source=SourceRef(context=SourceContext.CARE_ORDER_LIST, source_ref="care.orders.object"),
-            i18n=i18n,
-            locale=locale,
-            mode=mode,
-        )
-        action_map: dict[CardAction, tuple[str, str]] = {
-            CardAction.EXPAND: ("open_expand", "care.orders.object.expand"),
-            CardAction.COLLAPSE: ("open", "care.orders.object.collapse"),
-            CardAction.RESERVE: ("repeat", "care.orders.object.repeat"),
-            CardAction.BACK: ("back_orders", "care.orders.object.back"),
-        }
+            )
+            return
+
+        row = await _build_care_order_row_card(clinic_id=clinic_id, actor_id=actor_id, order=order, locale=locale)
+        status_badge = f"🟢 {row.status_label}" if _is_live_care_order_status(order.status) else f"⚪ {row.status_label}"
+        next_step = i18n.t("patient.care.order.next_step", locale) if _is_live_care_order_status(order.status) else ""
+
+        lines = [
+            i18n.t("patient.care.order.card.title", locale),
+            "",
+            status_badge,
+            "",
+            f"{i18n.t('patient.care.order.card.field.items', locale)}: {row.item_summary}",
+            f"{i18n.t('patient.care.order.card.field.branch', locale)}: {row.branch_label}",
+            f"{i18n.t('patient.care.order.card.field.total', locale)}: {row.amount_label}",
+            f"{i18n.t('patient.care.order.card.field.status', locale)}: {row.status_label}",
+            f"{i18n.t('patient.care.order.card.field.ref', locale)}: {row.short_ref}",
+        ]
+        if row.pickup_hint:
+            lines.extend(["", row.pickup_hint])
+        if row.reservation_hint:
+            lines.extend(["", row.reservation_hint])
+        if next_step:
+            lines.extend(["", next_step])
+
         buttons: list[list[InlineKeyboardButton]] = []
-        for action in shell.actions:
-            mapped = action_map.get(action.action)
-            if mapped is None:
-                continue
-            page_or_index, source_ref = mapped
+        if _is_live_care_order_status(order.status):
             buttons.append(
                 [
                     InlineKeyboardButton(
-                        text=action.label,
+                        text=i18n.t("patient.care.orders.repeat.action", locale),
                         callback_data=await _encode_runtime_callback(
                             profile=CardProfile.CARE_ORDER,
                             entity_type=EntityType.CARE_ORDER,
                             entity_id=order.care_order_id,
-                            action=action.action,
+                            action=CardAction.RESERVE,
                             source_context=SourceContext.CARE_ORDER_LIST,
-                            source_ref=source_ref,
-                            page_or_index=page_or_index,
+                            source_ref="care.orders.object.repeat",
+                            page_or_index="repeat",
                             state_token=f"care:{actor_id}",
                         ),
                     )
                 ]
             )
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text=i18n.t("patient.care.orders.repeat.back_to_orders", locale),
+                    callback_data=await _encode_runtime_callback(
+                        profile=CardProfile.CARE_ORDER,
+                        entity_type=EntityType.CARE_ORDER,
+                        entity_id=order.care_order_id,
+                        action=CardAction.BACK,
+                        source_context=SourceContext.CARE_ORDER_LIST,
+                        source_ref="care.orders.object.back",
+                        page_or_index="back_orders",
+                        state_token=f"care:{actor_id}",
+                    ),
+                )
+            ]
+        )
+        buttons.append([InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")])
+
         await _send_or_edit_panel(
             actor_id=actor_id,
             message=message,
             session_id="care",
-            text=CardShellRenderer.to_panel(shell).text,
+            text="\n".join(lines),
             keyboard=InlineKeyboardMarkup(inline_keyboard=buttons),
         )
+
 
     async def _render_service_panel(message: Message | CallbackQuery, *, actor_id: int, session_id: str, clinic_id: str) -> None:
         locale = _locale()
@@ -3503,14 +3559,10 @@ def make_router(
         clinic_id = _primary_clinic_id()
         patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
         if clinic_id is None or patient_id is None:
-            await callback.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()), show_alert=True)
+            await _render_care_orders_patient_resolution_failed_panel(callback, actor_id=callback.from_user.id)
             return False
         target_order_id = care_order_id.strip()
         if not target_order_id:
-            await callback.answer(i18n.t("patient.care.order.open.denied", _locale()), show_alert=True)
-            return False
-        order = await care_commerce_service.get_order(target_order_id)
-        if order is None or order.patient_id != patient_id:
             await callback.answer(i18n.t("patient.care.order.open.denied", _locale()), show_alert=True)
             return False
         await _render_care_order_card(
@@ -3706,11 +3758,10 @@ def make_router(
         clinic_id = _primary_clinic_id()
         patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
         if clinic_id is None or patient_id is None:
-            await callback.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()), show_alert=True)
+            await _render_care_orders_patient_resolution_failed_panel(callback, actor_id=callback.from_user.id)
             return
         care_order_id = callback.data.split(":", 2)[2]
         view = await _reserve_again_from_order(clinic_id=clinic_id, patient_id=patient_id, care_order_id=care_order_id)
-        await callback.answer()
         if callback.message:
             keyboard = await _repeat_action_keyboard(actor_id=callback.from_user.id, care_order_id=care_order_id, view=view)
             await _send_or_edit_panel(
@@ -4016,7 +4067,7 @@ def make_router(
                 return
             patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
             if patient_id is None:
-                await callback.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()), show_alert=True)
+                await _render_care_orders_patient_resolution_failed_panel(callback, actor_id=callback.from_user.id)
                 return
             if decoded.page_or_index.startswith("orders_page:"):
                 page = int(decoded.page_or_index.split(":", 1)[1])
@@ -4042,7 +4093,6 @@ def make_router(
                     text=view.text,
                     keyboard=keyboard,
                 )
-                await callback.answer()
                 return
             if decoded.page_or_index == "back_orders":
                 await _render_care_orders_panel(
@@ -4068,7 +4118,6 @@ def make_router(
                     text=view.text,
                     keyboard=keyboard,
                 )
-                await callback.answer()
                 return
             if decoded.page_or_index == "open":
                 await _open_patient_care_order_from_callback(
