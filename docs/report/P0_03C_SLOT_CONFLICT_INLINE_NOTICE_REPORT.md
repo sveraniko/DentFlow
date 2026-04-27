@@ -59,6 +59,19 @@ In `reschedule_confirm(...)`:
 - no popup alert is used in these branches;
 - success handoff to canonical booking panel remains unchanged.
 
+## P0-03C matrix
+
+| Scenario | Popup `show_alert` | Inline notice | Slot suppressed | Contact keyboard shown | Contact stage entered | Session recovery | Page corrected after suppression | False empty state avoided | Slot panel refreshed | Contact reply keyboard still shown |
+|---|---|---|---|---|---|---|---|---|---|---|
+| New booking slot unavailable | no | yes | yes | no | — | — | — | — | — | — |
+| New booking slot conflict | no | yes | yes | no | — | — | — | — | — | — |
+| InvalidStateOutcome | no | yes | — | no | no | yes | — | — | — | — |
+| Page clamp | no | — | yes | — | — | — | yes | yes | — | — |
+| Reschedule confirm conflict | no | yes | — | — | — | — | — | — | yes | — |
+| Success path | — | — | — | — | — | — | — | — | — | yes |
+
+Legend: `—` means "not applicable for this scenario".
+
 ## Tests run
 1. `python -m compileall app tests` — **pass**
 2. `pytest -q tests/test_p0_03a_nav_callback_contract.py` — **pass** (6 passed)
