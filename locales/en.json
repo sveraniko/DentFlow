@@ -332,6 +332,8 @@
   "patient.recommendations.action.unavailable": "This recommendation action is no longer available. Please reopen recommendations.",
   "patient.recommendations.callback.unavailable": "This recommendation link is no longer available. Please reopen recommendations.",
   "patient.recommendations.action.ok": "Saved. Current status: {status}",
+  "patient.recommendations.action.notice.ok": "✅ Action saved.\nCurrent status: {status}",
+  "patient.recommendations.action.notice.invalid_state": "⚠️ Action unavailable.\nRecommendation status changed or this action can no longer be completed.\nPlease review the current recommendation card.",
   "patient.recommendations.action.ack.button": "✅ Confirm reading",
   "patient.recommendations.action.accept.button": "👍 Accept",
   "patient.recommendations.action.decline.button": "👎 Decline",

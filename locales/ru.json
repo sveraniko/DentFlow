@@ -332,6 +332,8 @@
   "patient.recommendations.action.unavailable": "Это действие по рекомендации больше недоступно. Откройте рекомендации заново.",
   "patient.recommendations.callback.unavailable": "Эта ссылка на рекомендацию больше недоступна. Откройте рекомендации заново.",
   "patient.recommendations.action.ok": "Сохранено. Текущий статус: {status}",
+  "patient.recommendations.action.notice.ok": "✅ Действие сохранено.\nТекущий статус: {status}",
+  "patient.recommendations.action.notice.invalid_state": "⚠️ Действие недоступно.\nСтатус рекомендации изменился или действие уже нельзя выполнить.\nПроверьте текущую карточку рекомендации.",
   "patient.recommendations.action.ack.button": "✅ Подтвердить ознакомление",
   "patient.recommendations.action.accept.button": "👍 Принять",
   "patient.recommendations.action.decline.button": "👎 Отклонить",

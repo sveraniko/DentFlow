@@ -2986,6 +2986,8 @@ def make_router(
         actor_id: int,
         recommendation: Any,
         session_id: str = "patient_home",
+        notice_key: str | None = None,
+        notice_text: str | None = None,
     ) -> None:
         locale = _locale()
         status_key = (recommendation.status or "").strip()
@@ -2994,7 +2996,7 @@ def make_router(
         status_badge = _recommendation_status_badge(status=status_key, locale=locale)
         next_step = _recommendation_next_step(status=status_key, locale=locale)
         next_step_block = f"\n\n{next_step}" if next_step else ""
-        text = i18n.t("patient.recommendations.detail.card", locale).format(
+        detail_text = i18n.t("patient.recommendations.detail.card", locale).format(
             panel_title=i18n.t("patient.recommendations.detail.title", locale),
             status_badge=status_badge,
             topic_field=i18n.t("patient.recommendations.detail.field.topic", locale),
@@ -3006,6 +3008,10 @@ def make_router(
             body=_recommendation_readable_body(recommendation.body_text, locale=locale),
             next_step_optional=next_step_block,
         )
+        notice = notice_text.strip() if isinstance(notice_text, str) and notice_text.strip() else None
+        if notice is None and isinstance(notice_key, str) and notice_key.strip():
+            notice = i18n.t(notice_key, locale)
+        text = f"{notice}\n\n{detail_text}" if notice else detail_text
         await _send_or_edit_panel(
             actor_id=actor_id,
             message=message,
@@ -3745,39 +3751,48 @@ def make_router(
             await callback.answer(i18n.t("patient.recommendations.callback.unavailable", _locale()), show_alert=True)
             return
         action, recommendation_id = parts[2], parts[3]
+        if action not in {"ack", "accept", "decline"}:
+            await callback.answer(i18n.t("patient.recommendations.callback.unavailable", _locale()), show_alert=True)
+            return
         patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
+        if not patient_id:
+            await _render_recommendations_patient_resolution_failed_panel(callback, actor_id=callback.from_user.id)
+            return
         recommendation = await recommendation_service.get(recommendation_id)
-        if not patient_id or recommendation is None or recommendation.patient_id != patient_id:
-            await callback.answer(i18n.t("patient.recommendations.not_found", _locale()), show_alert=True)
+        if recommendation is None or recommendation.patient_id != patient_id:
+            await _render_recommendation_not_found_panel(callback, actor_id=callback.from_user.id)
             return
         try:
             if action == "ack":
                 updated = await recommendation_service.acknowledge(recommendation_id=recommendation_id)
             elif action == "accept":
                 updated = await recommendation_service.accept(recommendation_id=recommendation_id)
-            elif action == "decline":
-                updated = await recommendation_service.decline(recommendation_id=recommendation_id)
             else:
-                await callback.answer(i18n.t("patient.recommendations.callback.unavailable", _locale()), show_alert=True)
-                return
+                updated = await recommendation_service.decline(recommendation_id=recommendation_id)
         except ValueError:
+            latest = await recommendation_service.get(recommendation_id)
+            if latest is None or latest.patient_id != patient_id:
+                await _render_recommendation_not_found_panel(callback, actor_id=callback.from_user.id)
+                return
             await _render_recommendation_detail_panel(
                 message=callback,
                 actor_id=callback.from_user.id,
-                recommendation=recommendation,
+                recommendation=latest,
+                notice_key="patient.recommendations.action.notice.invalid_state",
             )
-            await callback.answer(i18n.t("patient.recommendations.action.invalid_state", _locale()), show_alert=True)
             return
-        resolved = updated or recommendation
-        if resolved is None:
-            await callback.answer(i18n.t("patient.recommendations.not_found", _locale()), show_alert=True)
+        resolved = updated or await recommendation_service.get(recommendation_id)
+        if resolved is None or resolved.patient_id != patient_id:
+            await _render_recommendation_not_found_panel(callback, actor_id=callback.from_user.id)
             return
         await _render_recommendation_detail_panel(
             message=callback,
             actor_id=callback.from_user.id,
             recommendation=resolved,
+            notice_text=i18n.t("patient.recommendations.action.notice.ok", _locale()).format(
+                status=_recommendation_status_label(status=resolved.status, locale=_locale())
+            ),
         )
-        await callback.answer(i18n.t("patient.recommendations.action.ok", _locale()).format(status=_recommendation_status_label(status=resolved.status, locale=_locale())))
 
     @router.callback_query(F.data.startswith("prec:products:"))
     async def recommendation_products_callback(callback: CallbackQuery) -> None:
@@ -3798,7 +3813,7 @@ def make_router(
             return
         recommendation = await recommendation_service.get(recommendation_id)
         if recommendation is None or recommendation.patient_id != patient_id:
-            await callback.answer(i18n.t("patient.recommendations.not_found", _locale()), show_alert=True)
+            await _render_recommendation_not_found_panel(callback, actor_id=callback.from_user.id)
             return
         resolution = await care_commerce_service.resolve_recommendation_target_result(
             clinic_id=_primary_clinic_id() or recommendation.clinic_id,
