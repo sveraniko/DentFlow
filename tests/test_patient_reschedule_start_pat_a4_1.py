@@ -334,7 +334,7 @@ def test_reminder_reschedule_accepted_lands_in_same_canonical_reschedule_start_p
 
     assert flow.start_patient_reschedule_calls == 1
     sent_text, sent_keyboard = callback.message.answers[-1]
-    assert "Reschedule mode started." in sent_text
+    assert "🔁 Reschedule booking" in sent_text
     assert sent_keyboard is not None
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
     assert state["booking_mode"] == "reschedule_booking_control"
@@ -365,7 +365,7 @@ def test_active_reschedule_session_resume_from_book_returns_to_reschedule_panel(
     assert flow.start_or_resume_session_calls == 0
     assert flow.start_or_resume_returning_calls == 0
     assert message.answers
-    assert "Reschedule mode started." in message.answers[-1][0]
+    assert "🔁 Reschedule booking" in message.answers[-1][0]
 
 
 def test_active_reschedule_with_selected_slot_resumes_to_review_from_book() -> None:
@@ -399,7 +399,7 @@ def test_my_booking_respects_active_reschedule_context_and_does_not_collapse() -
     asyncio.run(_handler(router, "my_booking_entry", kind="message")(message))
 
     assert flow.start_or_resume_session_calls == 0
-    assert "Reschedule mode started." in message.answers[-1][0]
+    assert "🔁 Reschedule booking" in message.answers[-1][0]
 
 
 def test_phome_my_booking_has_parity_with_my_booking_for_active_reschedule() -> None:
@@ -439,7 +439,7 @@ def test_stale_reschedule_context_from_my_booking_is_bounded_and_normalized() ->
     assert state["booking_mode"] != "reschedule_booking_control"
     assert state["reschedule_booking_id"] == ""
     assert flow.start_or_resume_existing_booking_calls == 1
-    assert "cannot open reschedule right now" in message.answers[0][0]
+    assert "couldn't open reschedule right now" in message.answers[0][0]
 
 
 def test_stale_reschedule_start_callback_is_safely_rejected() -> None:

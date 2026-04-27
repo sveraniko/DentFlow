@@ -222,11 +222,11 @@ def test_accepted_reminder_actions_handoff_to_canonical_booking_panel(
     sent_text, sent_keyboard = callback.message.answers[-1]
     assert expected_header in sent_text
     if action == "reschedule":
-        assert "Reschedule mode started." in sent_text
-        assert "select a new time" in sent_text.lower()
+        assert "🔁 Reschedule booking" in sent_text
+        assert "select new time" in sent_text.lower()
         assert sent_keyboard is not None
         rendered_labels = [button.text for row in sent_keyboard.inline_keyboard for button in row]
-        assert rendered_labels == ["Select new time"]
+        assert rendered_labels == ["Select new time", "📅 Your booking", "🏠 Main menu"]
     else:
         assert "Consultation" in sent_text
         assert "Main Branch" in sent_text
