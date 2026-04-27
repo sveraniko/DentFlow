@@ -238,9 +238,11 @@ class _RecommendationServiceStub:
         self.mark_viewed_calls: list[str] = []
         self.actions: list[tuple[str, str]] = []
 
-    async def list_for_patient(self, *, patient_id: str):
+    async def list_for_patient(self, *, patient_id: str, include_terminal: bool = False):
         self.list_calls += 1
-        return self.rows
+        if include_terminal:
+            return self.rows
+        return [row for row in self.rows if row.status in {"issued", "viewed", "acknowledged"}]
 
     async def get(self, recommendation_id: str):
         return next((row for row in self.rows if row.recommendation_id == recommendation_id), None)
@@ -931,12 +933,14 @@ def test_recommendations_panel_surfaces_latest_first_without_raw_ids() -> None:
 
     assert recommendation_service is not None
     text, keyboard = message.answers[-1]
-    assert "Latest recommendation" in text
+    assert "Doctor recommendations" in text
+    assert "Section: 🟢 Active" in text
     assert "Latest follow-up recommendation" in text
-    assert "History" in text
+    assert "History: 1" in text
     assert "/recommendation_open" not in text
-    buttons = [button.callback_data for row in keyboard.inline_keyboard for button in row]
-    assert buttons[0] == "prec:open:rec_latest"
+    button_callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row if button.callback_data]
+    assert "prec:open:rec_latest" in button_callbacks
+    assert "recommendation_id" not in text and "patient_id" not in text and "booking_id" not in text and "doctor_id" not in text
 
 
 def test_recommendation_open_callback_marks_issued_as_viewed_and_renders_detail() -> None:

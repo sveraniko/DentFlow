@@ -41,6 +41,10 @@ from app.interfaces.cards import (
 )
 
 _TERMINAL_RECOMMENDATION_STATUSES = {"accepted", "declined", "withdrawn", "expired", "completed"}
+_ACTIVE_RECOMMENDATION_STATUSES = {"issued", "viewed", "acknowledged"}
+_HISTORY_RECOMMENDATION_STATUSES = {"accepted", "declined", "withdrawn", "expired"}
+_ALL_RECOMMENDATION_FILTERS = {"active", "history", "all"}
+RECOMMENDATION_LIST_PAGE_SIZE = 5
 _TERMINAL_CARE_ORDER_STATUSES = {"fulfilled", "canceled", "expired"}
 
 
@@ -2836,7 +2840,10 @@ def make_router(
                 keyboard=entry_nav_keyboard,
             )
             return
-        rows = await recommendation_service.list_for_patient(patient_id=patient_id)
+        try:
+            rows = await recommendation_service.list_for_patient(patient_id=patient_id, include_terminal=True)
+        except TypeError:
+            rows = await recommendation_service.list_for_patient(patient_id=patient_id)
         await _render_recommendations_panel(
             actor_id=actor_id,
             message=message,
@@ -2951,6 +2958,38 @@ def make_router(
         history = [row for row in rows if row.recommendation_id != latest.recommendation_id]
         return latest, history
 
+    def _recommendation_sort_timestamp(row: Any) -> datetime:
+        for field in ("updated_at", "issued_at", "created_at"):
+            value = getattr(row, field, None)
+            if isinstance(value, datetime):
+                return value
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+    def _recommendation_filter_status_match(*, status: str, filter_mode: str) -> bool:
+        if filter_mode == "active":
+            return status in _ACTIVE_RECOMMENDATION_STATUSES
+        if filter_mode == "history":
+            return status in _HISTORY_RECOMMENDATION_STATUSES
+        if filter_mode == "all":
+            return True
+        return False
+
+    def _recommendation_filter_rows(*, rows: list[Any], filter_mode: str) -> list[Any]:
+        return [row for row in rows if _recommendation_filter_status_match(status=(getattr(row, "status", "") or "").strip(), filter_mode=filter_mode)]
+
+    def _recommendation_default_filter(*, rows: list[Any]) -> str:
+        if _recommendation_filter_rows(rows=rows, filter_mode="active"):
+            return "active"
+        if _recommendation_filter_rows(rows=rows, filter_mode="history"):
+            return "history"
+        return "all"
+
+    def _recommendation_row_date_label(*, row: Any, locale: str) -> str:
+        stamp = _recommendation_sort_timestamp(row)
+        if stamp == datetime.min.replace(tzinfo=timezone.utc):
+            return i18n.t("patient.recommendations.detail.value_missing", locale)
+        return _format_patient_date(stamp, locale=locale)
+
     async def _has_recommendation_products_target(*, recommendation: Any) -> bool:
         if care_commerce_service is None:
             return False
@@ -3036,6 +3075,8 @@ def make_router(
         message: Message | CallbackQuery,
         session_id: str,
         rows: list[Any],
+        filter_mode: str | None = None,
+        page: int = 0,
     ) -> None:
         locale = _locale()
         if not rows:
@@ -3052,64 +3093,85 @@ def make_router(
                 ),
             )
             return
-        latest, history = _pick_latest_recommendation(rows)
-        if latest is None:
-            await _send_or_edit_panel(
-                actor_id=actor_id,
-                message=message,
-                session_id=session_id,
-                text=i18n.t("patient.recommendations.empty.panel", locale),
-                keyboard=InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [InlineKeyboardButton(text=i18n.t("patient.recommendations.nav.my_booking", locale), callback_data="phome:my_booking")],
-                        [InlineKeyboardButton(text=i18n.t("patient.recommendations.nav.home", locale), callback_data="phome:home")],
-                    ]
-                ),
+        selected_filter = filter_mode if filter_mode in _ALL_RECOMMENDATION_FILTERS else _recommendation_default_filter(rows=rows)
+        ordered_rows = sorted(rows, key=_recommendation_sort_timestamp, reverse=True)
+        active_count = len(_recommendation_filter_rows(rows=ordered_rows, filter_mode="active"))
+        history_count = len(_recommendation_filter_rows(rows=ordered_rows, filter_mode="history"))
+        filtered_rows = _recommendation_filter_rows(rows=ordered_rows, filter_mode=selected_filter)
+        page_total = max(1, (len(filtered_rows) + RECOMMENDATION_LIST_PAGE_SIZE - 1) // RECOMMENDATION_LIST_PAGE_SIZE)
+        clamped_page = max(0, min(page, page_total - 1))
+        offset = clamped_page * RECOMMENDATION_LIST_PAGE_SIZE
+        page_rows = filtered_rows[offset : offset + RECOMMENDATION_LIST_PAGE_SIZE]
+        row_lines: list[str] = []
+        for index, row in enumerate(page_rows, start=offset + 1):
+            row_lines.append(
+                i18n.t("patient.recommendations.list.row", locale).format(
+                    index=index,
+                    status_badge=_recommendation_status_badge(status=(row.status or "").strip(), locale=locale),
+                    title=_recommendation_value_or_missing(getattr(row, "title", None), locale=locale),
+                    recommendation_type=_recommendation_type_label(recommendation_type=row.recommendation_type, locale=locale),
+                    status=_recommendation_status_label(status=(row.status or "").strip(), locale=locale),
+                    date=_recommendation_row_date_label(row=row, locale=locale),
+                )
             )
-            return
+        if not row_lines:
+            row_lines = [i18n.t(f"patient.recommendations.list.filter_empty.{selected_filter}", locale)]
         lines = [
-            i18n.t("patient.recommendations.title", locale),
-            "",
-            i18n.t("patient.recommendations.latest.label", locale),
-            f"• {latest.title}",
-            i18n.t("patient.recommendations.summary.line", locale).format(
-                recommendation_type=_recommendation_type_label(recommendation_type=latest.recommendation_type, locale=locale),
-                status=_recommendation_status_label(status=latest.status, locale=locale),
+            i18n.t("patient.recommendations.list.title", locale),
+            i18n.t("patient.recommendations.list.summary", locale).format(active_count=active_count, history_count=history_count),
+            i18n.t("patient.recommendations.list.section", locale).format(
+                filter_label=i18n.t(f"patient.recommendations.list.filter.{selected_filter}", locale)
             ),
+            i18n.t("patient.recommendations.list.page", locale).format(page_current=clamped_page + 1, page_total=page_total),
+            "",
+            *row_lines,
         ]
-        if history:
-            lines.extend(["", i18n.t("patient.recommendations.history.label", locale)])
-            for index, row in enumerate(history[:5], start=1):
-                lines.append(
-                    i18n.t("patient.recommendations.history.item", locale).format(
-                        index=index,
-                        title=row.title,
-                        status=_recommendation_status_label(status=row.status, locale=locale),
-                    )
-                )
-        keyboard_rows: list[list[InlineKeyboardButton]] = [
-            [
-                InlineKeyboardButton(
-                    text=i18n.t("patient.recommendations.open_latest.button", locale),
-                    callback_data=f"prec:open:{latest.recommendation_id}",
-                )
-            ]
-        ]
-        for index, row in enumerate(history[:5], start=1):
+        filter_buttons: list[InlineKeyboardButton] = []
+        for option in ("active", "history", "all"):
+            label = i18n.t(f"patient.recommendations.list.filter.{option}", locale)
+            if option == selected_filter:
+                label = f"✅ {label}"
+            filter_buttons.append(InlineKeyboardButton(text=label, callback_data=f"prec:list:{option}:0"))
+        keyboard_rows: list[list[InlineKeyboardButton]] = [filter_buttons]
+        for index, row in enumerate(page_rows, start=1):
             keyboard_rows.append(
                 [
                     InlineKeyboardButton(
-                        text=i18n.t("patient.recommendations.open_history.button", locale).format(index=index),
+                        text=i18n.t("patient.recommendations.list.open_item", locale).format(index=index),
                         callback_data=f"prec:open:{row.recommendation_id}",
                     )
                 ]
             )
+        if page_total > 1:
+            pagination_buttons: list[InlineKeyboardButton] = []
+            if clamped_page > 0:
+                pagination_buttons.append(
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.recommendations.list.prev", locale),
+                        callback_data=f"prec:list:{selected_filter}:{clamped_page - 1}",
+                    )
+                )
+            if clamped_page < page_total - 1:
+                pagination_buttons.append(
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.recommendations.list.next", locale),
+                        callback_data=f"prec:list:{selected_filter}:{clamped_page + 1}",
+                    )
+                )
+            if pagination_buttons:
+                keyboard_rows.append(pagination_buttons)
+        keyboard_rows.extend(
+            [
+                [InlineKeyboardButton(text=i18n.t("patient.recommendations.list.nav.my_booking", locale), callback_data="phome:my_booking")],
+                [InlineKeyboardButton(text=i18n.t("patient.recommendations.list.nav.home", locale), callback_data="phome:home")],
+            ]
+        )
         await _send_or_edit_panel(
             actor_id=actor_id,
             message=message,
             session_id=session_id,
             text="\n".join(lines),
-            keyboard=InlineKeyboardMarkup(inline_keyboard=[*keyboard_rows, [_patient_home_nav_button(locale=locale)]]),
+            keyboard=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
         )
 
     async def _resume_active_reschedule_context(
@@ -3705,6 +3767,40 @@ def make_router(
         if not callback.from_user:
             return
         await _enter_recommendations_list(callback, actor_id=callback.from_user.id)
+
+    @router.callback_query(F.data.startswith("prec:list:"))
+    async def recommendation_list_callback(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data or recommendation_service is None:
+            return
+        parts = _parse_recommendation_callback_data(
+            raw_data=callback.data,
+            expected_prefix="prec:list",
+            expected_parts=4,
+        )
+        if parts is None:
+            await callback.answer(i18n.t("patient.recommendations.callback.unavailable", _locale()), show_alert=True)
+            return
+        selected_filter = parts[2].strip().lower()
+        page_raw = parts[3].strip()
+        if selected_filter not in _ALL_RECOMMENDATION_FILTERS or (not page_raw.isdigit()):
+            await callback.answer(i18n.t("patient.recommendations.callback.unavailable", _locale()), show_alert=True)
+            return
+        patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
+        if not patient_id:
+            await _render_recommendations_patient_resolution_failed_panel(callback, actor_id=callback.from_user.id)
+            return
+        try:
+            rows = await recommendation_service.list_for_patient(patient_id=patient_id, include_terminal=True)
+        except TypeError:
+            rows = await recommendation_service.list_for_patient(patient_id=patient_id)
+        await _render_recommendations_panel(
+            actor_id=callback.from_user.id,
+            message=callback,
+            session_id="patient_home",
+            rows=rows,
+            filter_mode=selected_filter,
+            page=int(page_raw),
+        )
 
     @router.callback_query(F.data.startswith("prec:open:"))
     async def recommendation_open_callback(callback: CallbackQuery) -> None:
