@@ -609,6 +609,44 @@ def make_router(
             return i18n.t("patient.care.availability.low", locale)
         return i18n.t("patient.care.availability.in", locale)
 
+    def _render_patient_care_product_text(
+        *,
+        locale: str,
+        title: str,
+        sku: str,
+        category: str,
+        price: str,
+        availability: str,
+        branch: str,
+        description: str | None,
+        usage_hint: str | None,
+        recommendation_reason: str | None,
+    ) -> str:
+        lines = [
+            f"🪥 {title}",
+            "",
+            f"{i18n.t('patient.care.product.field.sku', locale)}: {sku}",
+            f"{i18n.t('patient.care.product.field.category', locale)}: {category}",
+            f"{i18n.t('patient.care.product.field.price', locale)}: {price}",
+            f"{i18n.t('patient.care.product.field.availability', locale)}: {availability}",
+            f"{i18n.t('patient.care.product.field.branch', locale)}: {branch}",
+        ]
+        description_value = (description or "").strip()
+        if description_value:
+            lines.extend(["", description_value])
+        usage_value = (usage_hint or "").strip()
+        if usage_value:
+            lines.extend(["", i18n.t("patient.care.product.usage_hint", locale).format(usage_hint=usage_value)])
+        recommendation_value = (recommendation_reason or "").strip()
+        if recommendation_value:
+            lines.extend(
+                [
+                    "",
+                    i18n.t("patient.care.product.recommendation_reason", locale).format(reason=recommendation_value[:280]),
+                ]
+            )
+        return "\n".join(lines)
+
     async def _compact_product_row_card(
         *,
         clinic_id: str,
@@ -927,7 +965,18 @@ def make_router(
             return
         product = await care_commerce_service.repository.get_product(product_id)
         if product is None or product.status != "active":
-            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id="care", text=i18n.t("patient.care.product.missing", locale))
+            await _send_or_edit_panel(
+                actor_id=actor_id,
+                message=message,
+                session_id="care",
+                text=i18n.t("patient.care.product.missing.panel", locale),
+                keyboard=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text=i18n.t("patient.care.products.open_catalog", locale), callback_data="phome:care")],
+                        [InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")],
+                    ]
+                ),
+            )
             return
         state = await _care_state(actor_id)
         content = await care_commerce_service.resolve_product_content(clinic_id=clinic_id, product=product, locale=locale, fallback_locale=locale)
@@ -1003,11 +1052,28 @@ def make_router(
                     )
                 ]
             )
+        rows.append([InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")])
+        price_label = (
+            f"{int(product.price_amount)} {product.currency_code}" if product.price_amount is not None else i18n.t("patient.care.product.field.price_missing", locale)
+        )
+        branch_label = branch.display_name if branch else i18n.t("patient.care.product.field.branch_missing", locale)
+        text = _render_patient_care_product_text(
+            locale=locale,
+            title=(content.title or i18n.t(product.title_key, locale)),
+            sku=(content.short_label or product.sku or i18n.t("patient.booking.review.value.missing", locale)),
+            category=await _category_label(category_code=product.category, locale=locale),
+            price=price_label,
+            availability=_availability_label(availability, locale=locale),
+            branch=branch_label,
+            description=content.description,
+            usage_hint=content.usage_hint,
+            recommendation_reason=(state.recommendation_reason if state.recommendation_id else None),
+        )
         await _send_or_edit_panel(
             actor_id=actor_id,
             message=message,
             session_id="care",
-            text=CardShellRenderer.to_panel(shell).text,
+            text=text,
             keyboard=InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
@@ -1054,6 +1120,7 @@ def make_router(
                 )
             ]
         )
+        rows.append([InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")])
         await _send_or_edit_panel(
             actor_id=actor_id,
             message=message,
@@ -3394,7 +3461,6 @@ def make_router(
             clinic_id=_primary_clinic_id() or recommendation.clinic_id,
             recommendation_id=recommendation.recommendation_id,
         )
-        await callback.answer()
 
     @router.callback_query(F.data == "phome:care")
     async def patient_home_care(callback: CallbackQuery) -> None:
@@ -3898,7 +3964,7 @@ def make_router(
             if decoded.page_or_index == "reserve":
                 patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
                 if not patient_id:
-                    await callback.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()), show_alert=True)
+                    await _render_care_reserve_patient_resolution_failed_panel(callback, actor_id=callback.from_user.id)
                     return
                 rec_id = (await _care_state(callback.from_user.id)).recommendation_id
                 await _reserve_product(
