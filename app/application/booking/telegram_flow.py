@@ -404,6 +404,28 @@ class BookingPatientFlowService:
     async def select_slot(self, *, booking_session_id: str, slot_id: str):
         return await self.orchestration.select_slot_and_activate_hold(booking_session_id=booking_session_id, slot_id=slot_id)
 
+    async def release_selected_slot_for_reselect(self, *, booking_session_id: str):
+        session = await self.reads.get_booking_session(booking_session_id)
+        if session is None:
+            return InvalidStateOutcome(kind="invalid_state", reason="booking session not found")
+        if not session.selected_hold_id and not session.selected_slot_id:
+            return OrchestrationSuccess(kind="success", entity=session)
+        return await self.orchestration.release_or_expire_hold_for_session(
+            booking_session_id=booking_session_id,
+            action="released",
+        )
+
+    async def clear_doctor_preference(self, *, booking_session_id: str) -> BookingSession | None:
+        updated = await self.orchestration.update_session_context(
+            booking_session_id=booking_session_id,
+            doctor_preference_type=None,
+            doctor_id=None,
+            doctor_code_raw=None,
+        )
+        if isinstance(updated, OrchestrationSuccess):
+            return updated.entity
+        return None
+
     async def set_contact_phone(self, *, booking_session_id: str, phone: str) -> BookingSession:
         updated = await self.orchestration.update_session_context(
             booking_session_id=booking_session_id,

@@ -135,6 +135,10 @@ class _BookingFlowStub:
         self.start_or_resume_calls = 0
         self.start_or_resume_existing_calls = 0
         self.set_contact_phone_calls = 0
+        self.release_selected_slot_calls = 0
+        self.release_selected_slot_outcome: object | None = None
+        self.clear_doctor_preference_calls = 0
+        self.mark_review_ready_calls = 0
 
     async def start_or_resume_session(self, **kwargs):  # noqa: ANN003
         self.start_or_resume_calls += 1
@@ -167,9 +171,32 @@ class _BookingFlowStub:
         return [self.slot]
 
     async def select_slot(self, **kwargs):  # noqa: ANN003
+        slot_id = kwargs.get("slot_id")
+        if slot_id:
+            self.slot = AvailabilitySlot(**{**asdict(self.slot), "slot_id": slot_id})
+            self.session = BookingSession(**{**asdict(self.session), "selected_slot_id": slot_id, "selected_hold_id": f"hold_{slot_id}"})
         if self.select_slot_outcome is not None:
             return self.select_slot_outcome
         return OrchestrationSuccess(kind="success", entity=self.session)
+
+    async def release_selected_slot_for_reselect(self, **kwargs):  # noqa: ANN003
+        self.release_selected_slot_calls += 1
+        if self.release_selected_slot_outcome is not None:
+            return self.release_selected_slot_outcome
+        self.session = BookingSession(**{**asdict(self.session), "selected_slot_id": None, "selected_hold_id": None})
+        return OrchestrationSuccess(kind="success", entity=self.session)
+
+    async def clear_doctor_preference(self, **kwargs):  # noqa: ANN003
+        self.clear_doctor_preference_calls += 1
+        self.session = BookingSession(
+            **{
+                **asdict(self.session),
+                "doctor_preference_type": None,
+                "doctor_id": None,
+                "doctor_code_raw": None,
+            }
+        )
+        return self.session
 
     async def set_contact_phone(self, *, booking_session_id: str, phone: str):
         self.set_contact_phone_calls += 1
@@ -180,6 +207,7 @@ class _BookingFlowStub:
         return PatientResolutionFlowResult(kind="exact_match", booking_session=self.session)
 
     async def mark_review_ready(self, **kwargs):  # noqa: ANN003
+        self.mark_review_ready_calls += 1
         self.session = BookingSession(**{**asdict(self.session), "status": "review_ready"})
         return OrchestrationSuccess(kind="success", entity=self.session)
 
@@ -294,8 +322,13 @@ def test_contact_submission_stops_at_review_ready_panel() -> None:
     assert " -\n" not in msg.answers[-1][0]
     keyboard = msg.answers[-1][1]
     assert keyboard.inline_keyboard[0][0].callback_data == "book:confirm:sess_1"
-    assert keyboard.inline_keyboard[1][0].callback_data == "book:review:back:sess_1"
-    assert keyboard.inline_keyboard[2][0].callback_data == "phome:home"
+    callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row if button.callback_data]
+    assert "book:review:edit:service:sess_1" in callbacks
+    assert "book:review:edit:doctor:sess_1" in callbacks
+    assert "book:review:edit:time:sess_1" in callbacks
+    assert "book:review:edit:phone:sess_1" in callbacks
+    assert "book:review:back:sess_1" in callbacks
+    assert "phome:home" in callbacks
     assert any(isinstance(reply_markup, ReplyKeyboardRemove) for _, reply_markup in msg.answers[:-1])
 
 
@@ -570,6 +603,97 @@ def test_review_back_callback_returns_contact_prompt_reply_keyboard() -> None:
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
     assert state["booking_mode"] == "new_booking_contact"
 
+
+def test_review_panel_contains_edit_actions_with_exact_callbacks() -> None:
+    router, _, runtime = _build_router_and_flow()
+    asyncio.run(runtime.bind_actor_session_state(scope="patient_flow", actor_id=1001, payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_contact", "care": {}}))
+    msg = _Message(text="+1 555 123 1234", user_id=1001)
+    asyncio.run(_handler(router, "on_contact_text")(msg))
+
+    keyboard = msg.answers[-1][1]
+    callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row if button.callback_data]
+    assert callbacks == [
+        "book:confirm:sess_1",
+        "book:review:edit:service:sess_1",
+        "book:review:edit:doctor:sess_1",
+        "book:review:edit:time:sess_1",
+        "book:review:edit:phone:sess_1",
+        "book:review:back:sess_1",
+        "phome:home",
+    ]
+
+
+def test_review_edit_service_releases_hold_and_routes_to_service_picker() -> None:
+    router, booking_flow, runtime = _build_router_and_flow()
+    asyncio.run(runtime.bind_actor_session_state(scope="patient_flow", actor_id=1001, payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_flow", "slot_page": 3, "slot_date_from": "2026-04-30", "slot_time_window": "morning", "slot_suppressed_ids": ["slot_x"], "care": {}}))
+    callback = _Callback(data="book:review:edit:service:sess_1", user_id=1001, message_id=501)
+    asyncio.run(_handler(router, "booking_review_edit", kind="callback")(callback))
+
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert booking_flow.release_selected_slot_calls == 1
+    assert booking_flow.session.selected_slot_id is None
+    assert booking_flow.session.selected_hold_id is None
+    assert state["booking_mode"] == "review_edit_service"
+    assert state["slot_page"] == 0
+    assert state["slot_date_from"] == ""
+    assert state["slot_time_window"] == "all"
+    assert state["slot_suppressed_ids"] == []
+    panel_text, _ = _latest_callback_payload(callback)
+    assert "service" in panel_text.lower()
+
+
+def test_review_edit_doctor_and_time_release_hold_and_route() -> None:
+    router, booking_flow, runtime = _build_router_and_flow()
+    asyncio.run(runtime.bind_actor_session_state(scope="patient_flow", actor_id=1001, payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_flow", "care": {}}))
+    doctor = _Callback(data="book:review:edit:doctor:sess_1", user_id=1001, message_id=501)
+    asyncio.run(_handler(router, "booking_review_edit", kind="callback")(doctor))
+    assert booking_flow.release_selected_slot_calls == 1
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "review_edit_doctor"
+    doctor_text, _ = _latest_callback_payload(doctor)
+    assert "doctor" in doctor_text.lower()
+
+    booking_flow.session = BookingSession(**{**asdict(booking_flow.session), "selected_slot_id": "slot_1", "selected_hold_id": "hold_1"})
+    time = _Callback(data="book:review:edit:time:sess_1", user_id=1001, message_id=501)
+    asyncio.run(_handler(router, "booking_review_edit", kind="callback")(time))
+    assert booking_flow.release_selected_slot_calls == 2
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "review_edit_time"
+    assert time.bot.edits
+    assert "slot" in time.bot.edits[-1]["text"].lower()
+
+
+def test_review_edit_phone_flow_keeps_slot_and_returns_to_review() -> None:
+    router, booking_flow, runtime = _build_router_and_flow()
+    booking_flow.session = BookingSession(**{**asdict(booking_flow.session), "contact_phone_snapshot": "+15550001111", "status": "review_ready"})
+    asyncio.run(runtime.bind_actor_session_state(scope="patient_flow", actor_id=1001, payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_flow", "care": {}}))
+    callback = _Callback(data="book:review:edit:phone:sess_1", user_id=1001, message_id=501)
+    asyncio.run(_handler(router, "booking_review_edit", kind="callback")(callback))
+    assert booking_flow.release_selected_slot_calls == 0
+    assert booking_flow.session.selected_slot_id == "slot_1"
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "review_edit_phone"
+    _, keyboard = _latest_callback_payload(callback)
+    assert isinstance(keyboard, ReplyKeyboardMarkup)
+
+    msg = _Message(text="⬅️ Back", user_id=1001)
+    asyncio.run(_handler(router, "on_contact_navigation")(msg))
+    assert any(isinstance(reply_markup, ReplyKeyboardRemove) for _, reply_markup in msg.answers)
+    assert msg.bot.edits
+    assert "📋 Review your booking" in msg.bot.edits[-1]["text"]
+
+
+def test_select_slot_after_review_edit_returns_to_review_when_contact_present() -> None:
+    router, booking_flow, runtime = _build_router_and_flow()
+    booking_flow.session = BookingSession(**{**asdict(booking_flow.session), "contact_phone_snapshot": "+15551231234", "resolved_patient_id": "pat_1"})
+    asyncio.run(runtime.bind_actor_session_state(scope="patient_flow", actor_id=1001, payload={"booking_session_id": "sess_1", "booking_mode": "review_edit_time", "care": {}}))
+    callback = _Callback(data="book:slot:slot_2", user_id=1001, message_id=501)
+    asyncio.run(_handler(router, "select_slot", kind="callback")(callback))
+    text, keyboard = _latest_callback_payload(callback)
+    assert "📋 Review your booking" in text
+    assert isinstance(keyboard, InlineKeyboardMarkup)
+    assert booking_flow.mark_review_ready_calls >= 1
+    assert len(callback.answer_payloads) == 1
 
 def test_finalize_slot_unavailable_renders_recovery_panel_without_popup() -> None:
     router, booking_flow, runtime = _build_router_and_flow()

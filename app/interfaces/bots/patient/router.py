@@ -2265,6 +2265,10 @@ def make_router(
                         callback_data=f"book:confirm:{session_id}",
                     )
                 ],
+                [InlineKeyboardButton(text=i18n.t("patient.booking.review.edit.service", locale), callback_data=f"book:review:edit:service:{session_id}")],
+                [InlineKeyboardButton(text=i18n.t("patient.booking.review.edit.doctor", locale), callback_data=f"book:review:edit:doctor:{session_id}")],
+                [InlineKeyboardButton(text=i18n.t("patient.booking.review.edit.time", locale), callback_data=f"book:review:edit:time:{session_id}")],
+                [InlineKeyboardButton(text=i18n.t("patient.booking.review.edit.phone", locale), callback_data=f"book:review:edit:phone:{session_id}")],
                 [InlineKeyboardButton(text=i18n.t("patient.booking.review.back", locale), callback_data=f"book:review:back:{session_id}")],
                 [_patient_home_nav_button(locale=locale)],
             ]
@@ -3387,6 +3391,9 @@ def make_router(
         try:
             session = await booking_flow.update_service(booking_session_id=callback_session_id, service_id=service_id)
             flow = await _load_flow_state(callback.from_user.id)
+            if flow.booking_mode == "review_edit_service":
+                await booking_flow.clear_doctor_preference(booking_session_id=callback_session_id)
+                flow.booking_mode = "review_edit_doctor"
             _reset_slot_view_state(flow)
             await _save_flow_state(callback.from_user.id, flow)
             await _render_doctor_pref_panel(
@@ -4104,7 +4111,8 @@ def make_router(
                     doctor_id=doctor_token,
                 )
             flow = await _load_flow_state(callback.from_user.id)
-            _reset_slot_view_state(flow)
+            if flow.booking_mode not in {"review_edit_doctor", "review_edit_time"}:
+                _reset_slot_view_state(flow)
             await _save_flow_state(callback.from_user.id, flow)
             await _render_slot_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
         except Exception:
@@ -4331,6 +4339,16 @@ def make_router(
             await _render_reschedule_review_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
             return
         flow = await _load_flow_state(callback.from_user.id)
+        if flow.booking_mode in {"review_edit_service", "review_edit_doctor", "review_edit_time"}:
+            refreshed = await booking_flow.get_booking_session(booking_session_id=callback_session_id)
+            if refreshed and refreshed.contact_phone_snapshot and refreshed.resolved_patient_id:
+                review = await booking_flow.mark_review_ready(booking_session_id=callback_session_id)
+                if not isinstance(review, InvalidStateOutcome):
+                    flow.booking_mode = "new_booking_flow"
+                    flow.reschedule_booking_id = ""
+                    await _save_flow_state(callback.from_user.id, flow)
+                    await _render_review_finalize_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
+                    return
         flow.booking_mode = "new_booking_contact"
         flow.reschedule_booking_id = ""
         await _save_flow_state(callback.from_user.id, flow)
@@ -4341,6 +4359,84 @@ def make_router(
             session_id=callback_session_id,
             text=i18n.t("patient.booking.contact.prompt", locale),
             reply_keyboard=contact_keyboard,
+        )
+
+    async def _render_review_edit_failed_panel(callback: CallbackQuery, *, session_id: str, text_key: str) -> None:
+        locale = _locale()
+        await _send_or_edit_panel(
+            actor_id=callback.from_user.id,
+            message=callback,
+            session_id=session_id,
+            text=i18n.t(text_key, locale),
+            keyboard=InlineKeyboardMarkup(inline_keyboard=[[_patient_home_nav_button(locale=locale)]]),
+        )
+
+    @router.callback_query(F.data.startswith("book:review:edit:"))
+    async def booking_review_edit(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        locale = _locale()
+        clinic_id = _primary_clinic_id()
+        if not clinic_id:
+            await callback.answer()
+            return
+        _, _, _, field, callback_session_id = callback.data.split(":", 4)
+        if field not in {"service", "doctor", "time", "phone"}:
+            await callback.answer(i18n.t("patient.booking.review.edit.unavailable", locale), show_alert=True)
+            return
+        if not await booking_flow.validate_active_session_callback(
+            clinic_id=clinic_id,
+            telegram_user_id=callback.from_user.id,
+            callback_session_id=callback_session_id,
+        ):
+            await callback.answer(i18n.t("patient.booking.callback.stale", locale), show_alert=True)
+            return
+        session = await booking_flow.get_booking_session(booking_session_id=callback_session_id)
+        if session is None or session.clinic_id != clinic_id or session.telegram_user_id != callback.from_user.id:
+            await _render_review_edit_failed_panel(callback, session_id=callback_session_id, text_key="patient.booking.review.edit.unavailable")
+            return
+        if session.status in {"admin_escalated", "completed", "canceled", "expired"}:
+            await _render_review_edit_failed_panel(callback, session_id=callback_session_id, text_key="patient.booking.review.edit.unavailable")
+            return
+        flow = await _load_flow_state(callback.from_user.id)
+        flow.booking_session_id = callback_session_id
+        flow.reschedule_booking_id = ""
+        flow.quick_booking_prefill = {}
+        if field in {"service", "doctor", "time"}:
+            released = await booking_flow.release_selected_slot_for_reselect(booking_session_id=callback_session_id)
+            if isinstance(released, InvalidStateOutcome):
+                await _render_review_edit_failed_panel(callback, session_id=callback_session_id, text_key="patient.booking.review.edit.release_failed")
+                return
+            _reset_slot_view_state(flow)
+        if field == "service":
+            flow.booking_mode = "review_edit_service"
+            await _save_flow_state(callback.from_user.id, flow)
+            await _render_service_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id, clinic_id=clinic_id)
+            return
+        if field == "doctor":
+            flow.booking_mode = "review_edit_doctor"
+            await _save_flow_state(callback.from_user.id, flow)
+            await _render_doctor_pref_panel(
+                callback,
+                actor_id=callback.from_user.id,
+                session_id=callback_session_id,
+                clinic_id=session.clinic_id,
+                branch_id=session.branch_id,
+            )
+            return
+        if field == "time":
+            flow.booking_mode = "review_edit_time"
+            await _save_flow_state(callback.from_user.id, flow)
+            await _render_slot_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
+            return
+        flow.booking_mode = "review_edit_phone"
+        await _save_flow_state(callback.from_user.id, flow)
+        await _send_or_edit_panel(
+            actor_id=callback.from_user.id,
+            message=callback,
+            session_id=callback_session_id,
+            text=i18n.t("patient.booking.contact.prompt", locale),
+            reply_keyboard=_patient_contact_reply_keyboard(locale=locale, include_back=True),
         )
 
     @router.callback_query(F.data.startswith("book:confirm:"))
@@ -4813,7 +4909,7 @@ def make_router(
         if not message.from_user or not message.text:
             return
         flow = await _load_flow_state(message.from_user.id)
-        if flow.booking_mode in {"new_booking_contact", "existing_lookup_contact"}:
+        if flow.booking_mode in {"new_booking_contact", "existing_lookup_contact", "review_edit_phone"}:
             await _handle_contact_submission(message, actor_id=message.from_user.id, phone=message.text)
             try:
                 await message.delete()
@@ -4830,7 +4926,7 @@ def make_router(
         locale = _locale()
         flow = await _load_flow_state(message.from_user.id)
         if message.text == i18n.t("patient.home.nav.home", locale):
-            if flow.booking_mode in {"new_booking_contact", "existing_lookup_contact", "new_booking_doctor_code"}:
+            if flow.booking_mode in {"new_booking_contact", "existing_lookup_contact", "new_booking_doctor_code", "review_edit_phone"}:
                 await _remove_patient_reply_keyboard(message)
             await _render_patient_home_panel(message, actor_id=message.from_user.id)
             return
@@ -4841,6 +4937,12 @@ def make_router(
         if flow.booking_mode == "new_booking_contact" and flow.booking_session_id:
             await _remove_patient_reply_keyboard(message)
             await _render_slot_panel(message, actor_id=message.from_user.id, session_id=flow.booking_session_id)
+            return
+        if flow.booking_mode == "review_edit_phone" and flow.booking_session_id:
+            await _remove_patient_reply_keyboard(message)
+            flow.booking_mode = "new_booking_flow"
+            await _save_flow_state(message.from_user.id, flow)
+            await _render_review_finalize_panel(message, actor_id=message.from_user.id, session_id=flow.booking_session_id)
             return
         if flow.booking_mode == "new_booking_doctor_code" and flow.booking_session_id:
             session = await booking_flow.get_booking_session(booking_session_id=flow.booking_session_id)
@@ -4915,7 +5017,7 @@ def make_router(
                 text=i18n.t("patient.booking.reschedule.start.contact_ignored", locale),
             )
             return
-        if mode != "new_booking_contact":
+        if mode not in {"new_booking_contact", "review_edit_phone"}:
             return
         session = await booking_flow.get_booking_session(booking_session_id=session_id)
         if session is None:
@@ -4949,6 +5051,8 @@ def make_router(
             )
             return
         await _remove_patient_reply_keyboard(message)
+        flow.booking_mode = "new_booking_flow"
+        await _save_flow_state(actor_id, flow)
         await _render_review_finalize_panel(message, actor_id=actor_id, session_id=session_id)
 
     async def _render_resume_panel(message: Message | CallbackQuery, *, actor_id: int, session_id: str, clinic_id: str) -> None:

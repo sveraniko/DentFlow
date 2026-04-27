@@ -224,7 +224,12 @@ def test_contact_submission_shows_review_and_defers_finalize_until_confirm() -> 
     assert "📋 Review your booking" in msg.answers[-1][0]
     review_keyboard = msg.answers[-1][1]
     assert review_keyboard.inline_keyboard[0][0].callback_data == "book:confirm:sess_1"
-    assert review_keyboard.inline_keyboard[1][0].callback_data == "book:review:back:sess_1"
-    assert review_keyboard.inline_keyboard[2][0].callback_data == "phome:home"
+    callbacks = [button.callback_data for row in review_keyboard.inline_keyboard for button in row if button.callback_data]
+    assert "book:review:edit:service:sess_1" in callbacks
+    assert "book:review:edit:doctor:sess_1" in callbacks
+    assert "book:review:edit:time:sess_1" in callbacks
+    assert "book:review:edit:phone:sess_1" in callbacks
+    assert "book:review:back:sess_1" in callbacks
+    assert "phome:home" in callbacks
 
     assert booking_flow.finalize_calls == 0
