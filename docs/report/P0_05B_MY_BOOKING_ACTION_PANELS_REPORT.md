@@ -3,6 +3,41 @@
 ## Summary
 Implemented panel-level UX polish around patient **My Booking** actions for cancel, waitlist, and reschedule flows, including runtime + legacy callback consistency and cleaner recovery navigation.
 
+## P0-05B matrix
+
+### Cancel prompt
+- readable title/body: **yes**
+- booking summary: **yes**
+- confirm/back/home: **yes**
+- no common yes/no as main UX: **yes**
+
+### Cancel abort
+- returns clean My Booking: **yes**
+- no popup-only path: **yes**
+
+### Cancel confirm
+- clean canceled card: **yes**
+- Home-only after cancel: **yes**
+- runtime and legacy both covered: **yes**
+
+### Waitlist
+- structured success panel: **yes**
+- current booking included or safe fallback: **yes**
+- Home present: **yes**
+- runtime and legacy both covered: **yes**
+
+### Reschedule start
+- readable panel: **yes**
+- Select new time/My Booking/Home: **yes**
+- unavailable has recovery: **yes**
+- runtime and legacy both covered: **yes**
+
+### Regression
+- P0-05A smoke: **pass**
+- P0-04C smoke: **pass**
+- P0-03D smoke: **pass**
+- patient and booking: **105 passed**
+
 ## Files changed
 - `app/interfaces/bots/patient/router.py`
 - `locales/en.json`
