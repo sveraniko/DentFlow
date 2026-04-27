@@ -74,3 +74,44 @@ No product behavior was intentionally redesigned in this PR; scope is tests + re
 **Go**: proceed to P0-06.
 
 Rationale: P0-05A/P0-05B behavior remains green, P0-03D/P0-04C smoke gates remain green, and new P0-05C smoke gate covers required My Booking contour + runtime/legacy parity + guardrails.
+
+## P0-05C matrix (post-PR)
+
+### My Booking
+- RU/EN readable card: **yes**
+- no raw/debug/internal fields: **yes**
+- no UTC/MSK/technical datetime: **yes**
+
+### Status keyboards
+- pending: confirm/reschedule/waitlist/cancel/home: **yes**
+- confirmed: reschedule/waitlist/cancel/home: **yes**
+- terminal: home-only/no mutations: **yes**
+
+### Runtime actions
+- confirm clean card: **yes**
+- cancel prompt polished: **yes**
+- cancel abort clean return: **yes**
+- cancel confirm canceled card: **yes**
+- waitlist structured: **yes**
+- reschedule start structured: **yes**
+
+### Legacy actions
+- cancel prompt/abort/confirm covered: **yes**
+- waitlist covered: **yes**
+- reschedule start covered: **yes**
+
+### Recovery
+- no active booking state: **yes**
+- waitlist failure handled: **yes**
+- reschedule unavailable handled: **yes**
+- reminder handoff clean: **yes**
+
+### Regression
+- P0-05B smoke: **pass**
+- P0-05A smoke: **pass**
+- P0-04C smoke: **pass**
+- P0-03D smoke: **pass**
+- patient and booking: **105 passed**
+
+Validation basis: 2026-04-27 local run: `pytest -q tests/test_p0_05c_my_booking_smoke_gate.py tests/test_p0_05b_my_booking_action_panels.py tests/test_p0_05a_my_booking_readable_card.py tests/test_p0_04c_review_edit_success_smoke_gate.py tests/test_p0_03d_patient_booking_smoke_gate.py` (24 passed) and `pytest -q tests -k "patient and booking"` (105 passed).
+
