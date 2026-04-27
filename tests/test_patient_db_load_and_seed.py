@@ -17,6 +17,9 @@ class _Result:
     def mappings(self):
         return self
 
+    def first(self):
+        return self._rows[0] if self._rows else None
+
     def __iter__(self):
         return iter(self._rows)
 

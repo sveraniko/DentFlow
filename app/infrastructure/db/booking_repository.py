@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import asdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1008,11 +1009,142 @@ async def _fetch_all(db_config, sql: str, params: dict) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-async def seed_stack3_booking(db_config, path: Path) -> dict[str, int]:
+def _shift_stack3_seed_dates(
+    payload: dict[str, Any],
+    *,
+    now: datetime | None = None,
+    start_offset_days: int = 1,
+    source_anchor_date: date | None = None,
+) -> dict[str, Any]:
+    shifted = deepcopy(payload)
+    anchor = source_anchor_date or _detect_stack3_source_anchor_date(shifted)
+    if anchor is None:
+        return shifted
+    effective_now = now or datetime.now(timezone.utc)
+    target_anchor = effective_now.date() + timedelta(days=start_offset_days)
+    delta_days = (target_anchor - anchor).days
+    if delta_days == 0:
+        return shifted
+    _shift_stack3_payload_in_place(shifted, delta_days=delta_days)
+    return shifted
+
+
+def _detect_stack3_source_anchor_date(payload: dict[str, Any]) -> date | None:
+    candidates: list[date] = []
+
+    for row in payload.get("availability_slots", []):
+        value = row.get("start_at")
+        parsed = _parse_iso_datetime(value) if isinstance(value, str) else None
+        if parsed is not None:
+            candidates.append(parsed.date())
+
+    for row in payload.get("bookings", []):
+        value = row.get("scheduled_start_at")
+        parsed = _parse_iso_datetime(value) if isinstance(value, str) else None
+        if parsed is not None:
+            candidates.append(parsed.date())
+
+    for row in payload.get("booking_sessions", []):
+        value = row.get("requested_date")
+        if isinstance(value, str):
+            parsed = _parse_iso_date(value)
+            if parsed is not None:
+                candidates.append(parsed)
+
+    for row in payload.get("waitlist_entries", []):
+        window = row.get("date_window")
+        if not isinstance(window, dict):
+            continue
+        for key in ("from", "to"):
+            value = window.get(key)
+            if isinstance(value, str):
+                parsed = _parse_iso_date(value)
+                if parsed is not None:
+                    candidates.append(parsed)
+
+    return min(candidates) if candidates else None
+
+
+def _shift_stack3_payload_in_place(value: Any, *, delta_days: int, parent_key: str | None = None) -> None:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if isinstance(nested, str):
+                shifted = _shift_string_value(key=key, value=nested, parent_key=parent_key, delta_days=delta_days)
+                if shifted != nested:
+                    value[key] = shifted
+            else:
+                _shift_stack3_payload_in_place(nested, delta_days=delta_days, parent_key=key)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _shift_stack3_payload_in_place(item, delta_days=delta_days, parent_key=parent_key)
+
+
+def _shift_string_value(*, key: str, value: str, parent_key: str | None, delta_days: int) -> str:
+    if key.endswith("_at") or key == "expires_at":
+        shifted_dt = _shift_iso_datetime_string(value, delta_days=delta_days)
+        return shifted_dt if shifted_dt is not None else value
+    if key == "requested_date" or (parent_key == "date_window" and key in {"from", "to"}):
+        shifted_date = _shift_iso_date_string(value, delta_days=delta_days)
+        return shifted_date if shifted_date is not None else value
+    return value
+
+
+def _shift_iso_datetime_string(value: str, *, delta_days: int) -> str | None:
+    parsed = _parse_iso_datetime(value)
+    if parsed is None:
+        return None
+    shifted = parsed + timedelta(days=delta_days)
+    rendered = shifted.isoformat()
+    if value.endswith("Z") and rendered.endswith("+00:00"):
+        return f"{rendered[:-6]}Z"
+    return rendered
+
+
+def _shift_iso_date_string(value: str, *, delta_days: int) -> str | None:
+    parsed = _parse_iso_date(value)
+    if parsed is None:
+        return None
+    return (parsed + timedelta(days=delta_days)).isoformat()
+
+
+def _parse_iso_datetime(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _parse_iso_date(value: str) -> date | None:
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+async def seed_stack3_booking(
+    db_config,
+    path: Path,
+    *,
+    relative_dates: bool = False,
+    now: datetime | None = None,
+    start_offset_days: int = 1,
+    source_anchor_date: date | None = None,
+) -> dict[str, int]:
     payload = json.loads(path.read_text(encoding="utf-8"))
+    payload_to_seed = (
+        _shift_stack3_seed_dates(
+            payload,
+            now=now,
+            start_offset_days=start_offset_days,
+            source_anchor_date=source_anchor_date,
+        )
+        if relative_dates
+        else payload
+    )
     engine = create_engine(db_config)
     async with engine.begin() as conn:
-        await _seed_rows(conn, payload)
+        await _seed_rows(conn, payload_to_seed)
     await engine.dispose()
     return {key: len(payload.get(key, [])) for key in payload}
 
