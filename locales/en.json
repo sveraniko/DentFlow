@@ -52,6 +52,8 @@
   "patient.booking.slot.prompt": "Choose one of the nearest available slots.",
   "patient.booking.slot.empty": "No open slots found yet. Please try again shortly.",
   "patient.booking.slot.unavailable": "That slot is no longer available. Please choose another one.",
+  "patient.booking.slot.notice.unavailable": "❌ This slot is no longer available.\n\nWe refreshed the available times. Please choose another slot.",
+  "patient.booking.slot.notice.conflict": "❌ This slot is no longer available.\n\nWe refreshed the available times. Please choose another slot.",
   "patient.booking.slot.panel.title": "📅 Upcoming slots",
   "patient.booking.slot.panel.timezone_hint": "Time is shown in the clinic timezone.",
   "patient.booking.slot.panel.date": "Date",
