@@ -3967,7 +3967,18 @@ def make_router(
                 if isinstance(result, OrchestrationSuccess):
                     panel = _render_patient_booking_panel(booking=result.entity, session_state_token=callback_session_id, locale=_locale())
                     session_id = (await _load_flow_state(callback.from_user.id)).booking_session_id
-                    await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=panel)
+                    keyboard = await _build_patient_booking_controls_keyboard(
+                        booking=result.entity,
+                        session_state_token=callback_session_id,
+                        locale=_locale(),
+                    )
+                    await _send_or_edit_panel(
+                        actor_id=callback.from_user.id,
+                        message=callback,
+                        session_id=session_id,
+                        text=panel,
+                        keyboard=keyboard,
+                    )
                     return
                 await callback.answer(i18n.t("patient.booking.finalize.invalid_state", _locale()), show_alert=True)
                 return
@@ -4000,7 +4011,18 @@ def make_router(
                 if isinstance(result, OrchestrationSuccess):
                     panel = _render_patient_booking_panel(booking=result.entity, session_state_token=callback_session_id, locale=_locale())
                     session_id = (await _load_flow_state(callback.from_user.id)).booking_session_id
-                    await _send_or_edit_panel(actor_id=callback.from_user.id, message=callback, session_id=session_id, text=panel)
+                    keyboard = await _build_patient_booking_controls_keyboard(
+                        booking=result.entity,
+                        session_state_token=callback_session_id,
+                        locale=_locale(),
+                    )
+                    await _send_or_edit_panel(
+                        actor_id=callback.from_user.id,
+                        message=callback,
+                        session_id=session_id,
+                        text=panel,
+                        keyboard=keyboard,
+                    )
                     return
                 await callback.answer(i18n.t("patient.booking.finalize.invalid_state", _locale()), show_alert=True)
                 return
@@ -5137,46 +5159,112 @@ def make_router(
         await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=session_id, text=i18n.t("patient.booking.resume.terminal", _locale()))
 
     def _render_patient_booking_panel(*, booking, session_state_token: str, locale: str) -> str:
-        snapshot = booking_flow.build_booking_snapshot(
-            booking=booking,
-            role_variant="patient",
-            state_token=session_state_token,
-            patient_label="You",
-        )
-        seed = booking_builder.build_seed(snapshot=snapshot, i18n=i18n, locale=locale)
-        shell = BookingCardAdapter.build(
-            seed=seed,
-            source=SourceRef(context=SourceContext.BOOKING_LIST, source_ref="patient_my_booking"),
-            i18n=i18n,
+        timezone_name = _resolve_booking_timezone_name(clinic_id=booking.clinic_id, branch_id=booking.branch_id)
+        local_start = booking.scheduled_start_at.astimezone(_zone_or_utc(timezone_name))
+        date_label, time_label = _format_patient_datetime_parts(local_start, locale=locale)
+        status_label = _resolve_patient_my_booking_status_label(status=booking.status, locale=locale)
+        service_label = _resolve_booking_service_label_for_patient(booking=booking, locale=locale)
+        doctor_label = _resolve_booking_doctor_label_for_patient(booking=booking, locale=locale)
+        branch_label = _resolve_booking_branch_label_for_patient(booking=booking, locale=locale)
+        reminders_label = _resolve_patient_my_booking_reminder_label(booking=booking, locale=locale)
+        next_step = _resolve_patient_my_booking_next_step(status=booking.status, locale=locale)
+        lines = [
+            i18n.t("patient.booking.my.panel.title", locale),
+            "",
+            status_label,
+            "",
+            f"{i18n.t('patient.booking.my.field.service', locale)}: {service_label}",
+            f"{i18n.t('patient.booking.my.field.doctor', locale)}: {doctor_label}",
+            f"{i18n.t('patient.booking.my.field.date', locale)}: {date_label}",
+            f"{i18n.t('patient.booking.my.field.time', locale)}: {time_label}",
+            f"{i18n.t('patient.booking.my.field.branch', locale)}: {branch_label}",
+            "",
+            f"{i18n.t('patient.booking.my.field.reminders', locale)}: {reminders_label}",
+        ]
+        if next_step:
+            lines.extend(["", next_step])
+        return "\n".join(lines)
+
+    def _resolve_booking_service_label_for_patient(*, booking, locale: str) -> str:
+        service = reference.get_service(booking.clinic_id, booking.service_id or "") if booking.service_id else None
+        if service is None:
+            return i18n.t("patient.booking.review.value.missing", locale)
+        fallback_locale = _fallback_locale_for_clinic(booking.clinic_id)
+        return _resolve_service_label(
+            service_title_key=service.title_key,
+            service_code=service.code,
+            fallback_id=None,
             locale=locale,
-            mode=CardMode.EXPANDED,
+            fallback_locale=fallback_locale,
+            i18n=i18n,
         )
-        return CardShellRenderer.to_panel(shell).text
+
+    def _resolve_booking_doctor_label_for_patient(*, booking, locale: str) -> str:
+        doctor = reference.get_doctor(booking.clinic_id, booking.doctor_id or "") if booking.doctor_id else None
+        return _resolve_reference_label(
+            display_name=(doctor.display_name if doctor is not None else None),
+            fallback_id=None,
+            locale=locale,
+            i18n=i18n,
+        )
+
+    def _resolve_booking_branch_label_for_patient(*, booking, locale: str) -> str:
+        if not booking.branch_id:
+            return i18n.t("patient.booking.my.branch_missing", locale)
+        branch = reference.get_branch(booking.clinic_id, booking.branch_id)
+        display_name = (branch.display_name or "").strip() if branch is not None else ""
+        return display_name or i18n.t("patient.booking.my.branch_missing", locale)
+
+    def _resolve_patient_my_booking_status_label(*, status: str, locale: str) -> str:
+        status_key = f"patient.booking.my.status.{status}"
+        status_text = i18n.t(status_key, locale)
+        if status_text == status_key:
+            status_text = i18n.t("patient.booking.my.status.fallback", locale).format(status=status.replace("_", " "))
+        icon_by_status = {
+            "pending_confirmation": "⏳",
+            "confirmed": "✅",
+            "reschedule_requested": "🔁",
+            "canceled": "❌",
+            "checked_in": "✅",
+            "in_service": "🦷",
+            "completed": "✅",
+            "no_show": "❌",
+        }
+        return f"{icon_by_status.get(status, 'ℹ️')} {status_text}"
+
+    def _resolve_patient_my_booking_reminder_label(*, booking, locale: str) -> str:
+        if booking.status in {"canceled", "completed", "no_show"}:
+            return i18n.t("patient.booking.my.reminders.not_needed", locale)
+        return i18n.t("patient.booking.my.reminders.default", locale)
+
+    def _resolve_patient_my_booking_next_step(*, status: str, locale: str) -> str:
+        key = f"patient.booking.my.next.{status}"
+        value = i18n.t(key, locale)
+        return "" if value == key else value
 
     async def _build_patient_booking_controls_keyboard(*, booking, session_state_token: str, locale: str) -> InlineKeyboardMarkup:
-        return InlineKeyboardMarkup(
-            inline_keyboard=[
-                *(
-                    [
-                        [
-                            InlineKeyboardButton(
-                                text=i18n.t("card.booking.action.confirm", locale),
-                                callback_data=await _encode_runtime_callback(
-                                    profile=CardProfile.BOOKING,
-                                    entity_type=EntityType.BOOKING,
-                                    entity_id=booking.booking_id,
-                                    action=CardAction.CONFIRM,
-                                    source_context=SourceContext.BOOKING_LIST,
-                                    source_ref="mybk.confirm",
-                                    page_or_index="confirm",
-                                    state_token=session_state_token,
-                                ),
-                            )
-                        ]
-                    ]
-                    if booking.status == "pending_confirmation"
-                    else []
-                ),
+        rows: list[list[InlineKeyboardButton]] = []
+        is_terminal = booking.status in {"canceled", "completed", "no_show", "checked_in", "in_service"}
+        if booking.status == "pending_confirmation":
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.booking.my.confirm", locale),
+                        callback_data=await _encode_runtime_callback(
+                            profile=CardProfile.BOOKING,
+                            entity_type=EntityType.BOOKING,
+                            entity_id=booking.booking_id,
+                            action=CardAction.CONFIRM,
+                            source_context=SourceContext.BOOKING_LIST,
+                            source_ref="mybk.confirm",
+                            page_or_index="confirm",
+                            state_token=session_state_token,
+                        ),
+                    )
+                ]
+            )
+        if not is_terminal:
+            rows.append(
                 [
                     InlineKeyboardButton(
                         text=i18n.t("patient.booking.my.reschedule", locale),
@@ -5191,22 +5279,27 @@ def make_router(
                             state_token=session_state_token,
                         ),
                     )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text=i18n.t("patient.booking.my.earlier_slot", locale),
-                        callback_data=await _encode_runtime_callback(
-                            profile=CardProfile.BOOKING,
-                            entity_type=EntityType.BOOKING,
-                            entity_id=booking.booking_id,
-                            action=CardAction.RESCHEDULE,
-                            source_context=SourceContext.BOOKING_LIST,
-                            source_ref="mybk.waitlist",
-                            page_or_index="waitlist",
-                            state_token=session_state_token,
-                        ),
-                    )
-                ],
+                ]
+            )
+            if booking.status in {"pending_confirmation", "confirmed"}:
+                rows.append(
+                    [
+                        InlineKeyboardButton(
+                            text=i18n.t("patient.booking.my.earlier_slot", locale),
+                            callback_data=await _encode_runtime_callback(
+                                profile=CardProfile.BOOKING,
+                                entity_type=EntityType.BOOKING,
+                                entity_id=booking.booking_id,
+                                action=CardAction.RESCHEDULE,
+                                source_context=SourceContext.BOOKING_LIST,
+                                source_ref="mybk.waitlist",
+                                page_or_index="waitlist",
+                                state_token=session_state_token,
+                            ),
+                        )
+                    ]
+                )
+            rows.append(
                 [
                     InlineKeyboardButton(
                         text=i18n.t("patient.booking.my.cancel", locale),
@@ -5221,9 +5314,10 @@ def make_router(
                             state_token=session_state_token,
                         ),
                     )
-                ],
-            ],
-        )
+                ]
+            )
+        rows.append([InlineKeyboardButton(text=i18n.t("patient.home.nav.home", locale), callback_data="phome:home")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
 
     async def _send_fresh_booking_panel_from_callback(
         *,
