@@ -100,3 +100,44 @@
 ## Go / No-Go recommendation for P0-05
 - **Recommendation: GO**.
 - Rationale: P0-04C acceptance targets are satisfied (new smoke gate exists and passes, reschedule review datetime polished, recovery nav present, P0-03D unchanged and passing, broad `patient and booking` subset passing with only known unrelated warnings).
+
+## P0-04C matrix (requested)
+
+### Review
+- structured text: **yes**
+- edit buttons: **yes**
+- no raw/debug/timezone trash: **yes**
+
+### Edit service
+- hold released: **yes**
+- slot reset: **yes**
+- service -> doctor: **yes**
+
+### Edit doctor
+- hold released: **yes**
+- doctor -> slots: **yes**
+
+### Edit time
+- hold released: **yes**
+- slot -> review if contact exists: **yes**
+
+### Edit phone
+- hold preserved: **yes**
+- contact keyboard: **yes**
+- phone -> review: **yes**
+- Back -> review: **yes**
+
+### Success
+- localized status: **yes**
+- My Booking/Home: **yes**
+- no pending_confirmation/telegram/Actions: **yes**
+
+### Reschedule review
+- no `%Y-%m-%d %H:%M %Z`: **yes**
+- no UTC/MSK: **yes**
+- human date/time: **yes**
+- Home recovery: **yes**
+
+### Regression
+- P0-03D smoke: **pass/fail = pass** (`6 passed`)
+- patient and booking: **passed count = 105** (`105 passed, 482 deselected, 2 warnings`)
