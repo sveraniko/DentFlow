@@ -1197,36 +1197,13 @@ def make_router(
             branch_id=branch_id,
             reserved_qty=1,
         )
-        status_label = _resolve_care_order_status_label(status="confirmed", locale=locale, i18n=i18n)
-        next_step = i18n.t("patient.care.order.next_step", locale)
-        await _send_or_edit_panel(
+        await _render_care_order_created_panel(
+            message,
             actor_id=actor_id,
-            message=message,
-            session_id="care",
-            text=i18n.t("patient.care.order.result.panel", locale).format(
-                product=i18n.t(product.title_key, locale),
-                branch=branch_label,
-                status=status_label,
-                next_step=next_step,
-            ),
-            keyboard=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text=i18n.t("patient.care.order.result.open_current", locale),
-                            callback_data=f"careo:open:{order.care_order_id}",
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text=i18n.t("patient.care.order.result.open_orders", locale),
-                            callback_data="care:orders",
-                        )
-                    ],
-                    [InlineKeyboardButton(text=i18n.t("patient.care.order.result.open_catalog", locale), callback_data="phome:care")],
-                    [InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")],
-                ]
-            ),
+            clinic_id=clinic_id,
+            order=order,
+            product=product,
+            branch_id=branch_id,
         )
 
     async def _send_or_edit_panel(
@@ -2538,6 +2515,23 @@ def make_router(
     def _care_catalog_nav_button(*, locale: str) -> InlineKeyboardButton:
         return InlineKeyboardButton(text=i18n.t("patient.care.nav.open_catalog", locale), callback_data="phome:care")
 
+    def _care_command_recovery_keyboard(
+        *,
+        locale: str,
+        include_orders: bool = True,
+        include_catalog: bool = True,
+        include_my_booking: bool = False,
+    ) -> InlineKeyboardMarkup:
+        rows: list[list[InlineKeyboardButton]] = []
+        if include_catalog:
+            rows.append([InlineKeyboardButton(text=i18n.t("patient.care.command.nav.catalog", locale), callback_data="phome:care")])
+        if include_orders:
+            rows.append([InlineKeyboardButton(text=i18n.t("patient.care.command.nav.orders", locale), callback_data="care:orders")])
+        if include_my_booking:
+            rows.append([InlineKeyboardButton(text=i18n.t("patient.care.command.nav.my_booking", locale), callback_data="phome:my_booking")])
+        rows.append([InlineKeyboardButton(text=i18n.t("patient.care.command.nav.home", locale), callback_data="phome:home")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
     def _recommendation_command_recovery_keyboard(
         *,
         locale: str,
@@ -2657,6 +2651,36 @@ def make_router(
                         )
                     ],
                     [InlineKeyboardButton(text=i18n.t("patient.care.products.open_catalog", locale), callback_data="phome:care")],
+                    [InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")],
+                ]
+            ),
+        )
+
+    async def _render_care_order_created_panel(
+        message: Message | CallbackQuery,
+        *,
+        actor_id: int,
+        clinic_id: str,
+        order: Any,
+        product: Any,
+        branch_id: str,
+    ) -> None:
+        locale = _locale()
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id="care",
+            text=i18n.t("patient.care.order.result.panel", locale).format(
+                product=i18n.t(product.title_key, locale),
+                branch=_resolve_care_order_branch_label(clinic_id=clinic_id, branch_id=branch_id, locale=locale),
+                status=i18n.t("patient.care.order.result.status.confirmed", locale),
+                next_step=i18n.t("patient.care.order.next_step", locale),
+            ),
+            keyboard=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text=i18n.t("patient.care.order.result.open_current", locale), callback_data=f"careo:open:{order.care_order_id}")],
+                    [InlineKeyboardButton(text=i18n.t("patient.care.order.result.open_orders", locale), callback_data="care:orders")],
+                    [InlineKeyboardButton(text=i18n.t("patient.care.order.result.open_catalog", locale), callback_data="phome:care")],
                     [InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")],
                 ]
             ),
@@ -3366,13 +3390,26 @@ def make_router(
     async def care_product_open(message: Message) -> None:
         if not message.from_user or not message.text or care_commerce_service is None:
             return
+        locale = _locale()
         parts = message.text.split(maxsplit=1)
         if len(parts) != 2:
-            await message.answer(i18n.t("patient.care.product.open.usage", _locale()))
+            await _send_or_edit_panel(
+                actor_id=message.from_user.id,
+                message=message,
+                session_id="care",
+                text=i18n.t("patient.care.command.product_open.usage.panel", locale),
+                keyboard=_care_command_recovery_keyboard(locale=locale),
+            )
             return
         clinic_id = _primary_clinic_id()
         if clinic_id is None:
-            await message.answer(i18n.t("patient.booking.unavailable", _locale()))
+            await _send_or_edit_panel(
+                actor_id=message.from_user.id,
+                message=message,
+                session_id="care",
+                text=i18n.t("patient.care.command.clinic_unavailable.panel", locale),
+                keyboard=_care_command_recovery_keyboard(locale=locale, include_orders=False, include_catalog=False),
+            )
             return
         await _render_product_card(message, actor_id=message.from_user.id, clinic_id=clinic_id, product_id=parts[1].strip())
 
@@ -3380,48 +3417,110 @@ def make_router(
     async def care_order_create(message: Message) -> None:
         if not message.from_user or not message.text or recommendation_service is None or care_commerce_service is None:
             return
+        locale = _locale()
         parts = message.text.split(maxsplit=3)
         if len(parts) != 4:
-            await message.answer(i18n.t("patient.care.order.create.usage", _locale()))
+            await _send_or_edit_panel(
+                actor_id=message.from_user.id,
+                message=message,
+                session_id="care",
+                text=i18n.t("patient.care.command.order_create.usage.panel", locale),
+                keyboard=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text=i18n.t("patient.care.command.nav.recommendations", locale), callback_data="phome:recommendations")],
+                        [InlineKeyboardButton(text=i18n.t("patient.care.command.nav.catalog", locale), callback_data="phome:care")],
+                        [InlineKeyboardButton(text=i18n.t("patient.care.command.nav.orders", locale), callback_data="care:orders")],
+                        [InlineKeyboardButton(text=i18n.t("patient.care.command.nav.home", locale), callback_data="phome:home")],
+                    ]
+                ),
+            )
             return
         recommendation_id, care_product_id, pickup_branch_id = parts[1], parts[2], parts[3]
         patient_id = await _resolve_patient_id_for_user(message.from_user.id)
         clinic_id = _primary_clinic_id()
         if not patient_id or clinic_id is None:
-            await message.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()))
+            await _render_care_reserve_patient_resolution_failed_panel(message, actor_id=message.from_user.id)
             return
         recommendation = await recommendation_service.get(recommendation_id)
         if recommendation is None or recommendation.patient_id != patient_id:
-            await message.answer(i18n.t("patient.recommendations.not_found", _locale()))
+            await _send_or_edit_panel(
+                actor_id=message.from_user.id,
+                message=message,
+                session_id="care",
+                text=i18n.t("patient.recommendations.command.not_found.panel", locale),
+                keyboard=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text=i18n.t("patient.care.command.nav.recommendations", locale), callback_data="phome:recommendations")],
+                        [InlineKeyboardButton(text=i18n.t("patient.care.command.nav.my_booking", locale), callback_data="phome:my_booking")],
+                        [InlineKeyboardButton(text=i18n.t("patient.care.command.nav.home", locale), callback_data="phome:home")],
+                    ]
+                ),
+            )
             return
         branches = reference.list_branches(clinic_id)
         if not any(branch.branch_id == pickup_branch_id for branch in branches):
-            await message.answer(i18n.t("patient.care.order.branch_invalid", _locale()))
+            await _send_or_edit_panel(
+                actor_id=message.from_user.id,
+                message=message,
+                session_id="care",
+                text=i18n.t("patient.care.command.order_create.branch_invalid.panel", locale),
+                keyboard=_care_command_recovery_keyboard(locale=locale, include_orders=False),
+            )
             return
         linked_resolution = await care_commerce_service.resolve_recommendation_target_result(
             clinic_id=clinic_id,
             recommendation_id=recommendation_id,
             recommendation_type=recommendation.recommendation_type,
-            locale=_locale(),
+            locale=locale,
         )
         linked = linked_resolution.products
-        match = next((item.product for item in linked if item.care_product_id == care_product_id), None)
+        match = None
+        for item in linked:
+            if item.care_product_id != care_product_id:
+                continue
+            maybe_product = getattr(item, "product", None)
+            if maybe_product is not None:
+                match = maybe_product
+                break
+            match = await care_commerce_service.repository.get_product(care_product_id)
+            break
         if match is None:
-            await message.answer(i18n.t("patient.care.order.product_not_linked", _locale()))
+            await _send_or_edit_panel(
+                actor_id=message.from_user.id,
+                message=message,
+                session_id="care",
+                text=i18n.t("patient.care.command.order_create.product_not_linked.panel", locale),
+                keyboard=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text=i18n.t("patient.care.products.open_for_recommendation", locale),
+                                callback_data=f"prec:products:{recommendation_id}",
+                            )
+                        ],
+                        [InlineKeyboardButton(text=i18n.t("patient.care.command.nav.catalog", locale), callback_data="phome:care")],
+                        [InlineKeyboardButton(text=i18n.t("patient.care.command.nav.home", locale), callback_data="phome:home")],
+                    ]
+                ),
+            )
             return
         free_qty = await care_commerce_service.compute_free_qty(branch_id=pickup_branch_id, care_product_id=match.care_product_id)
         if free_qty < 1:
             content = await care_commerce_service.resolve_product_content(
                 clinic_id=clinic_id,
                 product=match,
-                locale=_locale(),
-                fallback_locale=_locale(),
+                locale=locale,
+                fallback_locale=locale,
             )
-            await message.answer(
-                i18n.t("patient.care.order.out_of_stock", _locale()).format(
-                    branch_id=pickup_branch_id,
-                    title=content.title or i18n.t(match.title_key, _locale()),
-                )
+            await _send_or_edit_panel(
+                actor_id=message.from_user.id,
+                message=message,
+                session_id="care",
+                text=i18n.t("patient.care.order.out_of_stock.panel", locale).format(
+                    product=content.title or i18n.t(match.title_key, locale),
+                    branch=_resolve_care_order_branch_label(clinic_id=clinic_id, branch_id=pickup_branch_id, locale=locale),
+                ),
+                keyboard=_care_command_recovery_keyboard(locale=locale, include_orders=False),
             )
             return
         order = await care_commerce_service.create_order(
@@ -3435,7 +3534,14 @@ def make_router(
             items=[(match, 1)],
         )
         await care_commerce_service.transition_order(care_order_id=order.care_order_id, to_status="confirmed")
-        await message.answer(i18n.t("patient.care.order.created", _locale()).format(care_order_id=order.care_order_id, status="confirmed", branch_id=pickup_branch_id))
+        await _render_care_order_created_panel(
+            message,
+            actor_id=message.from_user.id,
+            clinic_id=clinic_id,
+            order=order,
+            product=match,
+            branch_id=pickup_branch_id,
+        )
 
     @router.message(Command("care_orders"))
     async def care_orders(message: Message) -> None:
@@ -3444,7 +3550,7 @@ def make_router(
         patient_id = await _resolve_patient_id_for_user(message.from_user.id)
         clinic_id = _primary_clinic_id()
         if not patient_id or clinic_id is None:
-            await message.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()))
+            await _render_care_orders_patient_resolution_failed_panel(message, actor_id=message.from_user.id)
             return
         await _render_care_orders_panel(
             message,
@@ -3458,17 +3564,31 @@ def make_router(
     async def care_order_repeat(message: Message) -> None:
         if not message.from_user or not message.text or care_commerce_service is None:
             return
+        locale = _locale()
         parts = message.text.split(maxsplit=1)
         if len(parts) != 2:
-            await message.answer(i18n.t("patient.care.orders.repeat.usage", _locale()))
+            await _send_or_edit_panel(
+                actor_id=message.from_user.id,
+                message=message,
+                session_id="care",
+                text=i18n.t("patient.care.command.order_repeat.usage.panel", locale),
+                keyboard=_care_command_recovery_keyboard(locale=locale),
+            )
             return
         clinic_id = _primary_clinic_id()
         patient_id = await _resolve_patient_id_for_user(message.from_user.id)
         if clinic_id is None or patient_id is None:
-            await message.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()))
+            await _render_care_orders_patient_resolution_failed_panel(message, actor_id=message.from_user.id)
             return
-        view = await _reserve_again_from_order(clinic_id=clinic_id, patient_id=patient_id, care_order_id=parts[1].strip())
-        await message.answer(view.text)
+        care_order_id = parts[1].strip()
+        view = await _reserve_again_from_order(clinic_id=clinic_id, patient_id=patient_id, care_order_id=care_order_id)
+        await _send_or_edit_panel(
+            actor_id=message.from_user.id,
+            message=message,
+            session_id="care",
+            text=view.text,
+            keyboard=await _repeat_action_keyboard(actor_id=message.from_user.id, care_order_id=care_order_id, view=view),
+        )
 
     @router.message(Command("book"))
     async def book_entry(message: Message) -> None:

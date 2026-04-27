@@ -1135,7 +1135,7 @@ def test_care_reserve_success_panel_includes_current_order_and_orders_ctas() -> 
     text, markup = _latest_callback_panel(callback)
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
     assert "✅ Product reserved" in text
-    assert "Status: Confirmed" in text
+    assert "Status: Reserved" in text
     assert "careo:open:co_new_1" in callbacks
     assert "care:orders" in callbacks
 
