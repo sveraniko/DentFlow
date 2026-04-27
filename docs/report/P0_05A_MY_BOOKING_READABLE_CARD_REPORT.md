@@ -117,6 +117,29 @@ No matches.
 - `pytest -q tests/test_patient_first_booking_review_pat_a1_1.py tests/test_patient_home_surface_pat_a1_2.py` → PASS (70 passed)
 - `pytest -q tests -k "patient and booking"` → PASS (105 passed, 487 deselected, 2 warnings)
 
+## P0-05A matrix (requested)
+
+### My Booking card
+- readable title/status: **yes**
+- service/doctor/date/time/branch/reminders: **yes**
+- no Actions/Channel/telegram/internal ids: **yes**
+- no UTC/MSK/ISO datetime: **yes**
+
+### Keyboard
+- pending: confirm/reschedule/earlier/cancel/home: **yes**
+- confirmed: reschedule/earlier/cancel/home: **yes**
+- canceled/completed/no_show: home only: **yes**
+
+### Action results
+- confirm re-renders clean card: **yes**
+- cancel re-renders clean card: **yes**
+- no stale mutation buttons after cancel: **yes**
+
+### Regression
+- P0-04C smoke: **pass** (`3 passed`)
+- P0-03D smoke: **pass** (`6 passed`)
+- patient and booking: **105 passed**
+
 ## Carry-forward for P0-05B
 - Cancel prompt polish (copy/hierarchy consistency).
 - Waitlist result polish if any flat text remains.
