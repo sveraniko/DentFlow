@@ -2542,12 +2542,25 @@ def make_router(
         )
 
     async def _enter_recommendations_list(message: Message | CallbackQuery, *, actor_id: int) -> None:
+        locale = _locale()
+        entry_nav_keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=i18n.t("patient.recommendations.nav.my_booking", locale),
+                        callback_data="phome:my_booking",
+                    )
+                ],
+                [InlineKeyboardButton(text=i18n.t("patient.recommendations.nav.home", locale), callback_data="phome:home")],
+            ]
+        )
         if recommendation_service is None:
             await _send_or_edit_panel(
                 actor_id=actor_id,
                 message=message,
                 session_id="patient_home",
-                text=i18n.t("patient.home.action.unavailable", _locale()),
+                text=i18n.t("patient.recommendations.unavailable.panel", locale),
+                keyboard=entry_nav_keyboard,
             )
             return
         patient_id = await _resolve_patient_id_for_user(actor_id)
@@ -2556,7 +2569,8 @@ def make_router(
                 actor_id=actor_id,
                 message=message,
                 session_id="patient_home",
-                text=i18n.t("patient.recommendations.patient_resolution_failed", _locale()),
+                text=i18n.t("patient.recommendations.patient_resolution_failed.panel", locale),
+                keyboard=entry_nav_keyboard,
             )
             return
         rows = await recommendation_service.list_for_patient(patient_id=patient_id)
@@ -2660,7 +2674,10 @@ def make_router(
                 ]
             )
         keyboard_rows.append(
-            [InlineKeyboardButton(text=i18n.t("common.back", locale), callback_data="phome:recommendations")]
+            [InlineKeyboardButton(text=i18n.t("patient.recommendations.nav.back_to_list", locale), callback_data="phome:recommendations")]
+        )
+        keyboard_rows.append(
+            [InlineKeyboardButton(text=i18n.t("patient.recommendations.nav.home", locale), callback_data="phome:home")]
         )
         await _send_or_edit_panel(
             actor_id=actor_id,
@@ -2683,11 +2700,11 @@ def make_router(
                 actor_id=actor_id,
                 message=message,
                 session_id=session_id,
-                text=i18n.t("patient.recommendations.empty", locale),
+                text=i18n.t("patient.recommendations.empty.panel", locale),
                 keyboard=InlineKeyboardMarkup(
                     inline_keyboard=[
-                        [InlineKeyboardButton(text=i18n.t("patient.home.action.my_booking", locale), callback_data="phome:my_booking")],
-                        [_patient_home_nav_button(locale=locale)],
+                        [InlineKeyboardButton(text=i18n.t("patient.recommendations.nav.my_booking", locale), callback_data="phome:my_booking")],
+                        [InlineKeyboardButton(text=i18n.t("patient.recommendations.nav.home", locale), callback_data="phome:home")],
                     ]
                 ),
             )
@@ -2698,11 +2715,11 @@ def make_router(
                 actor_id=actor_id,
                 message=message,
                 session_id=session_id,
-                text=i18n.t("patient.recommendations.empty", locale),
+                text=i18n.t("patient.recommendations.empty.panel", locale),
                 keyboard=InlineKeyboardMarkup(
                     inline_keyboard=[
-                        [InlineKeyboardButton(text=i18n.t("patient.home.action.my_booking", locale), callback_data="phome:my_booking")],
-                        [_patient_home_nav_button(locale=locale)],
+                        [InlineKeyboardButton(text=i18n.t("patient.recommendations.nav.my_booking", locale), callback_data="phome:my_booking")],
+                        [InlineKeyboardButton(text=i18n.t("patient.recommendations.nav.home", locale), callback_data="phome:home")],
                     ]
                 ),
             )
@@ -3177,7 +3194,6 @@ def make_router(
         if not callback.from_user:
             return
         await _enter_recommendations_list(callback, actor_id=callback.from_user.id)
-        await callback.answer()
 
     @router.callback_query(F.data.startswith("prec:open:"))
     async def recommendation_open_callback(callback: CallbackQuery) -> None:
@@ -3207,7 +3223,6 @@ def make_router(
             actor_id=callback.from_user.id,
             recommendation=recommendation,
         )
-        await callback.answer()
 
     @router.callback_query(F.data.startswith("prec:act:"))
     async def recommendation_action_callback(callback: CallbackQuery) -> None:
