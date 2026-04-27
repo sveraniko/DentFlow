@@ -106,6 +106,45 @@ Updated slot selection success path:
 - `rg "review_edit_service|review_edit_doctor|review_edit_time|review_edit_phone" app/interfaces/bots/patient tests` ✅ modes handled explicitly
 - `rg "callback_data=f\"book:review:edit" app/interfaces/bots/patient/router.py` ✅ review keyboard callback definitions present
 
+
+## P0-04B matrix (post-check)
+
+### Review
+- edit service button: **yes**
+- edit doctor button: **yes**
+- edit time button: **yes**
+- edit phone button: **yes**
+
+### Edit service
+- old hold released: **yes**
+- slot cleared: **yes**
+- service picker shown: **yes**
+- after service -> doctor picker: **yes**
+
+### Edit doctor
+- old hold released: **yes**
+- slot cleared: **yes**
+- doctor picker shown: **yes**
+- after doctor -> slot picker: **yes**
+
+### Edit time
+- old hold released: **yes**
+- slot cleared: **yes**
+- slot picker shown: **yes**
+- after slot -> review if contact exists: **yes**
+
+### Edit phone
+- hold not released: **yes**
+- contact keyboard shown: **yes**
+- Back returns review: **yes**
+- Home removes keyboard: **yes**
+- phone submit returns review: **yes**
+
+### Regression
+- normal booking still works: **yes**
+- P0-03D smoke passes: **yes**
+- patient and booking subset: **105 passed**
+
 ## Carry-forward for P0-04C smoke gate and reschedule review datetime polish
 - Keep callback namespace allowlist synchronized with any new booking callback prefixes.
 - Add explicit smoke coverage for `book:review:edit:*` stale-callback and release-failure branches.
