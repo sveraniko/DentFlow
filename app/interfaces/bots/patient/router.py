@@ -972,18 +972,7 @@ def make_router(
             return
         product = await care_commerce_service.repository.get_product(product_id)
         if product is None or product.status != "active":
-            await _send_or_edit_panel(
-                actor_id=actor_id,
-                message=message,
-                session_id="care",
-                text=i18n.t("patient.care.product.missing.panel", locale),
-                keyboard=InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [InlineKeyboardButton(text=i18n.t("patient.care.products.open_catalog", locale), callback_data="phome:care")],
-                        [InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")],
-                    ]
-                ),
-            )
+            await _render_care_product_missing_panel(message, actor_id=actor_id)
             return
         state = await _care_state(actor_id)
         content = await care_commerce_service.resolve_product_content(clinic_id=clinic_id, product=product, locale=locale, fallback_locale=locale)
@@ -1150,7 +1139,7 @@ def make_router(
             return
         product = await care_commerce_service.repository.get_product(product_id)
         if product is None or product.status != "active":
-            await _send_or_edit_panel(actor_id=actor_id, message=message, session_id="care", text=i18n.t("patient.care.product.missing", locale))
+            await _render_care_product_missing_panel(message, actor_id=actor_id)
             return
         state = await _care_state(actor_id)
         branch_id = state.selected_branch_by_product.get(product_id) or await _resolve_preferred_branch_for_product(clinic_id=clinic_id, product_id=product_id)
@@ -2575,6 +2564,36 @@ def make_router(
             ),
         )
 
+    async def _render_recommendations_patient_resolution_failed_panel(message: Message | CallbackQuery, *, actor_id: int) -> None:
+        locale = _locale()
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id="patient_home",
+            text=i18n.t("patient.recommendations.patient_resolution_failed.panel", locale),
+            keyboard=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text=i18n.t("patient.recommendations.nav.my_booking", locale), callback_data="phome:my_booking")],
+                    [InlineKeyboardButton(text=i18n.t("patient.recommendations.nav.home", locale), callback_data="phome:home")],
+                ]
+            ),
+        )
+
+    async def _render_care_product_missing_panel(message: Message | CallbackQuery, *, actor_id: int) -> None:
+        locale = _locale()
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id="care",
+            text=i18n.t("patient.care.product.missing.panel", locale),
+            keyboard=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text=i18n.t("patient.care.products.open_catalog", locale), callback_data="phome:care")],
+                    [InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")],
+                ]
+            ),
+        )
+
     async def _render_recommendation_products_recovery_panel(
         message: Message | CallbackQuery,
         *,
@@ -3352,21 +3371,18 @@ def make_router(
         if not callback.from_user:
             return
         await _enter_new_booking(callback, actor_id=callback.from_user.id)
-        await callback.answer()
 
     @router.callback_query(F.data == "phome:my_booking")
     async def patient_home_my_booking(callback: CallbackQuery) -> None:
         if not callback.from_user:
             return
         await _enter_existing_booking_lookup(callback, actor_id=callback.from_user.id)
-        await callback.answer()
 
     @router.callback_query(F.data == "phome:home")
     async def patient_home_main(callback: CallbackQuery) -> None:
         if not callback.from_user:
             return
         await _render_patient_home_panel(callback, actor_id=callback.from_user.id)
-        await callback.answer()
 
     @router.callback_query(F.data == "phome:recommendations")
     async def patient_home_recommendations(callback: CallbackQuery) -> None:
@@ -3465,7 +3481,7 @@ def make_router(
         recommendation_id = parts[2]
         patient_id = await _resolve_patient_id_for_user(callback.from_user.id)
         if not patient_id:
-            await callback.answer(i18n.t("patient.recommendations.patient_resolution_failed", _locale()), show_alert=True)
+            await _render_recommendations_patient_resolution_failed_panel(callback, actor_id=callback.from_user.id)
             return
         recommendation = await recommendation_service.get(recommendation_id)
         if recommendation is None or recommendation.patient_id != patient_id:
@@ -3546,7 +3562,6 @@ def make_router(
             patient_id=patient_id,
             page=0,
         )
-        await callback.answer()
 
     async def _open_patient_care_order_from_callback(
         callback: CallbackQuery,
@@ -3590,7 +3605,6 @@ def make_router(
         )
         if not opened:
             return
-        await callback.answer()
 
     @router.callback_query(F.data.startswith("book:svc:"))
     async def select_service(callback: CallbackQuery) -> None:
@@ -3861,8 +3875,8 @@ def make_router(
                 return
             if decoded.page_or_index == "cover" or decoded.page_or_index.startswith("gallery"):
                 product = await care_commerce_service.repository.get_product(decoded.entity_id)
-                if product is None:
-                    await callback.answer(i18n.t("patient.care.product.missing", _locale()), show_alert=True)
+                if product is None or product.status != "active":
+                    await _render_care_product_missing_panel(callback, actor_id=callback.from_user.id)
                     return
                 refs = care_commerce_service.resolve_product_media_refs(product=product)
                 state = await _care_state(callback.from_user.id)
