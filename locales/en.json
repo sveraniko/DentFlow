@@ -686,6 +686,8 @@
   "admin.queue.status.canceled": "Canceled",
   "service.cleaning": "Teeth cleaning",
   "service.consult": "Consultation",
+  "service.treatment": "Treatment visit",
+  "service.urgent": "Urgent pain visit",
   "reminder.message.layout": "DentFlow reminder\n📅 {datetime}\n👩‍⚕️ {doctor}\n🦷 {service}\n🏥 {branch}\n\n{summary}",
   "reminder.type.booking_confirmation.summary": "Please confirm your appointment or request a change.",
   "reminder.type.booking_previsit.summary": "Upcoming visit reminder. Please check the time.",

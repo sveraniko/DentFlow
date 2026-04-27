@@ -16,7 +16,7 @@
       "doctor_preference_type": "specific_doctor",
       "doctor_id": "doctor_anna",
       "doctor_code_raw": "ANNA-001",
-      "selected_slot_id": "slot_anna_20260420_1000",
+      "selected_slot_id": "slot_anna_20260420_0700_consult",
       "selected_hold_id": "hold_001",
       "contact_phone_snapshot": "+7 999 123 45 67",
       "notes": "Seed booking session",
@@ -30,7 +30,9 @@
       "session_event_id": "bse_001",
       "booking_session_id": "bks_001",
       "event_name": "session_started",
-      "payload_json": {"surface": "telegram"},
+      "payload_json": {
+        "surface": "telegram"
+      },
       "actor_type": "patient",
       "actor_id": "telegram:3001",
       "occurred_at": "2026-04-20T09:00:00Z"
@@ -38,89 +40,218 @@
   ],
   "availability_slots": [
     {
-      "slot_id": "slot_anna_20260420_1000",
+      "slot_id": "slot_anna_20260420_0700_consult",
       "clinic_id": "clinic_main",
       "branch_id": "branch_central",
       "doctor_id": "doctor_anna",
-      "start_at": "2026-04-20T10:00:00Z",
-      "end_at": "2026-04-20T10:30:00Z",
+      "start_at": "2026-04-20T07:00:00Z",
+      "end_at": "2026-04-20T07:30:00Z",
       "status": "open",
       "visibility_policy": "public",
-      "service_scope": {"service_ids": ["service_consult"]},
+      "service_scope": {
+        "service_ids": [
+          "service_consult"
+        ]
+      },
       "source_ref": "seed",
-      "updated_at": "2026-04-20T08:00:00Z"
+      "updated_at": "2026-04-20T06:00:00Z"
     },
     {
-      "slot_id": "slot_anna_20260428_1000",
+      "slot_id": "slot_anna_20260420_1100_urgent",
       "clinic_id": "clinic_main",
       "branch_id": "branch_central",
       "doctor_id": "doctor_anna",
-      "start_at": "2026-04-28T10:00:00Z",
-      "end_at": "2026-04-28T10:30:00Z",
+      "start_at": "2026-04-20T11:00:00Z",
+      "end_at": "2026-04-20T11:30:00Z",
       "status": "open",
       "visibility_policy": "public",
-      "service_scope": {"service_ids": ["service_consult"]},
+      "service_scope": {
+        "service_ids": [
+          "service_consult",
+          "service_urgent"
+        ]
+      },
       "source_ref": "seed",
-      "updated_at": "2026-04-26T08:00:00Z"
+      "updated_at": "2026-04-20T10:00:00Z"
     },
     {
-      "slot_id": "slot_anna_20260428_1100",
+      "slot_id": "slot_anna_20260421_1500_urgent",
       "clinic_id": "clinic_main",
       "branch_id": "branch_central",
       "doctor_id": "doctor_anna",
-      "start_at": "2026-04-28T11:00:00Z",
-      "end_at": "2026-04-28T11:30:00Z",
+      "start_at": "2026-04-21T15:00:00Z",
+      "end_at": "2026-04-21T15:30:00Z",
       "status": "open",
       "visibility_policy": "public",
-      "service_scope": {"service_ids": ["service_consult"]},
+      "service_scope": {
+        "service_ids": [
+          "service_urgent"
+        ]
+      },
       "source_ref": "seed",
-      "updated_at": "2026-04-26T08:00:00Z"
+      "updated_at": "2026-04-21T14:00:00Z"
     },
     {
-      "slot_id": "slot_anna_20260429_1000",
+      "slot_id": "slot_boris_20260421_0700_cleaning",
       "clinic_id": "clinic_main",
       "branch_id": "branch_central",
-      "doctor_id": "doctor_anna",
-      "start_at": "2026-04-29T10:00:00Z",
-      "end_at": "2026-04-29T10:30:00Z",
+      "doctor_id": "doctor_boris",
+      "start_at": "2026-04-21T07:00:00Z",
+      "end_at": "2026-04-21T07:45:00Z",
       "status": "open",
       "visibility_policy": "public",
-      "service_scope": {"service_ids": ["service_consult"]},
+      "service_scope": {
+        "service_ids": [
+          "service_cleaning"
+        ]
+      },
       "source_ref": "seed",
-      "updated_at": "2026-04-26T08:00:00Z"
+      "updated_at": "2026-04-21T06:00:00Z"
     },
     {
-      "slot_id": "slot_anna_20260430_1000",
+      "slot_id": "slot_irina_20260422_1100_treatment",
       "clinic_id": "clinic_main",
       "branch_id": "branch_central",
-      "doctor_id": "doctor_anna",
-      "start_at": "2026-04-30T10:00:00Z",
-      "end_at": "2026-04-30T10:30:00Z",
+      "doctor_id": "doctor_irina",
+      "start_at": "2026-04-22T11:00:00Z",
+      "end_at": "2026-04-22T12:00:00Z",
       "status": "open",
-      "visibility_policy": "public",
-      "service_scope": {"service_ids": ["service_consult"]},
+      "visibility_policy": "doctor_code",
+      "service_scope": {
+        "service_ids": [
+          "service_treatment"
+        ]
+      },
       "source_ref": "seed",
-      "updated_at": "2026-04-26T08:00:00Z"
+      "updated_at": "2026-04-22T10:00:00Z"
     },
     {
-      "slot_id": "slot_anna_20260505_1000",
+      "slot_id": "slot_anna_20260423_0700_consult",
       "clinic_id": "clinic_main",
       "branch_id": "branch_central",
       "doctor_id": "doctor_anna",
-      "start_at": "2026-05-05T10:00:00Z",
-      "end_at": "2026-05-05T10:30:00Z",
+      "start_at": "2026-04-23T07:00:00Z",
+      "end_at": "2026-04-23T07:30:00Z",
       "status": "open",
       "visibility_policy": "public",
-      "service_scope": {"service_ids": ["service_consult"]},
+      "service_scope": {
+        "service_ids": [
+          "service_consult"
+        ]
+      },
       "source_ref": "seed",
-      "updated_at": "2026-04-26T08:00:00Z"
+      "updated_at": "2026-04-23T06:00:00Z"
+    },
+    {
+      "slot_id": "slot_boris_20260423_1100_cleaning",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "doctor_id": "doctor_boris",
+      "start_at": "2026-04-23T11:00:00Z",
+      "end_at": "2026-04-23T11:45:00Z",
+      "status": "open",
+      "visibility_policy": "public",
+      "service_scope": {
+        "service_ids": [
+          "service_cleaning"
+        ]
+      },
+      "source_ref": "seed",
+      "updated_at": "2026-04-23T10:00:00Z"
+    },
+    {
+      "slot_id": "slot_irina_20260424_1500_treatment",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "doctor_id": "doctor_irina",
+      "start_at": "2026-04-24T15:00:00Z",
+      "end_at": "2026-04-24T16:00:00Z",
+      "status": "open",
+      "visibility_policy": "doctor_code",
+      "service_scope": {
+        "service_ids": [
+          "service_treatment",
+          "service_urgent"
+        ]
+      },
+      "source_ref": "seed",
+      "updated_at": "2026-04-24T14:00:00Z"
+    },
+    {
+      "slot_id": "slot_anna_20260425_1100_urgent",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "doctor_id": "doctor_anna",
+      "start_at": "2026-04-25T11:00:00Z",
+      "end_at": "2026-04-25T11:30:00Z",
+      "status": "open",
+      "visibility_policy": "public",
+      "service_scope": {
+        "service_ids": [
+          "service_urgent"
+        ]
+      },
+      "source_ref": "seed",
+      "updated_at": "2026-04-25T10:00:00Z"
+    },
+    {
+      "slot_id": "slot_boris_20260426_1500_cleaning",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "doctor_id": "doctor_boris",
+      "start_at": "2026-04-26T15:00:00Z",
+      "end_at": "2026-04-26T15:45:00Z",
+      "status": "open",
+      "visibility_policy": "public",
+      "service_scope": {
+        "service_ids": [
+          "service_cleaning"
+        ]
+      },
+      "source_ref": "seed",
+      "updated_at": "2026-04-26T14:00:00Z"
+    },
+    {
+      "slot_id": "slot_irina_20260427_0700_treatment",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "doctor_id": "doctor_irina",
+      "start_at": "2026-04-27T07:00:00Z",
+      "end_at": "2026-04-27T08:00:00Z",
+      "status": "open",
+      "visibility_policy": "doctor_code",
+      "service_scope": {
+        "service_ids": [
+          "service_treatment"
+        ]
+      },
+      "source_ref": "seed",
+      "updated_at": "2026-04-27T06:00:00Z"
+    },
+    {
+      "slot_id": "slot_anna_20260428_1500_consult",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "doctor_id": "doctor_anna",
+      "start_at": "2026-04-28T15:00:00Z",
+      "end_at": "2026-04-28T15:30:00Z",
+      "status": "open",
+      "visibility_policy": "public",
+      "service_scope": {
+        "service_ids": [
+          "service_consult",
+          "service_urgent"
+        ]
+      },
+      "source_ref": "seed",
+      "updated_at": "2026-04-28T14:00:00Z"
     }
   ],
   "slot_holds": [
     {
       "slot_hold_id": "hold_001",
       "clinic_id": "clinic_main",
-      "slot_id": "slot_anna_20260420_1000",
+      "slot_id": "slot_anna_20260420_0700_consult",
       "booking_session_id": "bks_001",
       "telegram_user_id": 3001,
       "status": "active",
@@ -130,17 +261,17 @@
   ],
   "bookings": [
     {
-      "booking_id": "bkg_001",
+      "booking_id": "bkg_sergey_pending",
       "clinic_id": "clinic_main",
       "branch_id": "branch_central",
       "patient_id": "patient_sergey_ivanov",
       "doctor_id": "doctor_anna",
       "service_id": "service_consult",
-      "slot_id": "slot_anna_20260420_1000",
+      "slot_id": "slot_anna_20260420_0700_consult",
       "booking_mode": "patient_bot",
       "source_channel": "telegram",
-      "scheduled_start_at": "2026-04-20T10:00:00Z",
-      "scheduled_end_at": "2026-04-20T10:30:00Z",
+      "scheduled_start_at": "2026-04-20T07:00:00Z",
+      "scheduled_end_at": "2026-04-20T07:30:00Z",
       "status": "pending_confirmation",
       "reason_for_visit_short": "tooth pain",
       "patient_note": "Sensitive to cold drinks",
@@ -153,18 +284,153 @@
       "no_show_at": null,
       "created_at": "2026-04-20T09:11:00Z",
       "updated_at": "2026-04-20T09:11:00Z"
+    },
+    {
+      "booking_id": "bkg_sergey_confirmed",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "patient_id": "patient_sergey_ivanov",
+      "doctor_id": "doctor_boris",
+      "service_id": "service_cleaning",
+      "slot_id": "slot_boris_20260423_1100_cleaning",
+      "booking_mode": "patient_bot",
+      "source_channel": "telegram",
+      "scheduled_start_at": "2026-04-23T11:00:00Z",
+      "scheduled_end_at": "2026-04-23T11:45:00Z",
+      "status": "confirmed",
+      "reason_for_visit_short": "scheduled cleaning",
+      "patient_note": "First hygiene in 6 months",
+      "confirmation_required": false,
+      "confirmed_at": "2026-04-22T08:00:00Z",
+      "canceled_at": null,
+      "checked_in_at": null,
+      "in_service_at": null,
+      "completed_at": null,
+      "no_show_at": null,
+      "created_at": "2026-04-21T08:00:00Z",
+      "updated_at": "2026-04-22T08:00:00Z"
+    },
+    {
+      "booking_id": "bkg_elena_reschedule",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "patient_id": "patient_elena_ivanova",
+      "doctor_id": "doctor_irina",
+      "service_id": "service_treatment",
+      "slot_id": "slot_irina_20260424_1500_treatment",
+      "booking_mode": "patient_bot",
+      "source_channel": "telegram",
+      "scheduled_start_at": "2026-04-24T15:00:00Z",
+      "scheduled_end_at": "2026-04-24T16:00:00Z",
+      "status": "reschedule_requested",
+      "reason_for_visit_short": "filling replacement",
+      "patient_note": "Needs evening slots",
+      "confirmation_required": false,
+      "confirmed_at": "2026-04-22T12:00:00Z",
+      "canceled_at": null,
+      "checked_in_at": null,
+      "in_service_at": null,
+      "completed_at": null,
+      "no_show_at": null,
+      "created_at": "2026-04-22T09:30:00Z",
+      "updated_at": "2026-04-23T09:30:00Z"
+    },
+    {
+      "booking_id": "bkg_giorgi_canceled",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "patient_id": "patient_giorgi_beridze",
+      "doctor_id": "doctor_anna",
+      "service_id": "service_urgent",
+      "slot_id": "slot_anna_20260425_1100_urgent",
+      "booking_mode": "patient_bot",
+      "source_channel": "phone",
+      "scheduled_start_at": "2026-04-25T11:00:00Z",
+      "scheduled_end_at": "2026-04-25T11:30:00Z",
+      "status": "canceled",
+      "reason_for_visit_short": "acute pain",
+      "patient_note": "Pain reduced, canceled",
+      "confirmation_required": false,
+      "confirmed_at": "2026-04-24T08:00:00Z",
+      "canceled_at": "2026-04-24T18:00:00Z",
+      "checked_in_at": null,
+      "in_service_at": null,
+      "completed_at": null,
+      "no_show_at": null,
+      "created_at": "2026-04-24T07:00:00Z",
+      "updated_at": "2026-04-24T18:00:00Z"
     }
   ],
   "booking_status_history": [
     {
-      "booking_status_history_id": "bsh_001",
-      "booking_id": "bkg_001",
+      "booking_status_history_id": "bsh_sergey_pending_1",
+      "booking_id": "bkg_sergey_pending",
       "old_status": null,
       "new_status": "pending_confirmation",
       "reason_code": "created",
       "actor_type": "system",
       "actor_id": "seed",
       "occurred_at": "2026-04-20T09:11:00Z"
+    },
+    {
+      "booking_status_history_id": "bsh_sergey_confirmed_1",
+      "booking_id": "bkg_sergey_confirmed",
+      "old_status": null,
+      "new_status": "pending_confirmation",
+      "reason_code": "created",
+      "actor_type": "system",
+      "actor_id": "seed",
+      "occurred_at": "2026-04-21T08:00:00Z"
+    },
+    {
+      "booking_status_history_id": "bsh_sergey_confirmed_2",
+      "booking_id": "bkg_sergey_confirmed",
+      "old_status": "pending_confirmation",
+      "new_status": "confirmed",
+      "reason_code": "manual_confirm",
+      "actor_type": "staff",
+      "actor_id": "actor_admin",
+      "occurred_at": "2026-04-22T08:00:00Z"
+    },
+    {
+      "booking_status_history_id": "bsh_elena_reschedule_1",
+      "booking_id": "bkg_elena_reschedule",
+      "old_status": null,
+      "new_status": "confirmed",
+      "reason_code": "created_confirmed",
+      "actor_type": "system",
+      "actor_id": "seed",
+      "occurred_at": "2026-04-22T09:30:00Z"
+    },
+    {
+      "booking_status_history_id": "bsh_elena_reschedule_2",
+      "booking_id": "bkg_elena_reschedule",
+      "old_status": "confirmed",
+      "new_status": "reschedule_requested",
+      "reason_code": "patient_request",
+      "actor_type": "patient",
+      "actor_id": "telegram:3002",
+      "occurred_at": "2026-04-23T09:30:00Z"
+    },
+    {
+      "booking_status_history_id": "bsh_giorgi_canceled_1",
+      "booking_id": "bkg_giorgi_canceled",
+      "old_status": null,
+      "new_status": "confirmed",
+      "reason_code": "created_confirmed",
+      "actor_type": "system",
+      "actor_id": "seed",
+      "occurred_at": "2026-04-24T07:00:00Z"
+    },
+    {
+      "booking_status_history_id": "bsh_giorgi_canceled_2",
+      "booking_id": "bkg_giorgi_canceled",
+      "old_status": "confirmed",
+      "new_status": "canceled",
+      "reason_code": "patient_canceled",
+      "actor_type": "patient",
+      "actor_id": "phone:+79997771010",
+      "occurred_at": "2026-04-24T18:00:00Z"
     }
   ],
   "waitlist_entries": [
@@ -172,16 +438,19 @@
       "waitlist_entry_id": "wle_001",
       "clinic_id": "clinic_main",
       "branch_id": "branch_central",
-      "patient_id": "patient_elena_ivanova",
-      "telegram_user_id": 3002,
-      "service_id": "service_consult",
-      "doctor_id": "doctor_anna",
-      "date_window": {"from": "2026-04-21", "to": "2026-04-23"},
-      "time_window": "afternoon",
+      "patient_id": "patient_maria_petrova",
+      "telegram_user_id": 3004,
+      "service_id": "service_cleaning",
+      "doctor_id": "doctor_boris",
+      "date_window": {
+        "from": "2026-04-26",
+        "to": "2026-04-30"
+      },
+      "time_window": "day",
       "priority": 1,
       "status": "active",
       "source_session_id": "bks_001",
-      "notes": "Can come on short notice",
+      "notes": "Prefers weekday daytime",
       "created_at": "2026-04-20T09:00:00Z",
       "updated_at": "2026-04-20T09:00:00Z"
     }
@@ -196,7 +465,9 @@
       "priority": "normal",
       "status": "open",
       "assigned_to_actor_id": "actor_admin",
-      "payload_summary": {"note": "Verify previous no-show"},
+      "payload_summary": {
+        "note": "Verify previous no-show"
+      },
       "created_at": "2026-04-20T09:12:00Z",
       "updated_at": "2026-04-20T09:12:00Z"
     }

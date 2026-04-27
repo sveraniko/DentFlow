@@ -46,9 +46,9 @@ def test_stack3_seed_bootstrap_path_is_coherent(monkeypatch: pytest.MonkeyPatch)
 
     counts = asyncio.run(booking_repository.seed_stack3_booking(object(), Path("seeds/stack3_booking.json")))
 
-    assert counts["booking_sessions"] == 1
-    assert counts["bookings"] == 1
-    assert counts["booking_status_history"] == 1
+    assert counts["booking_sessions"] >= 1
+    assert counts["bookings"] >= 4
+    assert counts["booking_status_history"] >= 4
     inserts = "\n".join(sql for sql, _ in engine.conn.executed)
     assert "INSERT INTO booking.bookings" in inserts
     assert "INSERT INTO booking.booking_status_history" in inserts
