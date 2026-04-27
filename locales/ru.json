@@ -859,5 +859,14 @@
   "patient.booking.service.empty": "🦷 Услуги пока недоступны.\n\nКлиника ещё не добавила услуги для онлайн-записи.",
   "patient.booking.doctor.code.cta": "🔑 У меня есть код врача",
   "patient.booking.doctor.code.prompt": "🔑 Код врача\n\nВведите код, который дал вам врач.\nНапример: ANNA-001",
-  "patient.booking.doctor.code.invalid": "❌ Код не найден или больше недоступен. Проверьте код и попробуйте ещё раз."
+  "patient.booking.doctor.code.invalid": "❌ Код не найден или больше недоступен. Проверьте код и попробуйте ещё раз.",
+  "patient.recommendations.command.open.usage.panel": "💬 Открыть рекомендацию\n\nИспользуйте команду так:\n/recommendation_open <id рекомендации>\n\nОбычно открывать рекомендации удобнее через кнопку «Рекомендации».",
+  "patient.recommendations.command.action.usage.panel": "💬 Действие с рекомендацией\n\nИспользуйте команду так:\n/recommendation_action <ack|accept|decline> <id рекомендации>\n\nОбычно выполнять действия удобнее через кнопки в карточке рекомендации.",
+  "patient.recommendations.command.products.usage.panel": "🪥 Товары по рекомендации\n\nИспользуйте команду так:\n/recommendation_products <id рекомендации>\n\nОбычно товары удобнее открывать кнопкой из карточки рекомендации.",
+  "patient.recommendations.command.not_found.panel": "💬 Рекомендация не найдена\n\nРекомендация недоступна или больше не связана с вашим профилем.",
+  "patient.recommendations.command.action.invalid_state.panel": "⚠️ Действие недоступно\n\nСтатус рекомендации изменился или действие уже нельзя выполнить.\nОткройте рекомендацию и проверьте текущий статус.",
+  "patient.recommendations.command.nav.recommendations": "💬 Рекомендации",
+  "patient.recommendations.command.nav.my_booking": "📅 Моя запись",
+  "patient.recommendations.command.nav.home": "🏠 Главное меню",
+  "patient.recommendations.command.nav.care_catalog": "🪥 Каталог ухода"
 }

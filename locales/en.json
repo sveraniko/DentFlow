@@ -859,5 +859,14 @@
   "patient.booking.service.empty": "🦷 Services are currently unavailable.\n\nThe clinic has not added online booking services yet.",
   "patient.booking.doctor.code.cta": "🔑 I have a doctor code",
   "patient.booking.doctor.code.prompt": "🔑 Doctor code\n\nEnter the code your doctor shared with you.\nExample: ANNA-001",
-  "patient.booking.doctor.code.invalid": "❌ Code not found or no longer available. Check the code and try again."
+  "patient.booking.doctor.code.invalid": "❌ Code not found or no longer available. Check the code and try again.",
+  "patient.recommendations.command.open.usage.panel": "💬 Open recommendation\n\nUse this command as:\n/recommendation_open <recommendation_id>\n\nUsually it is easier to open recommendations via the \"Recommendations\" button.",
+  "patient.recommendations.command.action.usage.panel": "💬 Action for recommendation\n\nUse this command as:\n/recommendation_action <ack|accept|decline> <recommendation_id>\n\nUsually it is easier to run actions via buttons in the recommendation card.",
+  "patient.recommendations.command.products.usage.panel": "🪥 Products for recommendation\n\nUse this command as:\n/recommendation_products <recommendation_id>\n\nUsually it is easier to open products from the recommendation card button.",
+  "patient.recommendations.command.not_found.panel": "💬 Recommendation not found\n\nThis recommendation is unavailable or is no longer linked to your profile.",
+  "patient.recommendations.command.action.invalid_state.panel": "⚠️ Action unavailable\n\nThe recommendation status changed or this action can no longer be applied.\nOpen the recommendation and check the current status.",
+  "patient.recommendations.command.nav.recommendations": "💬 Recommendations",
+  "patient.recommendations.command.nav.my_booking": "📅 My booking",
+  "patient.recommendations.command.nav.home": "🏠 Main menu",
+  "patient.recommendations.command.nav.care_catalog": "🪥 Care catalog"
 }
