@@ -232,7 +232,8 @@ def test_accepted_reminder_actions_handoff_to_canonical_booking_panel(
         assert "Main Branch" in sent_text
         assert sent_keyboard is not None
         rendered_labels = [button.text for row in sent_keyboard.inline_keyboard for button in row]
-        assert ("Confirm" in rendered_labels) is expect_confirm_button
+        has_confirm = any(label.startswith("Confirm") for label in rendered_labels)
+        assert has_confirm is expect_confirm_button
 
     state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
     if action == "reschedule":
