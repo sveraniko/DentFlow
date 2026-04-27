@@ -86,6 +86,37 @@
 - `rg "2026, 4, 22" tests/test_booking_orchestration.py`
   - No stale fixed reminder date in `test_reminder_policy_uses_patient_preferences_then_clinic_fallback`.
 
+## P0-04A matrix (post-check)
+
+### Review RU
+- readable structured text: **yes**
+- no UTC/MSK/Tue/Apr: **yes**
+- no raw ids/debug: **yes**
+- confirm/back/home: **yes**
+
+### Contact → Review
+- reply keyboard removed: **yes**
+- review inline keyboard shown: **yes**
+
+### Review Back
+- returns to contact prompt: **yes**
+- reply keyboard shown: **yes**
+- no double callback answer: **yes**
+
+### Success
+- readable structured text: **yes**
+- localized status: **yes**
+- my booking/home buttons: **yes**
+- no raw `pending_confirmation`: **yes**
+
+### Finalize failure
+- readable recovery panel: **yes**
+- no popup after valid confirm callback: **yes**
+
+### Reminder stale date test
+- fixed: **yes**
+- patient and booking subset: **100 passed**
+
 ## Carry-forward for P0-04B
 - Edit service from review panel.
 - Edit doctor from review panel.
