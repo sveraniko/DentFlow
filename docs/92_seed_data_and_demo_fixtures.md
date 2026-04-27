@@ -235,3 +235,12 @@ That is how the team tests a real system instead of a cardboard prop.
   - `python scripts/seed_stack3_booking.py --relative-dates --start-offset-days 2`
   - `python scripts/seed_stack3_booking.py --relative-dates --source-anchor-date 2026-04-20`
 - Relative mode shifts booking/session/slot/waitlist date fields while preserving time-of-day, durations, and IDs.
+
+## 12. P0-06D2A2 core demo seed pack baseline
+
+- Stack1 demo reference now includes three doctors (`doctor_anna`, `doctor_boris`, `doctor_irina`), four core services (`consult`, `cleaning`, `treatment`, `urgent`), and three doctor access codes.
+- Stack2 patient pack now includes four demo patients with mixed contact resolvability (Telegram + phone and phone-only), including Telegram user `3001`.
+- Stack3 booking pack now includes multi-day multi-window availability, at least four booking statuses (`pending_confirmation`, `confirmed`, `reschedule_requested`, `canceled`), and active waitlist coverage.
+- Recommendations/care catalog/care orders are intentionally deferred to follow-up tracks:
+  - P0-06D2B1: care categories/products demo seed.
+  - P0-06D2B2: recommendations/care orders demo seed.

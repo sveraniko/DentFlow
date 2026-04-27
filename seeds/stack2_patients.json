@@ -29,6 +29,15 @@
       "first_name": "Giorgi",
       "last_name": "Beridze",
       "display_name": "გიორგი Beridze"
+    },
+    {
+      "patient_id": "patient_maria_petrova",
+      "clinic_id": "clinic_main",
+      "patient_number": "P-1004",
+      "full_name_legal": "Мария Петрова",
+      "first_name": "Мария",
+      "last_name": "Петрова",
+      "display_name": "Мария Петрова"
     }
   ],
   "patient_contacts": [
@@ -37,6 +46,48 @@
       "contact_type": "phone",
       "contact_value": "+7 (999) 123-45-67",
       "is_primary": true,
+      "is_verified": true
+    },
+    {
+      "patient_id": "patient_sergey_ivanov",
+      "contact_type": "telegram",
+      "contact_value": "3001",
+      "is_primary": false,
+      "is_verified": true
+    },
+    {
+      "patient_id": "patient_elena_ivanova",
+      "contact_type": "phone",
+      "contact_value": "+7 (999) 555-22-11",
+      "is_primary": true,
+      "is_verified": true
+    },
+    {
+      "patient_id": "patient_elena_ivanova",
+      "contact_type": "telegram",
+      "contact_value": "3002",
+      "is_primary": false,
+      "is_verified": true
+    },
+    {
+      "patient_id": "patient_giorgi_beridze",
+      "contact_type": "phone",
+      "contact_value": "+7 (999) 777-10-10",
+      "is_primary": true,
+      "is_verified": true
+    },
+    {
+      "patient_id": "patient_maria_petrova",
+      "contact_type": "phone",
+      "contact_value": "+7 (999) 888-44-00",
+      "is_primary": true,
+      "is_verified": true
+    },
+    {
+      "patient_id": "patient_maria_petrova",
+      "contact_type": "telegram",
+      "contact_value": "3004",
+      "is_primary": false,
       "is_verified": true
     }
   ],
@@ -51,7 +102,55 @@
       "allow_call": false,
       "allow_email": false,
       "marketing_opt_in": false,
-      "contact_time_window": {"from": "09:00", "to": "20:00"}
+      "contact_time_window": {
+        "from": "09:00",
+        "to": "20:00"
+      }
+    },
+    {
+      "patient_preference_id": "pref_elena",
+      "patient_id": "patient_elena_ivanova",
+      "preferred_language": "en",
+      "preferred_reminder_channel": "telegram",
+      "allow_sms": true,
+      "allow_telegram": true,
+      "allow_call": true,
+      "allow_email": true,
+      "marketing_opt_in": false,
+      "contact_time_window": {
+        "from": "10:00",
+        "to": "19:00"
+      }
+    },
+    {
+      "patient_preference_id": "pref_giorgi",
+      "patient_id": "patient_giorgi_beridze",
+      "preferred_language": "en",
+      "preferred_reminder_channel": "sms",
+      "allow_sms": true,
+      "allow_telegram": false,
+      "allow_call": true,
+      "allow_email": false,
+      "marketing_opt_in": false,
+      "contact_time_window": {
+        "from": "11:00",
+        "to": "18:00"
+      }
+    },
+    {
+      "patient_preference_id": "pref_maria",
+      "patient_id": "patient_maria_petrova",
+      "preferred_language": "ru",
+      "preferred_reminder_channel": "telegram",
+      "allow_sms": true,
+      "allow_telegram": true,
+      "allow_call": false,
+      "allow_email": false,
+      "marketing_opt_in": false,
+      "contact_time_window": {
+        "from": "08:30",
+        "to": "17:30"
+      }
     }
   ],
   "patient_flags": [

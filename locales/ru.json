@@ -686,6 +686,8 @@
   "admin.queue.status.canceled": "Отменено",
   "service.cleaning": "Профессиональная чистка зубов",
   "service.consult": "Консультация",
+  "service.treatment": "Лечение зуба",
+  "service.urgent": "Срочный визит при боли",
   "reminder.message.layout": "Напоминание DentFlow\n📅 {datetime}\n👩‍⚕️ {doctor}\n🦷 {service}\n🏥 {branch}\n\n{summary}",
   "reminder.type.booking_confirmation.summary": "Подтвердите запись или выберите удобное изменение.",
   "reminder.type.booking_previsit.summary": "Напоминание о предстоящем визите. Проверьте время, пожалуйста.",

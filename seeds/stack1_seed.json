@@ -28,6 +28,24 @@
       "specialty_code": "general_dentistry",
       "public_booking_enabled": true,
       "status": "active"
+    },
+    {
+      "doctor_id": "doctor_boris",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "display_name": "Dr. Boris",
+      "specialty_code": "dental_hygiene",
+      "public_booking_enabled": true,
+      "status": "active"
+    },
+    {
+      "doctor_id": "doctor_irina",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "display_name": "Dr. Irina",
+      "specialty_code": "restorative_dentistry",
+      "public_booking_enabled": false,
+      "status": "active"
     }
   ],
   "services": [
@@ -36,6 +54,33 @@
       "clinic_id": "clinic_main",
       "code": "consult",
       "title_key": "service.consult",
+      "duration_minutes": 30,
+      "specialty_required": "general_dentistry",
+      "status": "active"
+    },
+    {
+      "service_id": "service_cleaning",
+      "clinic_id": "clinic_main",
+      "code": "cleaning",
+      "title_key": "service.cleaning",
+      "duration_minutes": 45,
+      "specialty_required": "dental_hygiene",
+      "status": "active"
+    },
+    {
+      "service_id": "service_treatment",
+      "clinic_id": "clinic_main",
+      "code": "treatment",
+      "title_key": "service.treatment",
+      "duration_minutes": 60,
+      "specialty_required": "restorative_dentistry",
+      "status": "active"
+    },
+    {
+      "service_id": "service_urgent",
+      "clinic_id": "clinic_main",
+      "code": "urgent",
+      "title_key": "service.urgent",
       "duration_minutes": 30,
       "specialty_required": "general_dentistry",
       "status": "active"
@@ -49,8 +94,41 @@
       "code": "ANNA-001",
       "status": "active",
       "max_uses": 100,
-      "service_scope": ["service_consult"],
-      "branch_scope": ["branch_central"]
+      "service_scope": [
+        "service_consult"
+      ],
+      "branch_scope": [
+        "branch_central"
+      ]
+    },
+    {
+      "doctor_access_code_id": "dac_boris_hyg",
+      "clinic_id": "clinic_main",
+      "doctor_id": "doctor_boris",
+      "code": "BORIS-HYG",
+      "status": "active",
+      "max_uses": 100,
+      "service_scope": [
+        "service_cleaning"
+      ],
+      "branch_scope": [
+        "branch_central"
+      ]
+    },
+    {
+      "doctor_access_code_id": "dac_irina_treat",
+      "clinic_id": "clinic_main",
+      "doctor_id": "doctor_irina",
+      "code": "IRINA-TREAT",
+      "status": "active",
+      "max_uses": 50,
+      "service_scope": [
+        "service_treatment",
+        "service_urgent"
+      ],
+      "branch_scope": [
+        "branch_central"
+      ]
     }
   ],
   "actor_identities": [

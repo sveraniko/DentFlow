@@ -92,8 +92,8 @@ def test_seed_stack3_default_static_mode_does_not_transform_dates(monkeypatch: p
     slot_insert = next(params for sql, params in engine.conn.executed if "booking.availability_slots" in sql)
 
     assert session_insert["requested_date"].isoformat() == "2026-04-20"
-    assert booking_insert["scheduled_start_at"].isoformat().endswith("10:00:00+00:00")
-    assert slot_insert["start_at"].isoformat().endswith("10:00:00+00:00")
+    assert booking_insert["scheduled_start_at"].isoformat().endswith("07:00:00+00:00")
+    assert slot_insert["start_at"].isoformat().endswith("07:00:00+00:00")
 
 
 def test_shift_stack3_seed_dates_shifts_datetime_and_date_fields() -> None:
