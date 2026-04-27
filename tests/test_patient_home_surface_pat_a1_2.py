@@ -907,9 +907,9 @@ def test_care_catalog_unavailable_empty_state_has_home_action() -> None:
     asyncio.run(_handler(router, "patient_home_care", kind="callback")(callback))
 
     text, markup = _latest_callback_panel(callback)
-    assert "Care catalog is unavailable right now" in text
+    assert "Care catalog is empty for now" in text
     actions = [button.callback_data for row in markup.inline_keyboard for button in row]
-    assert actions == ["phome:home"]
+    assert actions == ["phome:my_booking", "phome:home"]
 
 
 def test_recommendations_command_and_home_callback_share_entry_when_available() -> None:
@@ -1063,8 +1063,8 @@ def test_recommendation_products_callback_reuses_resolution_and_falls_back_safel
 
     asyncio.run(_handler(router, "recommendation_products_callback", kind="callback")(callback))
 
-    assert callback.answers
-    assert "No care products are linked to this recommendation yet." in callback.answers[-1]
+    text, _ = _latest_callback_panel(callback)
+    assert "No products are linked to this recommendation yet" in text
 
 
 def test_pat_a7_1b_contains_no_new_migration_artifacts() -> None:
