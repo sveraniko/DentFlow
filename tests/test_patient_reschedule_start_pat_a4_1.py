@@ -301,8 +301,9 @@ def _build_router(*, reminder_actions: _ReminderActions | None = None, booking_f
 
 
 def _last_callback_text(callback: _Callback) -> str:
-    if callback.answered:
-        return callback.answered[-1][0]
+    for text, _ in reversed(callback.answered):
+        if text:
+            return text
     if callback.message.answers:
         return callback.message.answers[-1][0]
     if callback.bot.edits:
@@ -504,8 +505,8 @@ def test_contact_input_in_reschedule_mode_is_bounded_and_not_interpreted() -> No
 
     asyncio.run(_handler(router, "on_contact_text", kind="message")(contact))
 
-    assert contact.answers
-    assert "Reschedule mode is active" in contact.answers[-1][0]
+    assert contact.answers == []
+    assert contact.bot.edits == []
 
 
 def test_reschedule_confirm_happy_path_handoffs_to_canonical_booking_panel() -> None:
@@ -578,8 +579,10 @@ def test_reschedule_confirm_slot_unavailable_is_bounded_and_returns_to_slot_sele
 
     asyncio.run(_handler(router, "reschedule_confirm")(callback))
 
-    assert ("This time is no longer available. Please choose another slot.", True) in callback.answered
-    assert "slots" in _last_callback_text(callback).lower()
+    assert all(show_alert is False for _, show_alert in callback.answered)
+    text = _last_callback_text(callback)
+    assert "This slot is no longer available" in text
+    assert "slots" in text.lower()
 
 
 def test_pat_a4_2c_no_migration_directories_present() -> None:

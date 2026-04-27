@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 
-from app.application.booking.orchestration_outcomes import InvalidStateOutcome, OrchestrationSuccess
+from app.application.booking.orchestration_outcomes import ConflictOutcome, InvalidStateOutcome, OrchestrationSuccess, SlotUnavailableOutcome
 from app.application.booking.telegram_flow import BookingCardView, BookingResumePanel, PatientResolutionFlowResult
 from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
 from app.common.i18n import I18nService
@@ -66,10 +66,10 @@ class _Callback:
         self.from_user = SimpleNamespace(id=user_id)
         self.message = _CallbackMessage(message_id=message_id)
         self.answers: list[str] = []
-        self.answer_payloads: list[tuple[str, object | None]] = []
+        self.answer_payloads: list[tuple[str, bool, object | None]] = []
 
     async def answer(self, text: str = "", show_alert: bool = False, reply_markup=None) -> None:
-        self.answer_payloads.append((text, reply_markup))
+        self.answer_payloads.append((text, show_alert, reply_markup))
         if text:
             self.answers.append(text)
         return SimpleNamespace(chat=self.chat, message_id=self.message.message_id)
@@ -77,8 +77,8 @@ class _Callback:
 
 def _latest_callback_payload(callback: _Callback) -> tuple[str, object | None]:
     for payload in reversed(callback.answer_payloads):
-        if payload[0] or payload[1] is not None:
-            return payload
+        if payload[0] or payload[2] is not None:
+            return payload[0], payload[2]
     raise AssertionError("expected callback answer payload")
 
 
@@ -130,6 +130,7 @@ class _BookingFlowStub:
         self.resume_panel_key = "contact_collection"
         self.validate_callback_result = True
         self.finalize_result = "success"
+        self.select_slot_outcome: object | None = None
         self.finalize_calls = 0
         self.start_or_resume_calls = 0
         self.start_or_resume_existing_calls = 0
@@ -166,6 +167,8 @@ class _BookingFlowStub:
         return [self.slot]
 
     async def select_slot(self, **kwargs):  # noqa: ANN003
+        if self.select_slot_outcome is not None:
+            return self.select_slot_outcome
         return OrchestrationSuccess(kind="success", entity=self.session)
 
     async def set_contact_phone(self, *, booking_session_id: str, phone: str):
@@ -325,6 +328,77 @@ def test_select_slot_callback_sends_contact_reply_keyboard() -> None:
     assert rows[0] == ["Share contact"]
     assert rows[1] == ["⬅️ Back", "🏠 Main menu"]
     assert callback.message.edits == []
+    assert len(callback.answer_payloads) == 1
+    assert callback.answer_payloads[0][1] is False
+
+
+def test_select_slot_unavailable_renders_inline_notice_without_popup_and_suppresses_slot() -> None:
+    router, booking_flow, runtime = _build_router_and_flow()
+    booking_flow.select_slot_outcome = SlotUnavailableOutcome(kind="slot_unavailable", reason="taken")
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_flow", "slot_page": 0, "care": {}},
+        )
+    )
+    callback = _Callback(data="book:slot:slot_1", user_id=1001, message_id=501)
+
+    asyncio.run(_handler(router, "select_slot", kind="callback")(callback))
+
+    text, keyboard = _latest_callback_payload(callback)
+    assert "This slot is no longer available" in text
+    assert isinstance(keyboard, InlineKeyboardMarkup)
+    assert all(show_alert is False for _, show_alert, _ in callback.answer_payloads)
+    assert len(callback.answer_payloads) == 1
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert "slot_1" in state["slot_suppressed_ids"]
+    assert state["booking_mode"] == "new_booking_flow"
+
+
+def test_select_slot_conflict_renders_inline_notice_without_popup_and_does_not_open_contact_stage() -> None:
+    router, booking_flow, runtime = _build_router_and_flow()
+    booking_flow.select_slot_outcome = ConflictOutcome(kind="conflict", reason="already booked")
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_flow", "slot_page": 0, "care": {}},
+        )
+    )
+    callback = _Callback(data="book:slot:slot_1", user_id=1001, message_id=501)
+
+    asyncio.run(_handler(router, "select_slot", kind="callback")(callback))
+
+    text, _ = _latest_callback_payload(callback)
+    assert "This slot is no longer available" in text
+    assert "Contact for booking" not in text
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "new_booking_flow"
+    assert len(callback.answer_payloads) == 1
+    assert all(show_alert is False for _, show_alert, _ in callback.answer_payloads)
+
+
+def test_select_slot_invalid_state_renders_inline_notice_and_keeps_slot_stage() -> None:
+    router, booking_flow, runtime = _build_router_and_flow()
+    booking_flow.select_slot_outcome = InvalidStateOutcome(kind="invalid_state", reason="session moved")
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={"booking_session_id": "sess_1", "booking_mode": "new_booking_flow", "care": {}},
+        )
+    )
+    callback = _Callback(data="book:slot:slot_1", user_id=1001, message_id=501)
+
+    asyncio.run(_handler(router, "select_slot", kind="callback")(callback))
+
+    text, _ = _latest_callback_payload(callback)
+    assert "This slot is no longer available" in text
+    assert "Contact for booking" not in text
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["booking_mode"] == "new_booking_flow"
+    assert len(callback.answer_payloads) == 1
 
 
 def test_resume_contact_collection_callback_sends_contact_reply_keyboard() -> None:

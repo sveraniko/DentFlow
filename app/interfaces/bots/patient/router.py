@@ -85,6 +85,7 @@ class _PatientFlowState:
     slot_page: int = 0
     slot_date_from: str = ""
     slot_time_window: str = "all"
+    slot_suppressed_ids: tuple[str, ...] = ()
     quick_booking_prefill: dict[str, str] | None = None
     care: _CareViewState | None = None
 
@@ -415,6 +416,7 @@ def make_router(
             slot_page=int(payload.get("slot_page", 0) or 0),
             slot_date_from=str(payload.get("slot_date_from", "") or ""),
             slot_time_window=str(payload.get("slot_time_window", "all") or "all"),
+            slot_suppressed_ids=tuple(str(item) for item in (payload.get("slot_suppressed_ids") or [])),
             quick_booking_prefill=dict(payload.get("quick_booking_prefill") or {}),
             care=care_state,
         )
@@ -431,6 +433,7 @@ def make_router(
                 "slot_page": int(state.slot_page),
                 "slot_date_from": state.slot_date_from,
                 "slot_time_window": state.slot_time_window,
+                "slot_suppressed_ids": list(state.slot_suppressed_ids or ()),
                 "quick_booking_prefill": dict(state.quick_booking_prefill or {}),
                 "care": {
                     "selected_category": care_state.selected_category,
@@ -472,6 +475,17 @@ def make_router(
         flow.slot_page = 0
         flow.slot_date_from = ""
         flow.slot_time_window = "all"
+        _reset_slot_suppression(flow)
+
+    def _suppress_slot_in_flow(flow: _PatientFlowState, slot_id: str) -> None:
+        if not slot_id:
+            return
+        existing = [item for item in flow.slot_suppressed_ids if item != slot_id]
+        existing.append(slot_id)
+        flow.slot_suppressed_ids = tuple(existing[-20:])
+
+    def _reset_slot_suppression(flow: _PatientFlowState) -> None:
+        flow.slot_suppressed_ids = ()
 
     async def _encode_runtime_callback(
         *,
@@ -1938,12 +1952,17 @@ def make_router(
         )
 
     async def _render_slot_panel(
-        message: Message | CallbackQuery, *, actor_id: int, session_id: str, prompt_key: str = "patient.booking.slot.prompt"
+        message: Message | CallbackQuery,
+        *,
+        actor_id: int,
+        session_id: str,
+        prompt_key: str = "patient.booking.slot.prompt",
+        notice_key: str | None = None,
+        notice_text: str | None = None,
     ) -> None:
         locale = _locale()
         flow = await _load_flow_state(actor_id)
         flow.slot_time_window = _resolve_time_window(value=flow.slot_time_window)
-        page = max(flow.slot_page, 0)
         session = await booking_flow.get_booking_session(booking_session_id=session_id)
         if session is None:
             await _send_or_edit_panel(actor_id=actor_id, message=message, session_id=session_id, text=i18n.t("patient.booking.session.missing", locale))
@@ -1959,9 +1978,16 @@ def make_router(
                 continue
             if not _match_slot_time_window(local_start=local_start, time_window=flow.slot_time_window):
                 continue
+            if slot.slot_id in flow.slot_suppressed_ids:
+                continue
             filtered.append((slot, local_start))
         filtered.sort(key=lambda item: item[1])
-        start = page * SLOT_PAGE_SIZE
+        page_count = (len(filtered) + SLOT_PAGE_SIZE - 1) // SLOT_PAGE_SIZE if filtered else 1
+        safe_page = min(max(flow.slot_page, 0), page_count - 1)
+        if safe_page != flow.slot_page:
+            flow.slot_page = safe_page
+            await _save_flow_state(actor_id, flow)
+        start = safe_page * SLOT_PAGE_SIZE
         page_items = filtered[start : start + SLOT_PAGE_SIZE]
         has_more = start + SLOT_PAGE_SIZE < len(filtered)
 
@@ -1983,7 +2009,7 @@ def make_router(
                 _patient_home_nav_button(locale=locale),
             ]
         )
-        text = "\n".join(
+        body_text = "\n".join(
             [
                 i18n.t("patient.booking.slot.panel.title", locale),
                 "",
@@ -1995,7 +2021,9 @@ def make_router(
             ]
         )
         if not page_items:
-            text = i18n.t("patient.booking.slot.empty.filtered", locale)
+            body_text = i18n.t("patient.booking.slot.empty.filtered", locale)
+        notice_block = notice_text or (i18n.t(notice_key, locale) if notice_key else "")
+        text = f"{notice_block}\n\n{body_text}" if notice_block else body_text
         await _send_or_edit_panel(
             actor_id=actor_id,
             message=message,
@@ -2422,6 +2450,7 @@ def make_router(
         flow.booking_session_id = session.booking_session_id
         flow.booking_mode = "existing_lookup_contact"
         flow.reschedule_booking_id = ""
+        _reset_slot_suppression(flow)
         await _save_flow_state(actor_id, flow)
         await _send_or_edit_panel(
             actor_id=actor_id,
@@ -4120,6 +4149,7 @@ def make_router(
         flow = await _load_flow_state(callback.from_user.id)
         flow.slot_date_from = selected_date_iso
         flow.slot_page = 0
+        _reset_slot_suppression(flow)
         await _save_flow_state(callback.from_user.id, flow)
         await _render_slot_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
 
@@ -4152,6 +4182,7 @@ def make_router(
         flow = await _load_flow_state(callback.from_user.id)
         flow.slot_time_window = _resolve_time_window(value=requested_window)
         flow.slot_page = 0
+        _reset_slot_suppression(flow)
         await _save_flow_state(callback.from_user.id, flow)
         await _render_slot_panel(callback, actor_id=callback.from_user.id, session_id=callback_session_id)
 
@@ -4218,12 +4249,25 @@ def make_router(
             return
         selected = await booking_flow.select_slot(booking_session_id=callback_session_id, slot_id=slot_id)
         if isinstance(selected, (SlotUnavailableOutcome, ConflictOutcome)):
-            await callback.answer(i18n.t("patient.booking.slot.unavailable", locale), show_alert=True)
+            flow = await _load_flow_state(callback.from_user.id)
+            _suppress_slot_in_flow(flow, slot_id)
+            flow.slot_page = max(flow.slot_page, 0)
+            await _save_flow_state(callback.from_user.id, flow)
             await _render_slot_panel(
                 callback,
                 actor_id=callback.from_user.id,
                 session_id=callback_session_id,
                 prompt_key=slot_prompt_key,
+                notice_key="patient.booking.slot.notice.unavailable",
+            )
+            return
+        if isinstance(selected, InvalidStateOutcome):
+            await _render_slot_panel(
+                callback,
+                actor_id=callback.from_user.id,
+                session_id=callback_session_id,
+                prompt_key=slot_prompt_key,
+                notice_key="patient.booking.slot.notice.unavailable",
             )
             return
         if callback_session.route_type in RESCHEDULE_BOOKING_CONTROL_ROUTE_TYPES:
@@ -4359,21 +4403,21 @@ def make_router(
             source_booking_id=flow.reschedule_booking_id,
         )
         if isinstance(completed, SlotUnavailableOutcome):
-            await callback.answer(i18n.t("patient.booking.reschedule.complete.slot_unavailable", _locale()), show_alert=True)
             await _render_slot_panel(
                 callback,
                 actor_id=callback.from_user.id,
                 session_id=callback_session_id,
                 prompt_key="patient.booking.reschedule.slot.prompt",
+                notice_key="patient.booking.slot.notice.unavailable",
             )
             return
         if isinstance(completed, ConflictOutcome):
-            await callback.answer(i18n.t("patient.booking.reschedule.complete.conflict", _locale()), show_alert=True)
             await _render_slot_panel(
                 callback,
                 actor_id=callback.from_user.id,
                 session_id=callback_session_id,
                 prompt_key="patient.booking.reschedule.slot.prompt",
+                notice_key="patient.booking.slot.notice.unavailable",
             )
             return
         if not isinstance(completed, OrchestrationSuccess):
@@ -5097,6 +5141,7 @@ def make_router(
         flow.booking_session_id = started.booking_session.booking_session_id
         flow.booking_mode = "reschedule_booking_control"
         flow.reschedule_booking_id = booking_id
+        _reset_slot_view_state(flow)
         await _save_flow_state(actor_id, flow)
         await _render_reschedule_start_panel(
             message,

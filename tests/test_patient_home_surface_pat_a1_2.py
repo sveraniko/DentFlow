@@ -739,6 +739,52 @@ def test_slot_empty_filtered_state_has_recovery_buttons() -> None:
     assert "phome:home" in actions
 
 
+def test_suppressed_slot_is_not_rendered_again() -> None:
+    router, runtime, _, _, _ = _build_router(with_recommendations=False, with_care=False, locale="en")
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={
+                "booking_session_id": "sess_1",
+                "booking_mode": "new_booking_flow",
+                "slot_suppressed_ids": ["slot_0"],
+                "care": {},
+            },
+        )
+    )
+    callback = _Callback(data="book:slots:back:sess_1", user_id=1001)
+    asyncio.run(_handler(router, "booking_slots_back", kind="callback")(callback))
+    _, markup = _latest_callback_panel(callback)
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "book:slot:slot_0" not in callbacks
+
+
+def test_slot_page_is_clamped_after_filtering_to_prevent_false_empty_state() -> None:
+    router, runtime, _, _, _ = _build_router(with_recommendations=False, with_care=False, locale="en")
+    asyncio.run(
+        runtime.bind_actor_session_state(
+            scope="patient_flow",
+            actor_id=1001,
+            payload={
+                "booking_session_id": "sess_1",
+                "booking_mode": "new_booking_flow",
+                "slot_page": 1,
+                "slot_suppressed_ids": ["slot_5", "slot_6"],
+                "care": {},
+            },
+        )
+    )
+    callback = _Callback(data="book:doc:sess_1:any", user_id=1001)
+    asyncio.run(_handler(router, "select_doctor_preference", kind="callback")(callback))
+    text, markup = _latest_callback_panel(callback)
+    state = asyncio.run(runtime.resolve_actor_session_state(scope="patient_flow", actor_id=1001))
+    assert state["slot_page"] == 0
+    assert "No available slots found" not in text
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert any(item.startswith("book:slot:slot_") for item in callbacks)
+
+
 def test_book_and_home_book_callback_have_equivalent_entry_state() -> None:
     router, runtime, booking_flow, _, _ = _build_router(with_recommendations=False, with_care=False)
 
