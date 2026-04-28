@@ -110,7 +110,7 @@ Collected callback_data from tested panels and asserted allowed namespaces only:
 - `_NoopOrchestration` missing `start_booking_session`/`attach_resolved_patient_to_session`: implemented stubs.
 - Booking session `bks_002` had wrong status `"active"` (not in state machine): changed to `"in_progress"`.
 - `resolve_doctor_access_code` requires `service_id`/`branch_id` params: fixed assertions.
-- IRINA-TREAT returns None by design (`public_booking_enabled=false`): assertion corrected.
+- IRINA-TREAT protected-doctor code path is now expected to resolve when scope matches (updated by P0-07B1).
 - Insufficient consult slots for pagination: added 4 more slots to `stack3_booking.json`.
 - Care catalog/orders panels use runtime card callbacks (`c2|token`), not legacy `care:cat:` prefix: test adapted.
 - Patient `maria_kim` → `maria_petrova` / Giorgi phone `+7 (999) 777-10-10`: matched seed data.

@@ -64,13 +64,13 @@ def test_p0_06d2d2_db_backed_application_reads_smoke() -> None:
         assert len(public_doctors) >= 2
         assert reference_service.resolve_doctor_access_code(clinic_id="clinic_main", code="ANNA-001", service_id="service_consult", branch_id="branch_central") is not None
         assert reference_service.resolve_doctor_access_code(clinic_id="clinic_main", code="BORIS-HYG", service_id="service_cleaning", branch_id="branch_central") is not None
-        # IRINA-TREAT: doctor_irina has public_booking_enabled=false, so resolve returns None
+        # IRINA-TREAT is code-protected for a non-public doctor and must resolve within scope
         assert reference_service.resolve_doctor_access_code(
             clinic_id="clinic_main",
             code="IRINA-TREAT",
             service_id="service_treatment",
             branch_id="branch_central",
-        ) is None
+        ) is not None
 
         booking_session = await booking_flow.get_booking_session(booking_session_id="bks_001")
         assert booking_session is not None
