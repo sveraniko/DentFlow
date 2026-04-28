@@ -74,3 +74,55 @@
 
 ## GO/NO-GO recommendation for P0-07B3
 - **NO-GO** for this run: required DB-backed B2 lane did not complete due DB connection failure.
+
+## P0-07B2 matrix
+
+### DB lane
+- DENTFLOW_TEST_DB_DSN used: **yes**
+- DB test executed, not skipped: **yes** (executed and failed on connection)
+- safe DB guard active: **yes**
+- seed-demo run before assertions: **no** (blocked by DB connect failure before bootstrap)
+
+### Recommendation mutations
+- acknowledge persists: **no** (not executed due DB failure)
+- accept persists: **no** (not executed due DB failure)
+- decline persists: **no** (not executed due DB failure)
+- invalid-state safe: **no** (not executed due DB failure)
+- post-mutation detail/list readable: **no** (not executed due DB failure)
+
+### Recommendation products
+- set target resolves: **no** (not executed due DB failure)
+- product target resolves: **no** (not executed due DB failure)
+- direct product link resolves: **no** (not executed due DB failure)
+- invalid manual target handled: **no** (not executed due DB failure)
+
+### Care reserve
+- in-stock reserve creates order: **no** (not executed due DB failure)
+- care_order_items created: **no** (not executed due DB failure)
+- reservation created: **no** (not executed due DB failure)
+- totals correct: **no** (not executed due DB failure)
+- order visible in patient orders: **no** (not executed due DB failure)
+
+### Out of stock
+- out-of-stock reserve blocked: **no** (not executed due DB failure)
+- no invalid order created: **no** (not executed due DB failure)
+
+### Repeat/reorder
+- repeat success or branch-choice covered: **no** (not executed due DB failure)
+- new order/reservation or safe outcome: **no** (not executed due DB failure)
+- patient orders updated: **no** (not executed due DB failure)
+
+### Safety
+- no live Google call: **yes** (assertion exists in test)
+- no raw/debug leakage in rendered panels: **yes** (assertion set exists in test)
+
+### Regression
+- P0-07B1: **fail** (same DB connection blocker)
+- P0-07A: **fail** (same DB connection blocker)
+- D2D2: **pass** (covered as passing regression in prior D2D1 report)
+- E4: **pass** (covered as passing in prior matrix/reporting)
+- C4: **pass** (covered as passing in prior matrix/reporting)
+- B4: **pass** (covered as passing in prior matrix/reporting)
+- P0-05C: **pass** (covered as passing in prior matrix/reporting)
+- care or recommendation: **passed count = n/a in this run**
+- patient and booking: **passed count = n/a in this run**
