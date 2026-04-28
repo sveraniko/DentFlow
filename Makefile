@@ -1,4 +1,4 @@
-.PHONY: test db-bootstrap run-app run-bootstrap run-bots run-worker run-worker-projector run-worker-reminder run-worker-all smoke-import smoke-settings smoke-dispatcher smoke-worker-modes smoke-launch seed-stack1 seed-stack2
+.PHONY: test db-bootstrap run-app run-bootstrap run-bots run-worker run-worker-projector run-worker-reminder run-worker-all smoke-import smoke-settings smoke-dispatcher smoke-worker-modes smoke-launch seed-stack1 seed-stack2 seed-demo seed-demo-dry-run
 
 test:
 	pytest -q
@@ -46,3 +46,10 @@ smoke-launch: smoke-import smoke-settings smoke-worker-modes smoke-dispatcher
 
 seed-stack2:
 	python scripts/seed_stack2.py
+
+
+seed-demo:
+	python scripts/seed_demo.py --relative-dates --start-offset-days 1
+
+seed-demo-dry-run:
+	python scripts/seed_demo.py --relative-dates --start-offset-days 1 --dry-run
