@@ -1,0 +1,5 @@
+recommendation_type,target_kind,target_code,relevance_rank,active,justification_key,justification_text_ru,justification_text_en
+aftercare_hygiene,set,set_daily_hygiene,10,True,rec.aftercare_hygiene,Набор для стабильной ежедневной гигиены после приёма.,Bundle for consistent daily hygiene after visit.
+sensitivity,product,SKU-PASTE-SENSITIVE,5,True,rec.sensitivity,Щадящая паста при повышенной чувствительности.,Gentle toothpaste for sensitivity support.
+post_treatment,set,set_post_treatment,15,True,rec.post_treatment,Поддерживающий набор на период восстановления.,Supportive bundle for recovery period.
+gum_care,product,SKU-IRRIGATOR-TRAVEL,20,True,rec.gum_care,Ирригатор для регулярного ухода за дёснами.,Irrigator for routine gum care.

@@ -1,0 +1,8 @@
+sku,product_code,status,category,use_case_tag,price_amount,currency_code,pickup_supported,delivery_supported,sort_order,default_pickup_branch_id,media_asset_id,notes
+SKU-BRUSH-SOFT,brush_soft,active,toothbrush,daily_hygiene,8.90,EUR,True,False,10,branch_central,asset_brush_soft,Core daily hygiene item
+SKU-PASTE-SENSITIVE,paste_sensitive,active,toothpaste,sensitivity,7.50,EUR,True,False,20,branch_central,asset_paste_sensitive,Sensitivity-support toothpaste
+SKU-FLOSS-WAXED,floss_waxed,active,floss,interdental,4.20,EUR,True,False,30,branch_central,asset_floss_waxed,Waxed floss for daily interdental cleaning
+SKU-RINSE-CHX,rinse_chx,active,rinse,post_treatment,9.90,EUR,True,False,40,branch_central,asset_rinse_chx,CHX rinse for short post-procedure courses
+SKU-IRRIGATOR-TRAVEL,irrigator_travel,active,irrigator,gum_care,49.00,EUR,True,False,50,branch_central,asset_irrigator_travel,Portable irrigator for gum-focused hygiene
+SKU-GEL-REMIN,gel_remin,active,remineralization,enamel_support,12.00,EUR,True,False,60,branch_central,asset_gel_remin,Remineralization gel for enamel support
+SKU-OLD-BRUSH,old_brush,inactive,toothbrush,legacy,6.00,EUR,True,False,999,branch_central,asset_old_brush,Inactive legacy item for hidden-path validation

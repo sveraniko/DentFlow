@@ -1,0 +1,13 @@
+sku,locale,title,description,short_label,justification_text,usage_hint
+SKU-BRUSH-SOFT,ru,Мягкая зубная щётка,Мягкая щётка для ежедневной гигиены и чувствительных дёсен.,Мягкая щётка,Подходит для бережной ежедневной чистки.,"Используйте 2 раза в день, без сильного давления."
+SKU-BRUSH-SOFT,en,Soft toothbrush,Soft brush for daily cleaning and sensitive gums.,Soft brush,Supports gentle daily brushing.,Use twice daily with light pressure.
+SKU-PASTE-SENSITIVE,ru,Паста для чувствительных зубов,Паста для снижения чувствительности и комфортной ежедневной чистки.,Паста Sensitive,Помогает уменьшить реакцию на холодное и сладкое.,"Наносите горошину пасты, чистите 2 минуты."
+SKU-PASTE-SENSITIVE,en,Sensitive toothpaste,Toothpaste for sensitivity relief and daily hygiene.,Sensitive paste,Helps reduce response to cold and sweet triggers.,"Use a pea-sized amount, brush for 2 minutes."
+SKU-FLOSS-WAXED,ru,Вощёная зубная нить,Нить для очистки межзубных промежутков каждый день.,Нить вощёная,"Улучшает межзубную гигиену там, где щётка не проходит.",Используйте вечером после чистки зубов.
+SKU-FLOSS-WAXED,en,Waxed floss,Floss for daily interdental plaque removal.,Waxed floss,Improves cleaning where a brush cannot reach.,"Use once daily, ideally in the evening."
+SKU-RINSE-CHX,ru,Ополаскиватель CHX,Короткий курс антисептического ополаскивателя после процедур.,CHX ополаскиватель,Поддерживает уход в ранний постпроцедурный период.,"Применяйте по схеме врача, обычно 7–10 дней."
+SKU-RINSE-CHX,en,CHX rinse,Short-course antiseptic rinse for post-treatment care.,CHX rinse,Supports hygiene in the early post-treatment phase.,"Use as prescribed, typically for 7–10 days."
+SKU-IRRIGATOR-TRAVEL,ru,Портативный ирригатор,Компактный ирригатор для ухода за дёснами дома и в поездках.,Ирригатор Travel,Удобен при ортодонтических конструкциях и уходе за дёснами.,Используйте 1 раз в день на низкой или средней мощности.
+SKU-IRRIGATOR-TRAVEL,en,Travel irrigator,Compact irrigator for gum care at home and on trips.,Travel irrigator,Useful for gum-focused routines and braces hygiene.,Use once daily on low or medium pressure.
+SKU-GEL-REMIN,ru,Реминерализующий гель,Гель для поддержки эмали после отбеливания и лечения.,Гель Remin,Поддерживает восстановление эмали при повышенной чувствительности.,Наносите тонким слоем вечером после чистки.
+SKU-GEL-REMIN,en,Remineralizing gel,Gel for enamel support after whitening or treatment.,Remin gel,Helps support enamel recovery with sensitivity concerns.,Apply a thin layer at night after brushing.
