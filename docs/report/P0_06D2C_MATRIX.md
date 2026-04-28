@@ -40,8 +40,8 @@
 - C4 recommendations smoke: **pass**
 - B4 care smoke: **pass**
 - P0-05C smoke: **pass**
-- care or recommendation: **26 passed**
-- patient and booking: **4 passed**
+- care or recommendation: **222 passed**
+- patient and booking: **105 passed**
 
 ## Evidence quick map
 - Script/flow/options/validation: `scripts/seed_demo.py`
