@@ -1,0 +1,4 @@
+doctor_id,clinic_id,display_name,specialty,public_booking_enabled,is_active,default_branch_id,sort_order
+doctor_anna,clinic_main,Dr. Anna,general_dentistry,true,true,branch_central,1
+doctor_boris,clinic_main,Dr. Boris,dental_hygiene,true,true,branch_central,2
+doctor_irina,clinic_main,Dr. Irina,restorative_dentistry,false,true,branch_central,3

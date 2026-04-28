@@ -1,0 +1,5 @@
+service_id,clinic_id,code,title_key,duration_minutes,category,is_active,sort_order
+service_consult,clinic_main,consult,service.consult,30,general_dentistry,true,1
+service_cleaning,clinic_main,cleaning,service.cleaning,45,dental_hygiene,true,2
+service_treatment,clinic_main,treatment,service.treatment,60,restorative_dentistry,true,3
+service_urgent,clinic_main,urgent,service.urgent,30,general_dentistry,true,4

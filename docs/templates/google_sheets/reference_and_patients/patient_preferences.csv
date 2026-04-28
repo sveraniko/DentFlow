@@ -1,0 +1,1 @@
+patient_id,clinic_id,preferred_language,preferred_reminder_channel,allow_telegram,allow_sms,contact_time_window,timezone
