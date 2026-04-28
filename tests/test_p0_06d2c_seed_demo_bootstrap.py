@@ -55,6 +55,32 @@ def test_dry_run_validates_recommendations_and_keeps_expected_warning(capsys) ->
     assert "SKU-NOT-EXISTS" in captured
 
 
+def test_dry_run_skip_care_and_recommendations_allows_missing_optional_files(capsys) -> None:
+    exit_code = seed_demo.main(
+        [
+            "--dry-run",
+            "--skip-care",
+            "--skip-recommendations",
+            "--care-catalog-path",
+            "seeds/missing_care_catalog_demo.json",
+            "--recommendations-care-orders-path",
+            "seeds/missing_demo_recommendations_care_orders.json",
+        ]
+    )
+
+    captured = capsys.readouterr().out
+    assert exit_code == 0
+    assert "[4/5] care catalog... skipped" in captured
+    assert "[5/5] recommendations + care orders... skipped" in captured
+
+
+def test_dry_run_skip_care_without_skip_recommendations_fails(capsys) -> None:
+    exit_code = seed_demo.main(["--dry-run", "--skip-care"])
+    captured = capsys.readouterr().out
+    assert exit_code == 1
+    assert "--skip-recommendations must be used when --skip-care is enabled in dry-run mode" in captured
+
+
 def test_step_order_non_dry_run(monkeypatch) -> None:
     calls: list[str] = []
 

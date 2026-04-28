@@ -315,7 +315,7 @@ async def _validate_db_refs(conn, payload: dict[str, Any]) -> None:
             raise ValueError(f"Missing booking references in DB: {missing_bookings}")
 
     existing_branches = set(
-        (await conn.execute(text("SELECT branch_id FROM core.branches WHERE branch_id IN :ids").bindparams(bindparam("ids", expanding=True)), {"ids": tuple({row['pickup_branch_id'] for row in payload.get('care_orders', []) if row.get('pickup_branch_id')}) or ("",)})).scalars()
+        (await conn.execute(text("SELECT branch_id FROM core_reference.branches WHERE branch_id IN :ids").bindparams(bindparam("ids", expanding=True)), {"ids": tuple({row['pickup_branch_id'] for row in payload.get('care_orders', []) if row.get('pickup_branch_id')}) or ("",)})).scalars()
     )
     order_branches = {str(row["pickup_branch_id"]) for row in payload.get("care_orders", []) if row.get("pickup_branch_id")}
     missing_branches = sorted(order_branches - existing_branches)
