@@ -197,7 +197,7 @@ def test_p0_07b2_recommendation_care_mutation_pre_live_db_backed_smoke() -> None
         sergey = await find_patient_by_exact_contact(db_config, contact_type="telegram", contact_value="3001")
         assert sergey and sergey["patient_id"] == "patient_sergey_ivanov"
         rec_cb = home._Callback(data="prec:open:rec_sergey_hygiene_issued", user_id=3001)
-        await _handler(router, "patient_recommendations_detail", kind="callback")(rec_cb)
+        await _handler(router, "recommendation_open_callback", kind="callback")(rec_cb)
         rec_text, rec_markup = home._latest_callback_panel(rec_cb)
         assert rec_text
         _assert_no_leakage(rec_text)
