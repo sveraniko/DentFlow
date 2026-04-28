@@ -254,3 +254,22 @@ That is how the team tests a real system instead of a cardboard prop.
   - This seed creates/updates care catalog products and catalog-level recommendation mappings (`recommendation_sets`, `recommendation_set_items`, `recommendation_links`).
   - It does **not** create patient recommendation records.
   - It does **not** create care orders/reservations.
+
+## 14. P0-06D2B2 recommendations + care orders demo seed
+
+- File path: `seeds/demo_recommendations_care_orders.json`
+- Loader script:
+  - `python scripts/seed_demo_recommendations_care_orders.py --path seeds/demo_recommendations_care_orders.json`
+  - `python scripts/seed_demo_recommendations_care_orders.py --path seeds/demo_recommendations_care_orders.json --relative-dates`
+  - `python scripts/seed_demo_recommendations_care_orders.py --path seeds/demo_recommendations_care_orders.json --relative-dates --start-offset-days 1`
+- Required load order for reproducible demo content:
+  1. `python scripts/seed_stack1.py`
+  2. `python scripts/seed_stack2.py`
+  3. `python scripts/seed_stack3_booking.py --relative-dates`
+  4. `python scripts/sync_care_catalog.py --clinic-id clinic_main json --path seeds/care_catalog_demo.json`
+  5. `python scripts/seed_demo_recommendations_care_orders.py --path seeds/demo_recommendations_care_orders.json --relative-dates`
+- Notes:
+  - Care catalog products must be loaded before recommendations/care-orders seed because this loader resolves SKU to `care_product_id`.
+  - Patient recommendations in this seed use only domain-valid recommendation types (`aftercare`, `follow_up`, `next_step`, `hygiene_support`, `monitoring`, `general_guidance`).
+  - Product mapping is demonstrated through manual targets and direct recommendation-product links.
+  - One intentionally invalid manual target is included (`rec_sergey_manual_invalid -> SKU-NOT-EXISTS`) for recovery smoke validation.
