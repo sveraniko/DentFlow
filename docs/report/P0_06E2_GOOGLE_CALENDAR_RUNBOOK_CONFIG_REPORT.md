@@ -140,7 +140,7 @@ DB lane note:
 - `rg "INTEGRATIONS_GOOGLE_CALENDAR" .env.example app/config/settings.py docs/runbooks tests/test_p0_06e2_google_calendar_runbook_config.py`
   - Result: keys present in `.env.example`, settings model, runbook, and tests.
 
-- `rg "two-way sync|Calendar edits update DentFlow|Calendar is source of truth" docs/runbooks docs/80_integrations_and_infra.md`
+- `rg "two-way sync|Calendar edits update.*|Calendar.*source.*truth" docs/runbooks docs/80_integrations_and_infra.md`
   - Result: no direct positive-claim matches (exit code 1; expected for this literal pattern set).
 
 - `rg "343 passed|5 failed|patient or booking|patient and booking" docs/p0-06e1-matrix.md docs/report/P0_06E1_CARE_CATALOG_GOOGLE_SHEETS_TEMPLATE_REPORT.md`
