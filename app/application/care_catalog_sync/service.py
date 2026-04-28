@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 from typing import Protocol
 
@@ -30,6 +31,19 @@ class CareCatalogSyncService:
     async def import_xlsx(self, *, clinic_id: str, path: str | Path, source: str = "xlsx") -> CatalogImportResult:
         workbook = read_xlsx_workbook(path)
         return await self._validate_and_apply(clinic_id=clinic_id, workbook=workbook, source=source)
+
+    async def import_workbook(
+        self,
+        *,
+        clinic_id: str,
+        workbook: dict[str, list[dict[str, object]]],
+        source: str = "json",
+    ) -> CatalogImportResult:
+        return await self._validate_and_apply(clinic_id=clinic_id, workbook=workbook, source=source)
+
+    async def import_json(self, *, clinic_id: str, path: str | Path) -> CatalogImportResult:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        return await self.import_workbook(clinic_id=clinic_id, workbook=payload, source="json")
 
     async def sync_google_sheet(
         self,

@@ -30,6 +30,8 @@ async def _run(args) -> int:
     service = CareCatalogSyncService(repo)
     if args.mode == "xlsx":
         result = await service.import_xlsx(clinic_id=args.clinic_id, path=args.path, source="xlsx")
+    elif args.mode == "json":
+        result = await service.import_json(clinic_id=args.clinic_id, path=args.path)
     else:
         tmp = Path(args.tmp_file)
         result = await service.sync_google_sheet(
@@ -48,6 +50,9 @@ def main() -> int:
 
     xlsx = sub.add_parser("xlsx", help="import from xlsx workbook")
     xlsx.add_argument("--path", required=True)
+
+    json_import = sub.add_parser("json", help="import from json workbook payload")
+    json_import.add_argument("--path", required=True)
 
     sheets = sub.add_parser("sheets", help="sync from Google Sheets export")
     sheets.add_argument("--sheet", required=True, help="Google Sheets URL or sheet id")

@@ -244,3 +244,13 @@ That is how the team tests a real system instead of a cardboard prop.
 - Recommendations/care catalog/care orders are intentionally deferred to follow-up tracks:
   - P0-06D2B1: care categories/products demo seed.
   - P0-06D2B2: recommendations/care orders demo seed.
+
+## 13. P0-06D2B1 care catalog demo seed
+
+- File path: `seeds/care_catalog_demo.json`
+- Load command:
+  - `python scripts/sync_care_catalog.py --clinic-id clinic_main json --path seeds/care_catalog_demo.json`
+- Scope note:
+  - This seed creates/updates care catalog products and catalog-level recommendation mappings (`recommendation_sets`, `recommendation_set_items`, `recommendation_links`).
+  - It does **not** create patient recommendation records.
+  - It does **not** create care orders/reservations.

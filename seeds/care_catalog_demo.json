@@ -1,0 +1,159 @@
+{
+  "products": [
+    {
+      "sku": "SKU-BRUSH-SOFT",
+      "product_code": "brush_soft",
+      "status": "active",
+      "category": "toothbrush",
+      "use_case_tag": "daily_hygiene",
+      "price_amount": "8.90",
+      "currency_code": "EUR",
+      "pickup_supported": true,
+      "delivery_supported": false,
+      "sort_order": 10,
+      "default_pickup_branch_id": "branch_central",
+      "media_asset_id": "asset_brush_soft",
+      "notes": "Core daily hygiene item"
+    },
+    {
+      "sku": "SKU-PASTE-SENSITIVE",
+      "product_code": "paste_sensitive",
+      "status": "active",
+      "category": "toothpaste",
+      "use_case_tag": "sensitivity",
+      "price_amount": "7.50",
+      "currency_code": "EUR",
+      "pickup_supported": true,
+      "delivery_supported": false,
+      "sort_order": 20,
+      "default_pickup_branch_id": "branch_central",
+      "media_asset_id": "asset_paste_sensitive",
+      "notes": "Sensitivity-support toothpaste"
+    },
+    {
+      "sku": "SKU-FLOSS-WAXED",
+      "product_code": "floss_waxed",
+      "status": "active",
+      "category": "floss",
+      "use_case_tag": "interdental",
+      "price_amount": "4.20",
+      "currency_code": "EUR",
+      "pickup_supported": true,
+      "delivery_supported": false,
+      "sort_order": 30,
+      "default_pickup_branch_id": "branch_central",
+      "media_asset_id": "asset_floss_waxed",
+      "notes": "Waxed floss for daily interdental cleaning"
+    },
+    {
+      "sku": "SKU-RINSE-CHX",
+      "product_code": "rinse_chx",
+      "status": "active",
+      "category": "rinse",
+      "use_case_tag": "post_treatment",
+      "price_amount": "9.90",
+      "currency_code": "EUR",
+      "pickup_supported": true,
+      "delivery_supported": false,
+      "sort_order": 40,
+      "default_pickup_branch_id": "branch_central",
+      "media_asset_id": "asset_rinse_chx",
+      "notes": "CHX rinse for short post-procedure courses"
+    },
+    {
+      "sku": "SKU-IRRIGATOR-TRAVEL",
+      "product_code": "irrigator_travel",
+      "status": "active",
+      "category": "irrigator",
+      "use_case_tag": "gum_care",
+      "price_amount": "49.00",
+      "currency_code": "EUR",
+      "pickup_supported": true,
+      "delivery_supported": false,
+      "sort_order": 50,
+      "default_pickup_branch_id": "branch_central",
+      "media_asset_id": "asset_irrigator_travel",
+      "notes": "Portable irrigator for gum-focused hygiene"
+    },
+    {
+      "sku": "SKU-GEL-REMIN",
+      "product_code": "gel_remin",
+      "status": "active",
+      "category": "remineralization",
+      "use_case_tag": "enamel_support",
+      "price_amount": "12.00",
+      "currency_code": "EUR",
+      "pickup_supported": true,
+      "delivery_supported": false,
+      "sort_order": 60,
+      "default_pickup_branch_id": "branch_central",
+      "media_asset_id": "asset_gel_remin",
+      "notes": "Remineralization gel for enamel support"
+    },
+    {
+      "sku": "SKU-OLD-BRUSH",
+      "product_code": "old_brush",
+      "status": "inactive",
+      "category": "toothbrush",
+      "use_case_tag": "legacy",
+      "price_amount": "6.00",
+      "currency_code": "EUR",
+      "pickup_supported": true,
+      "delivery_supported": false,
+      "sort_order": 999,
+      "default_pickup_branch_id": "branch_central",
+      "media_asset_id": "asset_old_brush",
+      "notes": "Inactive legacy item for hidden-path validation"
+    }
+  ],
+  "product_i18n": [
+    {"sku": "SKU-BRUSH-SOFT", "locale": "ru", "title": "Мягкая зубная щётка", "description": "Мягкая щётка для ежедневной гигиены и чувствительных дёсен.", "short_label": "Мягкая щётка", "justification_text": "Подходит для бережной ежедневной чистки.", "usage_hint": "Используйте 2 раза в день, без сильного давления."},
+    {"sku": "SKU-BRUSH-SOFT", "locale": "en", "title": "Soft toothbrush", "description": "Soft brush for daily cleaning and sensitive gums.", "short_label": "Soft brush", "justification_text": "Supports gentle daily brushing.", "usage_hint": "Use twice daily with light pressure."},
+
+    {"sku": "SKU-PASTE-SENSITIVE", "locale": "ru", "title": "Паста для чувствительных зубов", "description": "Паста для снижения чувствительности и комфортной ежедневной чистки.", "short_label": "Паста Sensitive", "justification_text": "Помогает уменьшить реакцию на холодное и сладкое.", "usage_hint": "Наносите горошину пасты, чистите 2 минуты."},
+    {"sku": "SKU-PASTE-SENSITIVE", "locale": "en", "title": "Sensitive toothpaste", "description": "Toothpaste for sensitivity relief and daily hygiene.", "short_label": "Sensitive paste", "justification_text": "Helps reduce response to cold and sweet triggers.", "usage_hint": "Use a pea-sized amount, brush for 2 minutes."},
+
+    {"sku": "SKU-FLOSS-WAXED", "locale": "ru", "title": "Вощёная зубная нить", "description": "Нить для очистки межзубных промежутков каждый день.", "short_label": "Нить вощёная", "justification_text": "Улучшает межзубную гигиену там, где щётка не проходит.", "usage_hint": "Используйте вечером после чистки зубов."},
+    {"sku": "SKU-FLOSS-WAXED", "locale": "en", "title": "Waxed floss", "description": "Floss for daily interdental plaque removal.", "short_label": "Waxed floss", "justification_text": "Improves cleaning where a brush cannot reach.", "usage_hint": "Use once daily, ideally in the evening."},
+
+    {"sku": "SKU-RINSE-CHX", "locale": "ru", "title": "Ополаскиватель CHX", "description": "Короткий курс антисептического ополаскивателя после процедур.", "short_label": "CHX ополаскиватель", "justification_text": "Поддерживает уход в ранний постпроцедурный период.", "usage_hint": "Применяйте по схеме врача, обычно 7–10 дней."},
+    {"sku": "SKU-RINSE-CHX", "locale": "en", "title": "CHX rinse", "description": "Short-course antiseptic rinse for post-treatment care.", "short_label": "CHX rinse", "justification_text": "Supports hygiene in the early post-treatment phase.", "usage_hint": "Use as prescribed, typically for 7–10 days."},
+
+    {"sku": "SKU-IRRIGATOR-TRAVEL", "locale": "ru", "title": "Портативный ирригатор", "description": "Компактный ирригатор для ухода за дёснами дома и в поездках.", "short_label": "Ирригатор Travel", "justification_text": "Удобен при ортодонтических конструкциях и уходе за дёснами.", "usage_hint": "Используйте 1 раз в день на низкой или средней мощности."},
+    {"sku": "SKU-IRRIGATOR-TRAVEL", "locale": "en", "title": "Travel irrigator", "description": "Compact irrigator for gum care at home and on trips.", "short_label": "Travel irrigator", "justification_text": "Useful for gum-focused routines and braces hygiene.", "usage_hint": "Use once daily on low or medium pressure."},
+
+    {"sku": "SKU-GEL-REMIN", "locale": "ru", "title": "Реминерализующий гель", "description": "Гель для поддержки эмали после отбеливания и лечения.", "short_label": "Гель Remin", "justification_text": "Поддерживает восстановление эмали при повышенной чувствительности.", "usage_hint": "Наносите тонким слоем вечером после чистки."},
+    {"sku": "SKU-GEL-REMIN", "locale": "en", "title": "Remineralizing gel", "description": "Gel for enamel support after whitening or treatment.", "short_label": "Remin gel", "justification_text": "Helps support enamel recovery with sensitivity concerns.", "usage_hint": "Apply a thin layer at night after brushing."}
+  ],
+  "branch_availability": [
+    {"branch_id": "branch_central", "sku": "SKU-BRUSH-SOFT", "on_hand_qty": 15, "availability_enabled": true, "low_stock_threshold": 2, "preferred_pickup": true},
+    {"branch_id": "branch_central", "sku": "SKU-PASTE-SENSITIVE", "on_hand_qty": 12, "availability_enabled": true, "low_stock_threshold": 2, "preferred_pickup": false},
+    {"branch_id": "branch_central", "sku": "SKU-FLOSS-WAXED", "on_hand_qty": 18, "availability_enabled": true, "low_stock_threshold": 2, "preferred_pickup": false},
+    {"branch_id": "branch_central", "sku": "SKU-RINSE-CHX", "on_hand_qty": 2, "availability_enabled": true, "low_stock_threshold": 2, "preferred_pickup": false},
+    {"branch_id": "branch_central", "sku": "SKU-IRRIGATOR-TRAVEL", "on_hand_qty": 10, "availability_enabled": true, "low_stock_threshold": 1, "preferred_pickup": false},
+    {"branch_id": "branch_central", "sku": "SKU-GEL-REMIN", "on_hand_qty": 0, "availability_enabled": true, "low_stock_threshold": 2, "preferred_pickup": false}
+  ],
+  "recommendation_sets": [
+    {"set_code": "set_daily_hygiene", "status": "active", "title_ru": "Ежедневная гигиена", "title_en": "Daily hygiene", "description_ru": "Базовый набор для ежедневного ухода.", "description_en": "Core bundle for everyday oral care.", "sort_order": 1},
+    {"set_code": "set_post_treatment", "status": "active", "title_ru": "После лечения", "title_en": "Post-treatment", "description_ru": "Поддерживающий набор после стоматологических процедур.", "description_en": "Supportive bundle after dental procedures.", "sort_order": 2}
+  ],
+  "recommendation_set_items": [
+    {"set_code": "set_daily_hygiene", "sku": "SKU-BRUSH-SOFT", "position": 1, "quantity": 1, "notes": "Daily core"},
+    {"set_code": "set_daily_hygiene", "sku": "SKU-FLOSS-WAXED", "position": 2, "quantity": 1, "notes": "Interdental support"},
+    {"set_code": "set_daily_hygiene", "sku": "SKU-PASTE-SENSITIVE", "position": 3, "quantity": 1, "notes": "Gentle paste"},
+    {"set_code": "set_post_treatment", "sku": "SKU-PASTE-SENSITIVE", "position": 1, "quantity": 1, "notes": "Sensitive hygiene"},
+    {"set_code": "set_post_treatment", "sku": "SKU-RINSE-CHX", "position": 2, "quantity": 1, "notes": "Short-term antiseptic"},
+    {"set_code": "set_post_treatment", "sku": "SKU-GEL-REMIN", "position": 3, "quantity": 1, "notes": "Enamel support"}
+  ],
+  "recommendation_links": [
+    {"recommendation_type": "aftercare_hygiene", "target_kind": "set", "target_code": "set_daily_hygiene", "relevance_rank": 10, "active": true, "justification_key": "rec.aftercare_hygiene", "justification_text_ru": "Набор для стабильной ежедневной гигиены после приёма.", "justification_text_en": "Bundle for consistent daily hygiene after visit."},
+    {"recommendation_type": "sensitivity", "target_kind": "product", "target_code": "SKU-PASTE-SENSITIVE", "relevance_rank": 5, "active": true, "justification_key": "rec.sensitivity", "justification_text_ru": "Щадящая паста при повышенной чувствительности.", "justification_text_en": "Gentle toothpaste for sensitivity support."},
+    {"recommendation_type": "post_treatment", "target_kind": "set", "target_code": "set_post_treatment", "relevance_rank": 15, "active": true, "justification_key": "rec.post_treatment", "justification_text_ru": "Поддерживающий набор на период восстановления.", "justification_text_en": "Supportive bundle for recovery period."},
+    {"recommendation_type": "gum_care", "target_kind": "product", "target_code": "SKU-IRRIGATOR-TRAVEL", "relevance_rank": 20, "active": true, "justification_key": "rec.gum_care", "justification_text_ru": "Ирригатор для регулярного ухода за дёснами.", "justification_text_en": "Irrigator for routine gum care."}
+  ],
+  "settings": [
+    {"key": "care.default_pickup_branch_id", "value": "branch_central"},
+    {"key": "care.demo_catalog_version", "value": "p0-06d2b1"},
+    {"key": "care.currency", "value": "EUR"}
+  ]
+}
