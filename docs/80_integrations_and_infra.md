@@ -258,6 +258,14 @@ The recommended baseline is:
 - `/admin_calendar` provides bounded read-only mirror awareness.
 - `/admin_integrations` provides a compact integration control index for these operator surfaces and truth boundaries.
 
+### Runbook and operator commands
+- Runbook: `docs/runbooks/google_calendar_projection_runbook.md`
+- Projection processing command: `python scripts/process_outbox_events.py --limit 200`
+- Retry failed projection batch: `python scripts/retry_google_calendar_projection.py --limit 100`
+- Retry single booking projection: `python scripts/retry_google_calendar_projection.py --booking-id <booking_id>`
+
+The integration remains one-way DentFlow -> Google Calendar mirror only. Calendar is not booking source of truth.
+
 Non-goals remain explicit:
 - no Calendar-as-truth,
 - no Calendar-to-DentFlow sync path,

@@ -320,3 +320,9 @@ That is how the team tests a real system instead of a cardboard prop.
 - Scope boundary:
   - Google Sheets catalog sync in this pack is for care products/catalog tabs only.
   - patient/doctor/service Sheets sync is not part of P0-06E1.
+## 17. Demo seed vs Google Calendar projection
+
+- Demo seed flows create DentFlow reference/patient/booking data in DentFlow storage.
+- Google Calendar projection is a separate worker/integration step and is not executed by seed bootstrap itself.
+- Seed/demo commands do not call Google Calendar directly.
+

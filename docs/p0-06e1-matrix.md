@@ -28,12 +28,15 @@ Generated: 2026-04-28 (UTC)
 - C4: **pass**
 - B4: **pass**
 - care or recommendation: **227 passed**
-- patient and booking: **343 passed** (with 5 failing tests in this selection)
+- patient and booking (E1 acceptance command): **105 passed**
 
 ## Command log
 - `pytest -q tests/test_p0_06e1_care_catalog_sheets_template.py tests/test_p0_06d2b1_care_catalog_demo_seed.py tests/test_p0_06d2c_seed_demo_bootstrap.py tests/test_p0_06c4_recommendations_smoke_gate.py tests/test_p0_06b4_care_catalog_product_order_smoke_gate.py`
   - result: `33 passed`
 - `pytest -q -k "care or recommendation"`
   - result: `227 passed, 528 deselected`
+- `pytest -q tests -k "patient and booking"`
+  - result: `105 passed, 650 deselected`
 - `pytest -q -k "patient or booking"`
   - result: `343 passed, 5 failed, 407 deselected`
+  - classification: broader non-E1 acceptance selection; failures were outside the E1 targeted acceptance command
