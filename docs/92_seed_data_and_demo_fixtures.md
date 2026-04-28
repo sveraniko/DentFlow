@@ -273,3 +273,33 @@ That is how the team tests a real system instead of a cardboard prop.
   - Patient recommendations in this seed use only domain-valid recommendation types (`aftercare`, `follow_up`, `next_step`, `hygiene_support`, `monitoring`, `general_guidance`).
   - Product mapping is demonstrated through manual targets and direct recommendation-product links.
   - One intentionally invalid manual target is included (`rec_sergey_manual_invalid -> SKU-NOT-EXISTS`) for recovery smoke validation.
+
+## 15. P0-06D2C full demo seed bootstrap
+
+- One-command loader script:
+  - `python scripts/seed_demo.py --relative-dates`
+  - `python scripts/seed_demo.py --relative-dates --start-offset-days 1`
+  - `python scripts/seed_demo.py --relative-dates --clinic-id clinic_main`
+- Makefile wrapper:
+  - `make seed-demo`
+
+### Required load order
+
+1. stack1 reference seed (`seeds/stack1_seed.json`)
+2. stack2 patients (`seeds/stack2_patients.json`)
+3. stack3 booking seed (`seeds/stack3_booking.json`) with relative-date mode for demo/live smoke
+4. care catalog demo JSON (`seeds/care_catalog_demo.json`)
+5. recommendations + care orders demo JSON (`seeds/demo_recommendations_care_orders.json`) with relative-date mode
+
+### Dry-run
+
+- `python scripts/seed_demo.py --relative-dates --dry-run`
+- Dry-run does not write to DB.
+- Dry-run checks all seed files exist, parses JSON, validates care catalog payload parsing, validates recommendations/care-orders payload, and prints planned step order.
+
+### Notes
+
+- Relative-date mode should be used for stack3 and recommendations/care-orders when running demos or smoke in non-static environments.
+- Care catalog JSON import must run before recommendations/care-orders because recommendation/care-order seed resolves SKUs against catalog products.
+- Google Sheets catalog sync remains available separately via `scripts/sync_care_catalog.py`.
+- Google Sheets templates/import pack are intentionally out of scope for this PR.
