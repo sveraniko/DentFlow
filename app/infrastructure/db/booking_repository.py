@@ -121,6 +121,7 @@ class DbBookingRepository(BookingRepository):
             WHERE clinic_id=:clinic_id
               AND telegram_user_id=:telegram_user_id
               AND status IN ('initiated', 'in_progress', 'awaiting_slot_selection', 'awaiting_contact_confirmation', 'review_ready')
+              AND (expires_at IS NULL OR expires_at > now())
             ORDER BY updated_at DESC
             """,
             {"clinic_id": clinic_id, "telegram_user_id": telegram_user_id},
@@ -244,14 +245,19 @@ class DbBookingRepository(BookingRepository):
             self._db_config,
             """
             SELECT slot_id, clinic_id, branch_id, doctor_id, start_at, end_at, status, visibility_policy, service_scope, source_ref, updated_at
-            FROM booking.availability_slots
-            WHERE clinic_id=:clinic_id
-              AND status='open'
-              AND start_at >= :start_at
-              AND start_at < :end_at
-              AND (CAST(:doctor_id AS TEXT) IS NULL OR doctor_id=CAST(:doctor_id AS TEXT))
-              AND (CAST(:branch_id AS TEXT) IS NULL OR branch_id=CAST(:branch_id AS TEXT))
-            ORDER BY start_at ASC, slot_id ASC
+            FROM booking.availability_slots s
+            WHERE s.clinic_id=:clinic_id
+              AND s.status='open'
+              AND s.start_at >= :start_at
+              AND s.start_at < :end_at
+              AND (CAST(:doctor_id AS TEXT) IS NULL OR s.doctor_id=CAST(:doctor_id AS TEXT))
+              AND (CAST(:branch_id AS TEXT) IS NULL OR s.branch_id=CAST(:branch_id AS TEXT))
+              AND NOT EXISTS (
+                SELECT 1 FROM booking.bookings b
+                WHERE b.slot_id = s.slot_id
+                  AND b.status IN ('pending_confirmation', 'confirmed', 'reschedule_requested', 'checked_in', 'in_service')
+              )
+            ORDER BY s.start_at ASC, s.slot_id ASC
             LIMIT :limit
             """,
             {

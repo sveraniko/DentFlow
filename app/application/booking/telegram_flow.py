@@ -267,6 +267,10 @@ class BookingPatientFlowService:
         return started.entity
 
     async def start_new_existing_booking_session(self, *, clinic_id: str, telegram_user_id: int) -> BookingSession:
+        stale = await self.reads.list_active_sessions_for_telegram_user(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
+        for s in stale:
+            if s.route_type in EXISTING_BOOKING_CONTROL_ROUTE_TYPES:
+                await self.orchestration.expire_session(booking_session_id=s.booking_session_id)
         started = await self.orchestration.start_booking_session(
             clinic_id=clinic_id,
             telegram_user_id=telegram_user_id,

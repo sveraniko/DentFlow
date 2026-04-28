@@ -99,6 +99,9 @@ class _NoopOrchestration:
         )
         return OrchestrationSuccess(kind="success", entity=session)
 
+    async def expire_session(self, *, booking_session_id: str):
+        return OrchestrationSuccess(kind="success", entity=None)
+
 
 class _NoopPatientCreator:
     async def create_minimal_patient(self, *, clinic_id: str, display_name: str, phone: str) -> str:
