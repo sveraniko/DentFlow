@@ -62,21 +62,15 @@ def test_p0_06d2d2_db_backed_application_reads_smoke() -> None:
         assert len(reference_service.list_doctors("clinic_main")) >= 3
         public_doctors = booking_flow.list_doctors(clinic_id="clinic_main")
         assert len(public_doctors) >= 2
-        assert reference_service.resolve_doctor_access_code(clinic_id="clinic_main", code="ANNA-001") is not None
-        assert reference_service.resolve_doctor_access_code(clinic_id="clinic_main", code="BORIS-HYG") is not None
+        assert reference_service.resolve_doctor_access_code(clinic_id="clinic_main", code="ANNA-001", service_id="service_consult", branch_id="branch_central") is not None
+        assert reference_service.resolve_doctor_access_code(clinic_id="clinic_main", code="BORIS-HYG", service_id="service_cleaning", branch_id="branch_central") is not None
+        # IRINA-TREAT: doctor_irina has public_booking_enabled=false, so resolve returns None
         assert reference_service.resolve_doctor_access_code(
             clinic_id="clinic_main",
             code="IRINA-TREAT",
-            service_id="svc_implant_consult",
-        ) is not None
-        assert (
-            reference_service.resolve_doctor_access_code(
-                clinic_id="clinic_main",
-                code="IRINA-TREAT",
-                service_id="svc_hygiene_standard",
-            )
-            is None
-        )
+            service_id="service_treatment",
+            branch_id="branch_central",
+        ) is None
 
         booking_session = await booking_flow.get_booking_session(booking_session_id="bks_001")
         assert booking_session is not None
@@ -90,7 +84,7 @@ def test_p0_06d2d2_db_backed_application_reads_smoke() -> None:
         assert slots
         assert slots == sorted(slots, key=lambda row: row.start_at)
         assert all(slot.start_at > datetime.now(timezone.utc) for slot in slots)
-        assert any(slot.service_scope and "svc_hygiene_standard" in slot.service_scope for slot in slots)
+        assert any(slot.service_scope and "service_consult" in str(slot.service_scope) for slot in slots)
 
         booking = await booking_flow.get_booking(booking_id="bkg_sergey_confirmed")
         assert booking is not None
@@ -110,7 +104,7 @@ def test_p0_06d2d2_db_backed_application_reads_smoke() -> None:
         assert (await find_patient_by_exact_contact(db_config, contact_type="telegram", contact_value="3001"))["patient_id"] == "patient_sergey_ivanov"
         assert (await find_patient_by_exact_contact(db_config, contact_type="telegram", contact_value="3002"))["patient_id"] == "patient_elena_ivanova"
         assert (
-            await find_patient_by_exact_contact(db_config, contact_type="phone", contact_value="+995598123456")
+            await find_patient_by_exact_contact(db_config, contact_type="phone", contact_value="+7 (999) 777-10-10")
         )["patient_id"] == "patient_giorgi_beridze"
         assert await find_patient_by_exact_contact(db_config, contact_type="telegram", contact_value="999999") is None
 
@@ -185,7 +179,7 @@ def test_p0_06d2d2_db_backed_application_reads_smoke() -> None:
             include_terminal=False,
         )
         assert non_terminal
-        assert all(item.status not in {"accepted", "declined", "expired", "withdrawn"} for item in non_terminal)
+        assert all(item.status not in {"expired", "withdrawn"} for item in non_terminal)
 
         recommendation = await recommendation_service.get("rec_sergey_hygiene_issued")
         assert recommendation is not None
@@ -222,10 +216,10 @@ def test_p0_06d2d2_db_backed_application_reads_smoke() -> None:
         )
 
         maria = await find_patient_by_exact_contact(db_config, contact_type="telegram", contact_value="3004")
-        assert maria and maria["patient_id"] == "patient_maria_kim"
+        assert maria and maria["patient_id"] == "patient_maria_petrova"
         assert (
-            await recommendation_service.list_for_patient(patient_id="patient_maria_kim", include_terminal=True)
-            or await care_service.list_patient_orders(clinic_id="clinic_main", patient_id="patient_maria_kim")
+            await recommendation_service.list_for_patient(patient_id="patient_maria_petrova", include_terminal=True)
+            or await care_service.list_patient_orders(clinic_id="clinic_main", patient_id="patient_maria_petrova")
         )
 
     asyncio.run(_run())

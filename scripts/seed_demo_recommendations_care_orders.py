@@ -68,6 +68,17 @@ def _shift_iso_datetime_string(value: str, *, delta_days: int) -> str | None:
     return rendered
 
 
+def _coerce_row_timestamps(row: dict[str, Any]) -> dict[str, Any]:
+    """Convert ISO datetime strings in _at fields to proper datetime objects for asyncpg."""
+    result = dict(row)
+    for key, value in result.items():
+        if value is not None and isinstance(value, str) and (key.endswith("_at") or key == "expires_at"):
+            parsed = _parse_iso_datetime(value)
+            if parsed is not None:
+                result[key] = parsed
+    return result
+
+
 def _detect_anchor_date(payload: dict[str, Any]) -> date | None:
     candidates: list[date] = []
     explicit = payload.get("source_anchor_date")
@@ -122,10 +133,10 @@ def shift_demo_recommendations_care_orders_dates(
 
 def _load_support_payloads() -> dict[str, Any]:
     return {
-        "stack1": load_seed_payload(Path("seeds/stack1_seed.json")),
-        "stack2": load_seed_payload(Path("seeds/stack2_patients.json")),
-        "stack3": load_seed_payload(Path("seeds/stack3_booking.json")),
-        "catalog": load_seed_payload(Path("seeds/care_catalog_demo.json")),
+        "stack1_payload": load_seed_payload(Path("seeds/stack1_seed.json")),
+        "stack2_payload": load_seed_payload(Path("seeds/stack2_patients.json")),
+        "stack3_payload": load_seed_payload(Path("seeds/stack3_booking.json")),
+        "catalog_payload": load_seed_payload(Path("seeds/care_catalog_demo.json")),
     }
 
 
@@ -364,7 +375,7 @@ async def _seed_orders_items_reservations(conn, payload: dict[str, Any], sku_to_
                   expired_at=EXCLUDED.expired_at
                 """
             ),
-            order,
+            _coerce_row_timestamps(order),
         )
 
     for item in payload.get("care_order_items", []):
@@ -388,7 +399,7 @@ async def _seed_orders_items_reservations(conn, payload: dict[str, Any], sku_to_
                   line_total=EXCLUDED.line_total
                 """
             ),
-            mapped,
+            _coerce_row_timestamps(mapped),
         )
 
     for reservation in payload.get("care_reservations", []):
@@ -416,7 +427,7 @@ async def _seed_orders_items_reservations(conn, payload: dict[str, Any], sku_to_
                   consumed_at=EXCLUDED.consumed_at
                 """
             ),
-            mapped,
+            _coerce_row_timestamps(mapped),
         )
 
     return {
@@ -455,7 +466,13 @@ async def seed_demo_recommendations_care_orders(
     care_repo = DbCareCommerceRepository(db_config)
 
     for row in payload_to_seed.get("recommendations", []):
-        await recommendation_repo.save(Recommendation(**row))
+        parsed = {}
+        for key, value in row.items():
+            if value is not None and isinstance(value, str) and (key.endswith("_at") or key == "expires_at"):
+                parsed[key] = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            else:
+                parsed[key] = value
+        await recommendation_repo.save(Recommendation(**parsed))
 
     for row in payload_to_seed.get("manual_recommendation_targets", []):
         await care_repo.upsert_manual_recommendation_target(

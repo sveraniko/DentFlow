@@ -23,6 +23,18 @@
       "expires_at": "2026-04-20T09:30:00Z",
       "created_at": "2026-04-20T09:00:00Z",
       "updated_at": "2026-04-20T09:10:00Z"
+    },
+    {
+      "booking_session_id": "bks_002",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "telegram_user_id": 3001,
+      "resolved_patient_id": "patient_sergey_ivanov",
+      "status": "in_progress",
+      "route_type": "existing_booking_control",
+      "expires_at": "2026-04-30T09:30:00Z",
+      "created_at": "2026-04-20T09:15:00Z",
+      "updated_at": "2026-04-20T09:15:00Z"
     }
   ],
   "session_events": [
@@ -245,6 +257,58 @@
       },
       "source_ref": "seed",
       "updated_at": "2026-04-28T14:00:00Z"
+    },
+    {
+      "slot_id": "slot_anna_20260429_0700_consult",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "doctor_id": "doctor_anna",
+      "start_at": "2026-04-29T07:00:00Z",
+      "end_at": "2026-04-29T07:30:00Z",
+      "status": "open",
+      "visibility_policy": "public",
+      "service_scope": {"service_ids": ["service_consult"]},
+      "source_ref": "seed",
+      "updated_at": "2026-04-29T06:00:00Z"
+    },
+    {
+      "slot_id": "slot_anna_20260430_0700_consult",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "doctor_id": "doctor_anna",
+      "start_at": "2026-04-30T07:00:00Z",
+      "end_at": "2026-04-30T07:30:00Z",
+      "status": "open",
+      "visibility_policy": "public",
+      "service_scope": {"service_ids": ["service_consult"]},
+      "source_ref": "seed",
+      "updated_at": "2026-04-30T06:00:00Z"
+    },
+    {
+      "slot_id": "slot_anna_20260501_0700_consult",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "doctor_id": "doctor_anna",
+      "start_at": "2026-05-01T07:00:00Z",
+      "end_at": "2026-05-01T07:30:00Z",
+      "status": "open",
+      "visibility_policy": "public",
+      "service_scope": {"service_ids": ["service_consult"]},
+      "source_ref": "seed",
+      "updated_at": "2026-05-01T06:00:00Z"
+    },
+    {
+      "slot_id": "slot_anna_20260502_0700_consult",
+      "clinic_id": "clinic_main",
+      "branch_id": "branch_central",
+      "doctor_id": "doctor_anna",
+      "start_at": "2026-05-02T07:00:00Z",
+      "end_at": "2026-05-02T07:30:00Z",
+      "status": "open",
+      "visibility_policy": "public",
+      "service_scope": {"service_ids": ["service_consult"]},
+      "source_ref": "seed",
+      "updated_at": "2026-05-02T06:00:00Z"
     }
   ],
   "slot_holds": [

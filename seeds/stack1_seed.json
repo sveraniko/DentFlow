@@ -149,6 +149,18 @@
       "actor_type": "staff",
       "display_name": "Owner User",
       "locale": "en"
+    },
+    {
+      "actor_id": "staff_anna",
+      "actor_type": "staff",
+      "display_name": "Dr. Anna",
+      "locale": "ru"
+    },
+    {
+      "actor_id": "staff_olga",
+      "actor_type": "staff",
+      "display_name": "Dr. Olga",
+      "locale": "ru"
     }
   ],
   "telegram_bindings": [

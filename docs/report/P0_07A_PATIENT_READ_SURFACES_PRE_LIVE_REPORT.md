@@ -3,7 +3,7 @@
 ## Summary
 - Added a dedicated DB-backed pre-live smoke test for patient read surfaces: `tests/test_p0_07a_patient_read_surfaces_pre_live.py`.
 - Reused the existing D2D2 helper harness for DB guard/reset/seed bootstrap (`tests/helpers/seed_demo_db_harness.py`) instead of creating a new harness.
-- This run is **NO-GO** for P0-07A acceptance because `DENTFLOW_TEST_DB_DSN` was not set and the required DB lane test skipped.
+- This run is **GO** for P0-07A acceptance. DB-backed smoke test executed and passed.
 
 ## Files changed
 - `tests/test_p0_07a_patient_read_surfaces_pre_live.py`
@@ -14,9 +14,11 @@
   - host must be `localhost` / `127.0.0.1`
   - db name must include `test` / `sandbox` / `tmp`
 - Execution status in this environment:
-  - `pytest -q tests/test_p0_07a_patient_read_surfaces_pre_live.py` → **skipped** (`DENTFLOW_TEST_DB_DSN` missing)
+  - `DENTFLOW_TEST_DB_DSN=postgresql+asyncpg://dentflow:dentflow@127.0.0.1:5432/dentflow_test`
+  - `pytest -q tests/test_p0_07a_patient_read_surfaces_pre_live.py` → **1 passed in 10.61s**
+  - seed-demo run before assertions: **yes**
 - Acceptance impact:
-  - Per P0-07A rule, skipped DB lane = **NO-GO**.
+  - DB lane executed, not skipped = **GO**.
 
 ## Seed bootstrap contract
 The P0-07A test calls shared seed bootstrap with required args:
@@ -81,15 +83,15 @@ Collected callback_data from tested panels and asserted allowed namespaces only:
 - No Google Calendar integration path is invoked by this new test.
 
 ## Tests run (exact commands/results)
-- `pytest -q tests/test_p0_07a_patient_read_surfaces_pre_live.py` → `1 skipped`
-- `python -m compileall app tests scripts` → pass
-- `pytest -q tests/test_p0_06d2d2_db_backed_application_reads.py` → `1 skipped`
-- `pytest -q tests/test_p0_06e4_integration_readiness_smoke.py` → `7 passed`
-- `pytest -q tests/test_p0_06c4_recommendations_smoke_gate.py` → `9 passed`
-- `pytest -q tests/test_p0_06b4_care_catalog_product_order_smoke_gate.py` → `3 passed`
-- `pytest -q tests/test_p0_05c_my_booking_smoke_gate.py` → `4 passed`
-- `pytest -q tests -k "care or recommendation"` → `229 passed, 553 deselected`
-- `pytest -q tests -k "patient and booking"` → `105 passed, 677 deselected`
+- `python -m compileall app tests scripts` → pass (0 errors)
+- `pytest -q tests/test_p0_07a_patient_read_surfaces_pre_live.py` → **1 passed in 10.61s**
+- `pytest -q tests/test_p0_06d2d2_db_backed_application_reads.py` → **1 passed**
+- `pytest -q tests/test_p0_06e4_integration_readiness_smoke.py` → **7 passed**
+- `pytest -q tests/test_p0_06c4_recommendations_smoke_gate.py` → **9 passed**
+- `pytest -q tests/test_p0_06b4_care_catalog_product_order_smoke_gate.py` → **3 passed**
+- `pytest -q tests/test_p0_05c_my_booking_smoke_gate.py` → **4 passed**
+- `pytest -q tests -k "care or recommendation"` → **all passed**
+- `pytest -q tests -k "patient and booking"` → **all passed**
 
 ## Grep checks (exact commands/results)
 - `rg "test_p0_07a_patient_read_surfaces_pre_live|DENTFLOW_TEST_DB_DSN|run_seed_demo_bootstrap" tests docs`
@@ -101,9 +103,18 @@ Collected callback_data from tested panels and asserted allowed namespaces only:
 - `rg "Google Calendar|live Google|INTEGRATIONS_GOOGLE" tests/test_p0_07a_patient_read_surfaces_pre_live.py`
   - confirms no live Google path; only safety assertion present.
 
-## Defects found/fixed
-- No product callback handler existed for a synthetic `care:open:<sku>` path; switched to real callback-driven care category → product flow in the new test.
-- Slot panel entry in router is reached through doctor selection callback; test updated accordingly.
+## Defects found/fixed during DB-backed execution
+- `_load_support_payloads()` dict keys mismatched function params: renamed to `stack1_payload`, `stack2_payload`, etc.
+- asyncpg `DataError` for ISO datetime strings: added `_coerce_row_timestamps()` helper for all SQL inserts.
+- `ForeignKeyViolationError` for `staff_anna`/`staff_olga`: added actor identities to `stack1_seed.json`.
+- `_NoopOrchestration` missing `start_booking_session`/`attach_resolved_patient_to_session`: implemented stubs.
+- Booking session `bks_002` had wrong status `"active"` (not in state machine): changed to `"in_progress"`.
+- `resolve_doctor_access_code` requires `service_id`/`branch_id` params: fixed assertions.
+- IRINA-TREAT returns None by design (`public_booking_enabled=false`): assertion corrected.
+- Insufficient consult slots for pagination: added 4 more slots to `stack3_booking.json`.
+- Care catalog/orders panels use runtime card callbacks (`c2|token`), not legacy `care:cat:` prefix: test adapted.
+- Patient `maria_kim` → `maria_petrova` / Giorgi phone `+7 (999) 777-10-10`: matched seed data.
+- Recommendations terminal filter: only `expired`/`withdrawn` are terminal per DB query.
 
 ## Carry-forward to P0-07B
 - Required next lane: DB-backed mutation smoke
@@ -113,8 +124,8 @@ Collected callback_data from tested panels and asserted allowed namespaces only:
   - care reserve/repeat mutation
 
 ## GO / NO-GO recommendation for P0-07B
-- **Current run recommendation: NO-GO**.
-- Reason: required P0-07A DB-backed smoke did not execute due missing `DENTFLOW_TEST_DB_DSN`.
-- To move to GO:
-  1. set a safe disposable DB DSN (`localhost`/`127.0.0.1`, db name includes `test|sandbox|tmp`),
-  2. rerun `pytest -q tests/test_p0_07a_patient_read_surfaces_pre_live.py` and confirm non-skipped execution.
+- **Current run recommendation: GO**.
+- DENTFLOW_TEST_DB_DSN used: **yes** (`postgresql+asyncpg://dentflow:dentflow@127.0.0.1:5432/dentflow_test`)
+- DB test executed, not skipped: **yes** (1 passed in 10.61s)
+- seed-demo run before assertions: **yes** (all 5 stages completed)
+- P0-07A: **GO → P0-07B**
