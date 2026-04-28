@@ -97,7 +97,7 @@ class ClinicReferenceService:
             if access.branch_scope and (branch_id is None or branch_id not in set(access.branch_scope)):
                 continue
             doctor = self.get_doctor(clinic_id, access.doctor_id)
-            if doctor is None or not doctor.public_booking_enabled:
+            if doctor is None or doctor.status != RecordStatus.ACTIVE:
                 continue
             return access
         return None
