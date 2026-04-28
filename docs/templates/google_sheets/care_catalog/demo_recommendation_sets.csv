@@ -1,0 +1,3 @@
+set_code,status,title_ru,title_en,description_ru,description_en,sort_order
+set_daily_hygiene,active,Ежедневная гигиена,Daily hygiene,Базовый набор для ежедневного ухода.,Core bundle for everyday oral care.,1
+set_post_treatment,active,После лечения,Post-treatment,Поддерживающий набор после стоматологических процедур.,Supportive bundle after dental procedures.,2

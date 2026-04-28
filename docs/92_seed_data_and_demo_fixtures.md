@@ -303,3 +303,20 @@ That is how the team tests a real system instead of a cardboard prop.
 - Care catalog JSON import must run before recommendations/care-orders because recommendation/care-order seed resolves SKUs against catalog products.
 - Google Sheets catalog sync remains available separately via `scripts/sync_care_catalog.py`.
 - Google Sheets templates/import pack are intentionally out of scope for this PR.
+
+
+## 16. P0-06E1 care catalog Google Sheets template pack
+
+- Template location:
+  - `docs/templates/google_sheets/care_catalog/`
+- Source relationship:
+  - `demo_*.csv` files in this folder are generated from `seeds/care_catalog_demo.json` tab payloads.
+- Operational load order:
+  - seed/demo bootstrap uses JSON import first:
+    - `python scripts/sync_care_catalog.py --clinic-id clinic_main json --path seeds/care_catalog_demo.json`
+  - operator mode can use Google Sheets after tab setup:
+    - `python scripts/sync_care_catalog.py --clinic-id clinic_main sheets --sheet <url_or_id>`
+    - `/admin_catalog_sync sheets <url_or_id>`
+- Scope boundary:
+  - Google Sheets catalog sync in this pack is for care products/catalog tabs only.
+  - patient/doctor/service Sheets sync is not part of P0-06E1.

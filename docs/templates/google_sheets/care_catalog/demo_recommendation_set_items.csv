@@ -1,0 +1,7 @@
+set_code,sku,position,quantity,notes
+set_daily_hygiene,SKU-BRUSH-SOFT,1,1,Daily core
+set_daily_hygiene,SKU-FLOSS-WAXED,2,1,Interdental support
+set_daily_hygiene,SKU-PASTE-SENSITIVE,3,1,Gentle paste
+set_post_treatment,SKU-PASTE-SENSITIVE,1,1,Sensitive hygiene
+set_post_treatment,SKU-RINSE-CHX,2,1,Short-term antiseptic
+set_post_treatment,SKU-GEL-REMIN,3,1,Enamel support

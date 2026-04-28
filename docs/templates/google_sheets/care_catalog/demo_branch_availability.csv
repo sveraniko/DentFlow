@@ -1,0 +1,7 @@
+branch_id,sku,on_hand_qty,availability_enabled,low_stock_threshold,preferred_pickup
+branch_central,SKU-BRUSH-SOFT,15,True,2,True
+branch_central,SKU-PASTE-SENSITIVE,12,True,2,False
+branch_central,SKU-FLOSS-WAXED,18,True,2,False
+branch_central,SKU-RINSE-CHX,2,True,2,False
+branch_central,SKU-IRRIGATOR-TRAVEL,10,True,1,False
+branch_central,SKU-GEL-REMIN,0,True,2,False

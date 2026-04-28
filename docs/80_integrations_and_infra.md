@@ -211,6 +211,22 @@ For care-commerce:
 
 That boundary must remain explicit.
 
+### Care Catalog Google Sheets sync (operator runbook baseline)
+- Template pack:
+  - `docs/templates/google_sheets/care_catalog/`
+- Required tab names for import compatibility:
+  - `products`, `product_i18n`, `branch_availability`, `recommendation_sets`, `recommendation_set_items`, `recommendation_links`, `settings`
+- Access expectations:
+  - in current simple export mode, sheet must be shareable/exportable to the sync runner;
+  - private OAuth/service-account hardening is a future task unless already configured in deployment.
+- Operator/admin command:
+  - `/admin_catalog_sync sheets <url_or_id>`
+  - `/admin_catalog_sync xlsx <server_local_path>`
+- CLI command:
+  - `python scripts/sync_care_catalog.py --clinic-id clinic_main sheets --sheet <url_or_id>`
+  - `python scripts/sync_care_catalog.py --clinic-id clinic_main xlsx --path <path>`
+  - `python scripts/sync_care_catalog.py --clinic-id clinic_main json --path seeds/care_catalog_demo.json`
+
 ---
 
 ## 11. Google Calendar integration stance
