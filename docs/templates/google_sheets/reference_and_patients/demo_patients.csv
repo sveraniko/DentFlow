@@ -1,0 +1,5 @@
+patient_id,clinic_id,full_name,preferred_language,birth_date,sex,notes,is_active
+patient_sergey_ivanov,clinic_main,Сергей Иванов,ru,1988-04-11,male,,true
+patient_elena_ivanova,clinic_main,Elena Ivanova,en,,,,true
+patient_giorgi_beridze,clinic_main,გიორგი Beridze,en,,,,true
+patient_maria_petrova,clinic_main,Мария Петрова,ru,,,,true

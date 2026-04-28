@@ -1,0 +1,4 @@
+code,clinic_id,doctor_id,service_scope,branch_scope,starts_at,expires_at,is_active,note
+ANNA-001,clinic_main,doctor_anna,service_consult,branch_central,,,true,
+BORIS-HYG,clinic_main,doctor_boris,service_cleaning,branch_central,,,true,
+IRINA-TREAT,clinic_main,doctor_irina,"service_treatment,service_urgent",branch_central,,,true,

@@ -1,0 +1,40 @@
+{
+  "template_name": "reference_and_patients",
+  "version": "1.0.0",
+  "import_status": "template_only",
+  "tabs": [
+    "branches",
+    "doctors",
+    "services",
+    "doctor_access_codes",
+    "patients",
+    "patient_contacts",
+    "patient_preferences"
+  ],
+  "files": {
+    "branches": {"blank": "branches.csv", "demo": "demo_branches.csv"},
+    "doctors": {"blank": "doctors.csv", "demo": "demo_doctors.csv"},
+    "services": {"blank": "services.csv", "demo": "demo_services.csv"},
+    "doctor_access_codes": {"blank": "doctor_access_codes.csv", "demo": "demo_doctor_access_codes.csv"},
+    "patients": {"blank": "patients.csv", "demo": "demo_patients.csv"},
+    "patient_contacts": {"blank": "patient_contacts.csv", "demo": "demo_patient_contacts.csv"},
+    "patient_preferences": {"blank": "patient_preferences.csv", "demo": "demo_patient_preferences.csv"}
+  },
+  "columns": {
+    "branches": ["branch_id", "clinic_id", "display_name", "timezone", "locale", "address", "phone", "is_active"],
+    "doctors": ["doctor_id", "clinic_id", "display_name", "specialty", "public_booking_enabled", "is_active", "default_branch_id", "sort_order"],
+    "services": ["service_id", "clinic_id", "code", "title_key", "duration_minutes", "category", "is_active", "sort_order"],
+    "doctor_access_codes": ["code", "clinic_id", "doctor_id", "service_scope", "branch_scope", "starts_at", "expires_at", "is_active", "note"],
+    "patients": ["patient_id", "clinic_id", "full_name", "preferred_language", "birth_date", "sex", "notes", "is_active"],
+    "patient_contacts": ["patient_id", "clinic_id", "contact_type", "contact_value", "is_primary", "verified_at", "note"],
+    "patient_preferences": ["patient_id", "clinic_id", "preferred_language", "preferred_reminder_channel", "allow_telegram", "allow_sms", "contact_time_window", "timezone"]
+  },
+  "source_seed_files": [
+    "seeds/stack1_seed.json",
+    "seeds/stack2_patients.json"
+  ],
+  "future_sync_command_examples": [
+    "python scripts/sync_reference_patient_sheets.py --clinic-id clinic_main sheets --sheet <url_or_id>",
+    "python scripts/sync_reference_patient_sheets.py --clinic-id clinic_main xlsx --path <path>"
+  ]
+}

@@ -1,0 +1,8 @@
+patient_id,clinic_id,contact_type,contact_value,is_primary,verified_at,note
+patient_sergey_ivanov,clinic_main,phone,+7 (999) 123-45-67,true,,
+patient_sergey_ivanov,clinic_main,telegram,3001,false,,
+patient_elena_ivanova,clinic_main,phone,+7 (999) 555-22-11,true,,
+patient_elena_ivanova,clinic_main,telegram,3002,false,,
+patient_giorgi_beridze,clinic_main,phone,+7 (999) 777-10-10,true,,
+patient_maria_petrova,clinic_main,phone,+7 (999) 888-44-00,true,,
+patient_maria_petrova,clinic_main,telegram,3004,false,,

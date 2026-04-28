@@ -1,0 +1,5 @@
+patient_id,clinic_id,preferred_language,preferred_reminder_channel,allow_telegram,allow_sms,contact_time_window,timezone
+patient_sergey_ivanov,clinic_main,ru,telegram,true,true,09:00-20:00,Europe/Moscow
+patient_elena_ivanova,clinic_main,en,telegram,true,true,10:00-19:00,Europe/Moscow
+patient_giorgi_beridze,clinic_main,en,sms,false,true,11:00-18:00,Europe/Moscow
+patient_maria_petrova,clinic_main,ru,telegram,true,true,08:30-17:30,Europe/Moscow

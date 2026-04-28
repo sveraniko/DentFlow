@@ -1,0 +1,2 @@
+branch_id,clinic_id,display_name,timezone,locale,address,phone,is_active
+branch_central,clinic_main,Central Branch,Europe/Moscow,ru,Main street 10,,true

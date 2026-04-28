@@ -326,3 +326,17 @@ That is how the team tests a real system instead of a cardboard prop.
 - Google Calendar projection is a separate worker/integration step and is not executed by seed bootstrap itself.
 - Seed/demo commands do not call Google Calendar directly.
 
+
+## 16. P0-06E3 reference/patient Google Sheets templates (template/manual only)
+
+- Template location:
+  - `docs/templates/google_sheets/reference_and_patients/`
+- Scope includes tabs for:
+  - `branches`, `doctors`, `services`, `doctor_access_codes`, `patients`, `patient_contacts`, `patient_preferences`
+- Current status:
+  - template/manual only;
+  - no active Sheets sync for patients/doctors/services in this baseline.
+- Truth boundary:
+  - demo load path remains `scripts/seed_demo.py` with `seeds/stack1_seed.json` + `seeds/stack2_patients.json`.
+- Relation to P0-06D2A2:
+  - demo CSV rows mirror the D2A2 reference/patient baseline IDs and relationships.

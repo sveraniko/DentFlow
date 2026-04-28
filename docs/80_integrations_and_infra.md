@@ -388,3 +388,16 @@ DentFlow infrastructure is built around:
 - observable and degradable operations.
 
 That is how the system remains operationally sane.
+
+### Reference/patient Google Sheets templates (not active integration)
+
+- Template pack path:
+  - `docs/templates/google_sheets/reference_and_patients/`
+- Status:
+  - **not active integration** for runtime sync in this PR;
+  - template only for manual operations and future import contract.
+- Existing active sync note:
+  - Care catalog Sheets sync exists and remains the only active Sheets sync baseline here.
+- Future/planned command placeholder (not implemented yet):
+  - `python scripts/sync_reference_patient_sheets.py --clinic-id clinic_main sheets --sheet <url_or_id>`
+  - `python scripts/sync_reference_patient_sheets.py --clinic-id clinic_main xlsx --path <path>`
