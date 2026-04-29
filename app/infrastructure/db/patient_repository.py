@@ -13,6 +13,7 @@ from app.application.doctor.patient_read import DoctorPatientSnapshot
 from app.application.booking.telegram_flow import CanonicalPatientCreator
 from app.domain.events import build_event
 from app.domain.patient_registry.models import (
+    LinkedPatientProfile,
     Patient,
     PatientContact,
     PatientExternalId,
@@ -505,7 +506,7 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
 
     async def list_linked_profiles_for_telegram(
         self, *, clinic_id: str, telegram_user_id: int, include_inactive: bool = False
-    ) -> list[Patient]:
+    ) -> list[LinkedPatientProfile]:
         rel_filter = ""
         patient_filter = ""
         if not include_inactive:
@@ -526,27 +527,67 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
                             AND c.normalized_value=:normalized_value
                             AND c.is_active=TRUE
                         ),
-                        pool AS (
-                          SELECT m.manager_patient_id AS patient_id, TRUE AS is_manager, FALSE AS is_default_for_booking
+                        self_pool AS (
+                          SELECT
+                            m.manager_patient_id AS patient_id,
+                            'self'::TEXT AS relationship_type,
+                            TRUE AS is_self,
+                            FALSE AS is_default_for_booking,
+                            FALSE AS is_default_notification_recipient
                           FROM managers m
-                          UNION ALL
-                          SELECT r.related_patient_id AS patient_id, FALSE AS is_manager, r.is_default_for_booking
+                        ),
+                        related_pool AS (
+                          SELECT
+                            r.related_patient_id AS patient_id,
+                            r.relationship_type,
+                            FALSE AS is_self,
+                            r.is_default_for_booking,
+                            r.is_default_notification_recipient
                           FROM core_patient.patient_relationships r
                           JOIN managers m ON m.manager_patient_id = r.manager_patient_id
                           WHERE r.clinic_id=:clinic_id {rel_filter}
                         ),
+                        pool AS (
+                          SELECT * FROM self_pool
+                          UNION ALL
+                          SELECT * FROM related_pool
+                        ),
                         ranked AS (
-                          SELECT patient_id, BOOL_OR(is_manager) AS is_manager, BOOL_OR(is_default_for_booking) AS is_default_for_booking
+                          SELECT
+                            patient_id,
+                            CASE WHEN BOOL_OR(is_self) THEN 'self' ELSE MIN(relationship_type) END AS relationship_type,
+                            BOOL_OR(is_self) AS is_self,
+                            BOOL_OR(is_default_for_booking) AS is_default_for_booking,
+                            BOOL_OR(is_default_notification_recipient) AS is_default_notification_recipient
                           FROM pool
                           GROUP BY patient_id
+                        ),
+                        telegram_contacts AS (
+                          SELECT DISTINCT ON (patient_id)
+                            patient_id,
+                            NULLIF(normalized_value, '')::BIGINT AS telegram_user_id
+                          FROM core_patient.patient_contacts
+                          WHERE contact_type='telegram' AND is_active=TRUE
+                          ORDER BY patient_id, is_primary DESC, updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+                        ),
+                        phone_contacts AS (
+                          SELECT DISTINCT ON (patient_id)
+                            patient_id,
+                            contact_value AS phone
+                          FROM core_patient.patient_contacts
+                          WHERE contact_type='phone' AND is_active=TRUE
+                          ORDER BY patient_id, is_primary DESC, updated_at DESC NULLS LAST, created_at DESC NULLS LAST
                         )
                         SELECT p.patient_id, p.clinic_id, p.patient_number, p.full_name_legal, p.first_name, p.last_name, p.middle_name,
                                p.display_name, p.birth_date, p.sex_marker, p.status, p.first_seen_at, p.last_seen_at,
-                               ranked.is_manager, ranked.is_default_for_booking
+                               ranked.relationship_type, ranked.is_self, ranked.is_default_for_booking,
+                               ranked.is_default_notification_recipient, phone_contacts.phone, telegram_contacts.telegram_user_id
                         FROM ranked
                         JOIN core_patient.patients p ON p.patient_id=ranked.patient_id
+                        LEFT JOIN phone_contacts ON phone_contacts.patient_id = p.patient_id
+                        LEFT JOIN telegram_contacts ON telegram_contacts.patient_id = p.patient_id
                         WHERE p.clinic_id=:clinic_id {patient_filter}
-                        ORDER BY ranked.is_manager DESC, ranked.is_default_for_booking DESC, p.display_name ASC
+                        ORDER BY ranked.is_self DESC, ranked.is_default_for_booking DESC, p.display_name ASC
                         """
                     ),
                     {"clinic_id": clinic_id, "normalized_value": str(telegram_user_id)},
@@ -554,20 +595,17 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
             ).mappings().all()
         await engine.dispose()
         return [
-            Patient(
+            LinkedPatientProfile(
                 patient_id=row["patient_id"],
                 clinic_id=row["clinic_id"],
-                patient_number=row["patient_number"],
-                full_name_legal=row["full_name_legal"],
-                first_name=row["first_name"],
-                last_name=row["last_name"],
-                middle_name=row["middle_name"],
                 display_name=row["display_name"],
-                birth_date=row["birth_date"],
-                sex_marker=row["sex_marker"],
+                relationship_type=row["relationship_type"],
+                is_self=row["is_self"],
+                is_default_for_booking=row["is_default_for_booking"],
+                is_default_notification_recipient=row["is_default_notification_recipient"],
+                phone=row["phone"],
+                telegram_user_id=row["telegram_user_id"],
                 status=row["status"],
-                first_seen_at=row["first_seen_at"],
-                last_seen_at=row["last_seen_at"],
             )
             for row in rows
         ]

@@ -90,6 +90,20 @@ class PatientRelationship:
 
 
 @dataclass(slots=True, frozen=True)
+class LinkedPatientProfile:
+    patient_id: str
+    clinic_id: str
+    display_name: str
+    relationship_type: str
+    is_self: bool = False
+    is_default_for_booking: bool = False
+    is_default_notification_recipient: bool = False
+    phone: str | None = None
+    telegram_user_id: int | None = None
+    status: str = "active"
+
+
+@dataclass(slots=True, frozen=True)
 class PreVisitQuestionnaire:
     questionnaire_id: str
     clinic_id: str

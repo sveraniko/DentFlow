@@ -1,4 +1,5 @@
 from app.domain.patient_registry.models import (
+    LinkedPatientProfile,
     PatientProfileDetails,
     Patient,
     PatientContact,
@@ -14,6 +15,7 @@ from app.domain.patient_registry.models import (
 
 __all__ = [
     "PatientProfileDetails",
+    "LinkedPatientProfile",
     "Patient",
     "PatientContact",
     "PatientPreference",
