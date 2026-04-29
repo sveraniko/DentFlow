@@ -194,3 +194,8 @@ This flow is planned only; media upload is not implemented in this PR.
 - P0-08M1 generic media service
 - P0-08M2 product media admin
 - P0-08M3 patient avatar upload
+
+## L. A2 follow-up reference
+- A2 gap audit lives in `docs/75_patient_profile_family_media_gap_audit.md`.
+- No schema changes are implemented in A2.
+- Future schema work is tracked as **baseline schema update** work, not migrations.
