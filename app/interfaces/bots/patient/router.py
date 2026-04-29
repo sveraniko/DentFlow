@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -694,7 +695,7 @@ def make_router(
                 available_qty=(availability.free_qty if availability else 0),
                 title_by_locale={locale: (content.title or i18n.t(product.title_key, locale))},
                 category=await _category_label(category_code=product.category, locale=locale),
-                selected_branch_label=(next((b.display_name for b in reference.list_branches(clinic_id) if b.branch_id == branch_id), None) if branch_id else None),
+                selected_branch_label=_resolve_branch_label_for_patient(clinic_id=clinic_id, branch_id=branch_id, locale=locale) if branch_id else None,
                 recommendation_badge=(badge if source_context == SourceContext.RECOMMENDATION_DETAIL else None),
                 state_token=f"care:{actor_id}",
             ),
@@ -714,11 +715,27 @@ def make_router(
         )
 
     async def _category_label(*, category_code: str, locale: str) -> str:
+        preferred_key = f"patient.care.category.{category_code}"
+        preferred = i18n.t(preferred_key, locale)
+        if preferred != preferred_key:
+            return preferred
         key = f"care.category.{category_code}"
         resolved = i18n.t(key, locale)
         if resolved != key:
             return resolved
         return category_code.replace("_", " ").replace("-", " ").strip().title()
+
+    def _resolve_branch_label_for_patient(*, clinic_id: str, branch_id: str | None, locale: str) -> str:
+        if not branch_id:
+            return i18n.t("patient.care.product.field.branch_missing", locale)
+        branch = reference.get_branch(clinic_id, branch_id)
+        if branch and branch.display_name:
+            if locale == "ru" and branch.branch_id == "branch_central" and branch.display_name.strip().lower() == "central branch":
+                return i18n.t("patient.branch.branch_central", locale)
+            return branch.display_name
+        if locale == "ru" and branch_id == "branch_central":
+            return i18n.t("patient.branch.branch_central", locale)
+        return branch_id
 
     async def _resolve_preferred_branch_for_product(*, clinic_id: str, product_id: str) -> str | None:
         if care_commerce_service is None:
@@ -1006,7 +1023,7 @@ def make_router(
                 description_by_locale={locale: (content.description or i18n.t("patient.care.product.description.empty", locale))},
                 usage_hint=content.usage_hint,
                 category=await _category_label(category_code=product.category, locale=locale),
-                selected_branch_label=(branch.display_name if branch else i18n.t("patient.care.product.branch.none", locale)),
+                selected_branch_label=_resolve_branch_label_for_patient(clinic_id=clinic_id, branch_id=branch_id, locale=locale),
                 recommendation_badge=(i18n.t("patient.care.products.title", locale) if state.recommendation_id else None),
                 recommendation_rationale=(state.recommendation_reason[:180] if state.recommendation_reason else None),
                 media_count=len(media_refs),
@@ -1055,10 +1072,8 @@ def make_router(
                 ]
             )
         rows.append([InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")])
-        price_label = (
-            f"{int(product.price_amount)} {product.currency_code}" if product.price_amount is not None else i18n.t("patient.care.product.field.price_missing", locale)
-        )
-        branch_label = branch.display_name if branch else i18n.t("patient.care.product.field.branch_missing", locale)
+        price_label = _format_care_product_price(product.price_amount, product.currency_code, locale=locale)
+        branch_label = _resolve_branch_label_for_patient(clinic_id=clinic_id, branch_id=branch_id, locale=locale)
         text = _render_patient_care_product_text(
             locale=locale,
             title=(content.title or i18n.t(product.title_key, locale)),
@@ -1087,7 +1102,10 @@ def make_router(
         rows: list[list[InlineKeyboardButton]] = []
         for branch in branches[:10]:
             availability = await care_commerce_service.get_branch_product_availability(branch_id=branch.branch_id, care_product_id=product_id)
-            label = i18n.t("patient.care.branch.option", locale).format(branch=branch.display_name, status=_availability_label(availability, locale=locale))
+            label = i18n.t("patient.care.branch.option", locale).format(
+                branch=_resolve_branch_label_for_patient(clinic_id=clinic_id, branch_id=branch.branch_id, locale=locale),
+                status=_availability_label(availability, locale=locale),
+            )
             rows.append(
                 [
                     InlineKeyboardButton(
@@ -1516,11 +1534,23 @@ def make_router(
         return f"№ …{ref[-6:]}" if len(ref) > 6 else f"№ {ref}"
 
     def _resolve_care_order_branch_label(*, clinic_id: str, branch_id: str | None, locale: str) -> str:
-        if branch_id:
-            branch = reference.get_branch(clinic_id, branch_id)
-            if branch and branch.display_name:
-                return branch.display_name
-        return i18n.t("patient.care.order.card.branch_missing", locale)
+        resolved = _resolve_branch_label_for_patient(clinic_id=clinic_id, branch_id=branch_id, locale=locale)
+        if resolved == i18n.t("patient.care.product.field.branch_missing", locale):
+            return i18n.t("patient.care.order.card.branch_missing", locale)
+        return resolved
+
+    def _format_care_product_price(amount: Any, currency_code: str | None, *, locale: str) -> str:
+        if amount is None:
+            return i18n.t("patient.care.product.field.price_missing", locale)
+        try:
+            value = Decimal(str(amount))
+        except (ArithmeticError, TypeError, ValueError):
+            return i18n.t("patient.care.product.field.price_missing", locale)
+        if value >= 100 and value == value.to_integral_value():
+            value = value / Decimal("100")
+        rendered = f"{value:.2f}"
+        currency = (currency_code or "").strip()
+        return f"{rendered} {currency}".strip()
 
     def _format_care_money(amount: Any, currency_code: str | None, *, locale: str) -> str:
         if amount is None:
