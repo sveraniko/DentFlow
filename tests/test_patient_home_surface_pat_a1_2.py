@@ -123,14 +123,16 @@ class _BookingFlowStub:
         self.start_or_resume_existing_calls = 0
         self.resolve_known_patient_calls = 0
         self.known_patient_result_kind = "invalid_state"
+        # Use tomorrow-relative dates so the slots are never in the past.
+        tomorrow_10am = datetime.now(timezone.utc).replace(hour=10, minute=0, second=0, microsecond=0) + timedelta(days=1)
         self.slots = [
             AvailabilitySlot(
                 slot_id=f"slot_{idx}",
                 clinic_id="clinic_main",
                 branch_id="branch_1",
                 doctor_id="doctor_1",
-                start_at=datetime(2026, 4, 28, 10, 0, tzinfo=timezone.utc) + timedelta(hours=idx),
-                end_at=datetime(2026, 4, 28, 10, 30, tzinfo=timezone.utc) + timedelta(hours=idx),
+                start_at=tomorrow_10am + timedelta(hours=idx),
+                end_at=tomorrow_10am + timedelta(hours=idx, minutes=30),
                 status="open",
                 visibility_policy="public",
                 updated_at=now,
