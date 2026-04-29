@@ -46,6 +46,73 @@ class PatientPreference:
     allow_email: bool = False
     marketing_opt_in: bool = False
     contact_time_window: dict[str, object] | None = None
+    notification_recipient_strategy: str | None = None
+    quiet_hours_start: str | None = None
+    quiet_hours_end: str | None = None
+    quiet_hours_timezone: str | None = None
+    default_branch_id: str | None = None
+    allow_any_branch: bool = True
+
+
+@dataclass(slots=True, frozen=True)
+class PatientProfileDetails:
+    patient_id: str
+    clinic_id: str
+    profile_completion_state: str = "missing"
+    email: str | None = None
+    address_line1: str | None = None
+    address_line2: str | None = None
+    city: str | None = None
+    postal_code: str | None = None
+    country_code: str | None = None
+    emergency_contact_name: str | None = None
+    emergency_contact_phone: str | None = None
+    profile_completed_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class PatientRelationship:
+    relationship_id: str
+    clinic_id: str
+    manager_patient_id: str
+    related_patient_id: str
+    relationship_type: str
+    consent_status: str = "active"
+    authority_scope: str | None = None
+    is_default_for_booking: bool = False
+    is_default_notification_recipient: bool = False
+    starts_at: datetime | None = None
+    expires_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class PreVisitQuestionnaire:
+    questionnaire_id: str
+    clinic_id: str
+    patient_id: str
+    questionnaire_type: str
+    status: str
+    booking_id: str | None = None
+    version: int = 1
+    completed_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class PreVisitQuestionnaireAnswer:
+    answer_id: str
+    questionnaire_id: str
+    question_key: str
+    answer_value: dict[str, object]
+    answer_type: str
+    visibility: str = "staff_only"
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 @dataclass(slots=True, frozen=True)
