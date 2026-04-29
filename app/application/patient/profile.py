@@ -58,24 +58,25 @@ class PatientProfileService:
         profile_completion_state: str | None = None,
     ) -> PatientProfileDetails:
         existing = await self._repository.get_profile_details(clinic_id=clinic_id, patient_id=patient_id)
-        normalized_email = self._validate_email(email)
+        normalized_email = self._validate_email(email) if email is not None else None
         normalized_country_code = country_code.strip().upper() if country_code else None
 
         merged = asdict(existing) if existing else {"patient_id": patient_id, "clinic_id": clinic_id}
-        merged.update(
-            {
-                "clinic_id": clinic_id,
-                "patient_id": patient_id,
-                "email": normalized_email,
-                "address_line1": address_line1,
-                "address_line2": address_line2,
-                "city": city,
-                "postal_code": postal_code,
-                "country_code": normalized_country_code,
-                "emergency_contact_name": emergency_contact_name,
-                "emergency_contact_phone": emergency_contact_phone,
-            }
-        )
+        merged.update({"clinic_id": clinic_id, "patient_id": patient_id})
+
+        field_updates = {
+            "email": normalized_email,
+            "address_line1": address_line1,
+            "address_line2": address_line2,
+            "city": city,
+            "postal_code": postal_code,
+            "country_code": normalized_country_code,
+            "emergency_contact_name": emergency_contact_name,
+            "emergency_contact_phone": emergency_contact_phone,
+        }
+        for field_name, field_value in field_updates.items():
+            if field_value is not None:
+                merged[field_name] = field_value
 
         if profile_completion_state is not None:
             if profile_completion_state not in _ALLOWED_PROFILE_STATES:
