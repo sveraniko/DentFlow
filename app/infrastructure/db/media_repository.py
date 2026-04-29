@@ -95,7 +95,7 @@ class DbMediaRepository:
                           :media_asset_id, :clinic_id, :asset_kind, :storage_provider, :storage_ref,
                           :content_type, :byte_size, :checksum_sha256, :created_by_actor_id,
                           :media_type, :mime_type, :size_bytes, :telegram_file_id, :telegram_file_unique_id,
-                          :object_key, :uploaded_by_actor_id, :created_at, :updated_at
+                          :object_key, :uploaded_by_actor_id, COALESCE(:created_at, NOW()), COALESCE(:updated_at, NOW())
                         )
                         ON CONFLICT (media_asset_id) DO UPDATE SET
                           clinic_id=EXCLUDED.clinic_id,
@@ -187,7 +187,7 @@ class DbMediaRepository:
                   sort_order, is_primary, created_at, updated_at
                 ) VALUES (
                   :link_id, :clinic_id, :media_asset_id, :owner_type, :owner_id, :role, :visibility,
-                  :sort_order, :is_primary, :created_at, :updated_at
+                  :sort_order, :is_primary, COALESCE(:created_at, NOW()), COALESCE(:updated_at, NOW())
                 )
                 ON CONFLICT (link_id) DO UPDATE SET
                   clinic_id=EXCLUDED.clinic_id,
@@ -212,8 +212,8 @@ class DbMediaRepository:
                 SELECT link_id, clinic_id, media_asset_id, owner_type, owner_id, role, visibility, sort_order, is_primary, created_at, updated_at
                 FROM media_docs.media_links
                 WHERE clinic_id=:clinic_id AND owner_type=:owner_type AND owner_id=:owner_id
-                  AND (:role IS NULL OR role=:role)
-                  AND (:visibility IS NULL OR visibility=:visibility)
+                  AND (CAST(:role AS TEXT) IS NULL OR role=:role)
+                  AND (CAST(:visibility AS TEXT) IS NULL OR visibility=:visibility)
                 ORDER BY is_primary DESC, sort_order ASC, created_at ASC
             """), {"clinic_id": clinic_id, "owner_type": owner_type, "owner_id": owner_id, "role": role, "visibility": visibility})).mappings())
         await engine.dispose()
@@ -233,8 +233,8 @@ class DbMediaRepository:
                 FROM media_docs.media_links l
                 JOIN media_docs.media_assets a ON a.media_asset_id=l.media_asset_id
                 WHERE l.clinic_id=:clinic_id AND l.owner_type=:owner_type AND l.owner_id=:owner_id
-                  AND (:role IS NULL OR l.role=:role)
-                  AND (:visibility IS NULL OR l.visibility=:visibility)
+                  AND (CAST(:role AS TEXT) IS NULL OR l.role=:role)
+                  AND (CAST(:visibility AS TEXT) IS NULL OR l.visibility=:visibility)
                 ORDER BY l.is_primary DESC, l.sort_order ASC, l.created_at ASC
             """), {"clinic_id": clinic_id, "owner_type": owner_type, "owner_id": owner_id, "role": role, "visibility": visibility})).mappings())
         await engine.dispose()

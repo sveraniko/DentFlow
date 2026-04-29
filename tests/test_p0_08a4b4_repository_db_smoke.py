@@ -98,7 +98,8 @@ def test_p0_08a4b4_repository_db_smoke() -> None:
         assert patient_id in linked_active_ids and related_id in linked_active_ids
 
         deactivated = await patient_repo.deactivate_relationship(clinic_id=clinic_id, relationship_id=relationship.relationship_id)
-        assert deactivated is True
+        assert deactivated is not None
+        assert deactivated.consent_status == "revoked"
         active_after = await patient_repo.list_relationships(clinic_id=clinic_id, manager_patient_id=patient_id)
         all_after = await patient_repo.list_relationships(
             clinic_id=clinic_id, manager_patient_id=patient_id, include_inactive=True
@@ -116,10 +117,9 @@ def test_p0_08a4b4_repository_db_smoke() -> None:
         assert related_id in [p.patient_id for p in linked_after_inactive]
 
         # 3) Preferences
-        before_pref = await patient_repo.get_patient_preferences(clinic_id=clinic_id, patient_id=patient_id)
+        before_pref = await patient_repo.get_patient_preferences(patient_id=patient_id)
         assert before_pref is not None
         await patient_repo.update_notification_preferences(
-            clinic_id=clinic_id,
             patient_id=patient_id,
             preferred_reminder_channel="telegram",
             allow_sms=False,
@@ -131,12 +131,11 @@ def test_p0_08a4b4_repository_db_smoke() -> None:
             quiet_hours_timezone="Europe/Moscow",
         )
         await patient_repo.update_branch_preferences(
-            clinic_id=clinic_id,
             patient_id=patient_id,
             default_branch_id="branch_central",
             allow_any_branch=False,
         )
-        after_pref = await patient_repo.get_patient_preferences(clinic_id=clinic_id, patient_id=patient_id)
+        after_pref = await patient_repo.get_patient_preferences(patient_id=patient_id)
         assert after_pref is not None
         assert after_pref.preferred_reminder_channel == "telegram"
         assert after_pref.allow_sms is False and after_pref.allow_telegram is True and after_pref.allow_call is True
@@ -267,18 +266,18 @@ def test_p0_08a4b4_repository_db_smoke() -> None:
         await media_repo.attach_media(MediaLink("link_avatar_1", clinic_id, "media_smoke_avatar_1", "patient_profile", patient_id, "patient_avatar", "staff_only", 0, True))
         await media_repo.attach_media(MediaLink("link_avatar_2", clinic_id, "media_smoke_avatar_2", "patient_profile", patient_id, "patient_avatar", "staff_only", 1, False))
 
-        selected = await media_repo.set_primary_media(clinic_id, "patient_profile", patient_id, "patient_avatar", "link_avatar_2")
-        links = await media_repo.list_media_links(clinic_id, "patient_profile", patient_id, role="patient_avatar")
-        joined = await media_repo.list_media_for_owner(clinic_id, "patient_profile", patient_id, role="patient_avatar")
+        selected = await media_repo.set_primary_media(clinic_id=clinic_id, owner_type="patient_profile", owner_id=patient_id, role="patient_avatar", link_id="link_avatar_2")
+        links = await media_repo.list_media_links(clinic_id=clinic_id, owner_type="patient_profile", owner_id=patient_id, role="patient_avatar")
+        joined = await media_repo.list_media_for_owner(clinic_id=clinic_id, owner_type="patient_profile", owner_id=patient_id, role="patient_avatar")
         assert selected is not None and selected.link_id == "link_avatar_2"
         assert sum(1 for link in links if link.is_primary) == 1
         assert links[0].is_primary is True
         assert len(joined) == 2
 
         missing_primary = await media_repo.set_primary_media(
-            clinic_id, "patient_profile", patient_id, "patient_avatar", "missing-link-id"
+            clinic_id=clinic_id, owner_type="patient_profile", owner_id=patient_id, role="patient_avatar", link_id="missing-link-id"
         )
-        links_after_missing = await media_repo.list_media_links(clinic_id, "patient_profile", patient_id, role="patient_avatar")
+        links_after_missing = await media_repo.list_media_links(clinic_id=clinic_id, owner_type="patient_profile", owner_id=patient_id, role="patient_avatar")
         assert missing_primary is None
         assert [l.link_id for l in links] == [l.link_id for l in links_after_missing]
         assert [l.is_primary for l in links] == [l.is_primary for l in links_after_missing]
@@ -292,14 +291,14 @@ def test_p0_08a4b4_repository_db_smoke() -> None:
         await media_repo.upsert_media_asset(MediaAsset("media_product_gallery", clinic_id, "photo", "telegram", "prd_gallery", media_type="photo", mime_type="image/jpeg"))
         await media_repo.attach_media(MediaLink("link_product_cover", clinic_id, "media_product_cover", "care_product", "SKU-BRUSH-SOFT", "product_cover", "public", 0, True))
         await media_repo.attach_media(MediaLink("link_product_gallery", clinic_id, "media_product_gallery", "care_product", "SKU-BRUSH-SOFT", "product_gallery", "public", 0, True))
-        cover = await media_repo.list_media_links(clinic_id, "care_product", "SKU-BRUSH-SOFT", role="product_cover")
-        gallery = await media_repo.list_media_links(clinic_id, "care_product", "SKU-BRUSH-SOFT", role="product_gallery")
+        cover = await media_repo.list_media_links(clinic_id=clinic_id, owner_type="care_product", owner_id="SKU-BRUSH-SOFT", role="product_cover")
+        gallery = await media_repo.list_media_links(clinic_id=clinic_id, owner_type="care_product", owner_id="SKU-BRUSH-SOFT", role="product_gallery")
         assert len(cover) == 1 and len(gallery) == 1
 
         # 7) Cross-repo compatibility checks
         assert await patient_repo.list_linked_profiles_for_telegram(clinic_id=clinic_id, telegram_user_id=3001)
-        assert await patient_repo.get_patient_preferences(clinic_id=clinic_id, patient_id=patient_id)
+        assert await patient_repo.get_patient_preferences(patient_id=patient_id)
         assert await patient_repo.get_latest_pre_visit_questionnaire_for_patient(clinic_id=clinic_id, patient_id=patient_id)
-        assert await media_repo.list_media_for_owner(clinic_id, "patient_profile", patient_id, role="patient_avatar")
+        assert await media_repo.list_media_for_owner(clinic_id=clinic_id, owner_type="patient_profile", owner_id=patient_id, role="patient_avatar")
 
     asyncio.run(_run())

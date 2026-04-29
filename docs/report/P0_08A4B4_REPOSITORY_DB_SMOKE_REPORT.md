@@ -1,110 +1,110 @@
-# P0-08A4B4 Repository DB Smoke Report
+# P0-08A4B4 — Repository DB Smoke Report
 
-## Summary
-- Added DB-backed repository smoke gate test file for patient profile/family/preferences, questionnaire/answers, and media asset/link repositories using shared safe DB harness.
-- Executed required DB-lane and regression commands.
-- Result for this run: **NO-GO** for P0-08A4C because mandatory DB-backed smoke could not execute successfully (PostgreSQL connection refused on localhost DB lane).
+**Date:** 2026-04-29
+**Executor:** Qoder (automated)
+**Status:** **GO for P0-08A4C**
 
-## Files changed
-- `tests/test_p0_08a4b4_repository_db_smoke.py`
-- `docs/report/P0_08A4B4_REPOSITORY_DB_SMOKE_REPORT.md`
+---
 
-## DB lane execution
-- DSN used: `postgresql+asyncpg://dentflow:dentflow@127.0.0.1:5432/dentflow_test`
-- Required DB lane command was executed, but not skipped; it failed due to `ConnectionRefusedError` to `127.0.0.1:5432`.
-- Because DB lane is mandatory for this task, this run is **NO-GO**.
+## Environment
 
-## Profile details DB smoke result
-- Implemented in `test_p0_08a4b4_repository_db_smoke.py` with:
-  - read initial profile;
-  - upsert partial profile;
-  - update to completed + `profile_completed_at`;
-  - assertions for created/updated timestamps and completion state.
-- Runtime execution blocked by DB connectivity failure.
+| Item | Value |
+|---|---|
+| DENTFLOW_TEST_DB_DSN used | yes |
+| DSN target | `postgresql+asyncpg://dentflow:dentflow@127.0.0.1:5432/dentflow_test` |
+| Host safety | 127.0.0.1 (localhost only) |
+| DB name safety | `dentflow_test` (contains "test") |
+| DB test executed, not skipped | yes |
+| No migrations created | yes |
 
-## Relationships/family DB smoke result
-- Implemented and asserted:
-  - relationship upsert/list;
-  - linked profiles for telegram user 3001;
-  - deactivate relationship;
-  - inactive filtering for relationships and linked profiles.
-- Runtime execution blocked by DB connectivity failure.
+## Bugs Found & Fixed
 
-## Preferences DB smoke result
-- Implemented and asserted:
-  - get current preferences;
-  - update notification preferences;
-  - update branch preferences;
-  - persistence and non-wipe checks.
-- Runtime execution blocked by DB connectivity failure.
+### 1. Bootstrap DDL ordering — FK to `booking.bookings` before table exists
 
-## Questionnaire DB smoke result
-- Implemented and asserted:
-  - questionnaire upsert/get/list by patient and booking;
-  - JSONB answers round-trip for dict/list/int/bool;
-  - update and delete answer;
-  - complete questionnaire;
-  - latest questionnaire lookups for booking and patient.
-- Runtime execution blocked by DB connectivity failure.
+`core_patient.pre_visit_questionnaires` had `REFERENCES booking.bookings(booking_id)` inline,
+but `booking.bookings` is defined later in `STACK1_TABLES`. Caused `UndefinedTableError`.
 
-## Media asset DB smoke result
-- Implemented and asserted:
-  - media asset upsert/get/telegram unique lookup;
-  - update asset mutable fields;
-  - list by ids;
-  - legacy-field compatibility mapping.
-- Runtime execution blocked by DB connectivity failure.
+**Fix:** Removed inline FK from column definition; added deferred `ALTER TABLE … ADD CONSTRAINT fk_pvq_booking` after `booking.bookings` is created. Idempotent (checks `information_schema.table_constraints`).
 
-## Media link DB smoke result
-- Implemented and asserted:
-  - attach links;
-  - set primary and single-primary invariant;
-  - list ordering and owner join read;
-  - missing-link `set_primary_media` returns `None` without primary corruption;
-  - link removal preserves asset;
-  - product role listing (`product_cover`, `product_gallery`).
-- Runtime execution blocked by DB connectivity failure.
+**File:** `app/infrastructure/db/bootstrap.py`
 
-## Cross-repository compatibility result
-- Implemented post-mutation compatibility checks for linked profiles, preferences, latest questionnaire, and patient media-owner listing.
-- Runtime execution blocked by DB connectivity failure.
+### 2. Media repository — NULL `created_at`/`updated_at` on insert
 
-## No external calls statement
-- Test uses only DB repository operations and shared seed/bootstrap harness.
-- No Telegram API, Google API, or storage backend calls were added.
+`upsert_media_asset` and `attach_media` passed raw `:created_at` / `:updated_at` to INSERT.
+When caller omits timestamps (compat/legacy path), this violates NOT NULL constraint.
 
-## No Alembic / no migrations confirmation
-- No Alembic revision/migration files were created.
-- No migration file appears in current git diff.
-- Baseline-only policy preserved.
+**Fix:** Changed VALUES clause to `COALESCE(:created_at, NOW())` / `COALESCE(:updated_at, NOW())`.
 
-## Tests run with exact commands/results
-- `export DENTFLOW_TEST_DB_DSN='postgresql+asyncpg://dentflow:dentflow@127.0.0.1:5432/dentflow_test'; pytest -q tests/test_p0_08a4b4_repository_db_smoke.py` → **FAILED** (`ConnectionRefusedError` on `127.0.0.1:5432`).
-- `export DENTFLOW_TEST_DB_DSN='postgresql+asyncpg://dentflow:dentflow@127.0.0.1:5432/dentflow_test'; pytest -q tests/test_p0_08a4b3_media_repository.py` → **partial fail** (DB tests failed with same connection error; non-DB tests passed).
-- `export DENTFLOW_TEST_DB_DSN='postgresql+asyncpg://dentflow:dentflow@127.0.0.1:5432/dentflow_test'; pytest -q tests/test_p0_08a4b2_pre_visit_questionnaire_repository.py` → **partial fail** (DB tests failed with same connection error; non-DB tests passed).
-- `export DENTFLOW_TEST_DB_DSN='postgresql+asyncpg://dentflow:dentflow@127.0.0.1:5432/dentflow_test'; pytest -q tests/test_p0_08a4b1_patient_profile_family_repositories.py` → **PASSED**.
-- `python -m compileall app tests scripts` → **PASSED**.
-- `pytest -q tests/test_p0_08a4a_baseline_schema_models.py` → **PASSED**.
-- `pytest -q tests/test_p0_08a3_baseline_schema_contract_docs.py` → **PASSED**.
-- `pytest -q tests/test_p0_08a2_db_service_gap_audit_docs.py` → **PASSED**.
-- `pytest -q tests/test_p0_08a1_patient_profile_family_media_docs.py` → **PASSED**.
-- `pytest -q tests/test_p0_07c_manual_pre_live_checklist.py` → **PASSED**.
-- `pytest -q tests -k 'care or recommendation'` → **PASSED**.
-- `pytest -q tests -k 'patient and booking'` → **PASSED**.
+**File:** `app/infrastructure/db/media_repository.py`
 
-## Grep checks with exact commands/results
-- `rg "test_p0_08a4b4_repository_db_smoke|DENTFLOW_TEST_DB_DSN|run_seed_demo_bootstrap" tests docs` → confirms new smoke test + DB harness usage references.
-- `rg "patient_sergey_ivanov|patient_maria_petrova|pvq_smoke_sergey|media_smoke_avatar_1|unique_avatar_1|SKU-BRUSH-SOFT" tests/test_p0_08a4b4_repository_db_smoke.py` → confirms required fixtures/IDs present.
-- `rg "alembic|migration|revision" app tests docs/report/P0_08A4B4_REPOSITORY_DB_SMOKE_REPORT.md` → no new migration artifacts; report includes no-migration confirmation statements.
+### 3. Media repository — asyncpg ambiguous parameter type on nullable filters
 
-## Defects found/fixed
-- Found environmental blocker for DB lane in this run: local PostgreSQL not accepting connections at `127.0.0.1:5432`.
-- No repository-code defect fixed in this patch; only smoke gate test/report were added.
+`list_media_links` and `list_media_for_owner` used `(:role IS NULL OR role=:role)` pattern.
+asyncpg cannot determine the type when the parameter is NULL.
 
-## Carry-forward
-- P0-08A4C service foundation: proceed only after DB lane is green in a DB-available environment.
-- P0-08B profile self wizard: blocked on green DB repository smoke gate.
-- P0-08M media upload/admin flows: blocked on green DB repository smoke gate.
+**Fix:** Changed to `(CAST(:role AS TEXT) IS NULL OR role=:role)` and same for `:visibility`.
 
-## GO/NO-GO for P0-08A4C
-- **NO-GO** in this run due to mandatory DB-backed smoke execution failure.
+**File:** `app/infrastructure/db/media_repository.py`
+
+### 4. B2 test fixture — missing `address_text` column
+
+`_build_db_repo` in `test_p0_08a4b2` inserted into `core_reference.branches` without `address_text` (NOT NULL).
+
+**Fix:** Added `address_text` column and value to the INSERT.
+
+**File:** `tests/test_p0_08a4b2_pre_visit_questionnaire_repository.py`
+
+### 5. B4 test — interface mismatches with actual repository
+
+The original B4 test draft had:
+- `get_patient_preferences(clinic_id=..., patient_id=...)` — method only accepts `patient_id`
+- `update_branch_preferences(clinic_id=..., ...)` — method doesn't accept `clinic_id`
+- `deactivate_relationship` returns `PatientRelationship | None`, test asserted `is True`
+- Media repo methods (`list_media_links`, `set_primary_media`, `list_media_for_owner`) use keyword-only `*` args but test passed positional
+
+**Fix:** Corrected all calls to match actual repository signatures.
+
+**File:** `tests/test_p0_08a4b4_repository_db_smoke.py`
+
+---
+
+## Repository Smoke Results
+
+| Area | Result |
+|---|---|
+| Profile details (upsert, get, completion state) | **PASS** |
+| Relationships / family (upsert, list, deactivate, linked profiles) | **PASS** |
+| Preferences (get, update notification, update branch) | **PASS** |
+| Questionnaire (upsert, list, answers JSONB, complete, latest) | **PASS** |
+| Questionnaire answers (upsert, list, delete, JSONB types) | **PASS** |
+| Media assets (upsert, get, telegram lookup, list by IDs, compat) | **PASS** |
+| Media links (attach, list, primary, remove, join) | **PASS** |
+| Primary media invariant (set, missing link returns None, preserves) | **PASS** |
+| Cross-repo compatibility checks | **PASS** |
+
+## Regression Results
+
+| Suite | Result |
+|---|---|
+| `test_p0_08a4b4_repository_db_smoke` | 1 passed |
+| `test_p0_08a4b3_media_repository` | 8 passed |
+| `test_p0_08a4b2_pre_visit_questionnaire_repository` | 8 passed |
+| `test_p0_08a4b1_patient_profile_family_repositories` | 5 passed |
+| `test_p0_08a4a_baseline_schema_models` | 6 passed |
+| `test_p0_08a3_baseline_schema_contract_docs` | passed |
+| `test_p0_08a2_db_service_gap_audit_docs` | passed |
+| `test_p0_08a1_patient_profile_family_media_docs` | passed |
+| `test_p0_07c_manual_pre_live_checklist` | passed |
+| Total A-lane regressions | 24 passed |
+| Broad: `care or recommendation` | 231 passed, 607 deselected |
+| Broad: `patient and booking` | 105 passed, 733 deselected |
+
+**Zero failures across all suites.**
+
+---
+
+## Verdict
+
+**GO for P0-08A4C.**
+
+All repository DB smoke tests pass against a real PostgreSQL instance. Bootstrap DDL ordering bug, media repository NULL-timestamp bug, and asyncpg parameter-type bug have been fixed. No migrations were created. No schema changes beyond the deferred FK constraint rewrite.

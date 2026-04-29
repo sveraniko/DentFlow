@@ -327,7 +327,7 @@ STACK1_TABLES: tuple[str, ...] = (
       questionnaire_id TEXT PRIMARY KEY,
       clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
       patient_id TEXT NOT NULL REFERENCES core_patient.patients(patient_id),
-      booking_id TEXT NULL REFERENCES booking.bookings(booking_id),
+      booking_id TEXT NULL,
       questionnaire_type TEXT NOT NULL,
       status TEXT NOT NULL,
       version INTEGER NOT NULL DEFAULT 1,
@@ -648,6 +648,20 @@ STACK1_TABLES: tuple[str, ...] = (
     ON booking.bookings (slot_id)
     WHERE slot_id IS NOT NULL
       AND status IN ('pending_confirmation', 'confirmed', 'reschedule_requested', 'checked_in', 'in_service')
+    """,
+    """
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_name = 'fk_pvq_booking'
+          AND table_schema = 'core_patient'
+          AND table_name = 'pre_visit_questionnaires'
+      ) THEN
+        ALTER TABLE core_patient.pre_visit_questionnaires
+          ADD CONSTRAINT fk_pvq_booking
+          FOREIGN KEY (booking_id) REFERENCES booking.bookings(booking_id);
+      END IF;
+    END $$
     """,
     """
     CREATE TABLE IF NOT EXISTS booking.booking_status_history (

@@ -134,7 +134,7 @@ async def _build_db_repo() -> DbPatientRegistryRepository:
     async with engine.begin() as conn:
         await conn.execute(text("TRUNCATE booking.bookings, core_patient.pre_visit_questionnaire_answers, core_patient.pre_visit_questionnaires, core_patient.patients, core_reference.doctors, core_reference.services, core_reference.branches, core_reference.clinics CASCADE"))
         await conn.execute(text("INSERT INTO core_reference.clinics (clinic_id, code, display_name, timezone, default_locale, status) VALUES ('c1','c1','Clinic','UTC','en','active')"))
-        await conn.execute(text("INSERT INTO core_reference.branches (branch_id, clinic_id, display_name, timezone, status) VALUES ('br1','c1','Branch','UTC','active')"))
+        await conn.execute(text("INSERT INTO core_reference.branches (branch_id, clinic_id, display_name, address_text, timezone, status) VALUES ('br1','c1','Branch','Test Address','UTC','active')"))
         await conn.execute(text("INSERT INTO core_reference.doctors (doctor_id, clinic_id, branch_id, display_name, specialty_code, public_booking_enabled, status) VALUES ('d1','c1','br1','Doc','general',TRUE,'active')"))
         await conn.execute(text("INSERT INTO core_reference.services (service_id, clinic_id, code, title_key, duration_minutes, specialty_required, status) VALUES ('s1','c1','svc','svc',30,FALSE,'active')"))
         await conn.execute(text("INSERT INTO core_patient.patients (patient_id, clinic_id, full_name_legal, first_name, last_name, display_name, status) VALUES ('p1','c1','Pat One','Pat','One','Pat One','active')"))
