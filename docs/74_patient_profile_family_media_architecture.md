@@ -199,3 +199,5 @@ This flow is planned only; media upload is not implemented in this PR.
 - A2 gap audit lives in `docs/75_patient_profile_family_media_gap_audit.md`.
 - No schema changes are implemented in A2.
 - Future schema work is tracked as **baseline schema update** work, not migrations.
+
+- A3 baseline contract: `docs/76_patient_profile_family_media_baseline_contract.md`.
