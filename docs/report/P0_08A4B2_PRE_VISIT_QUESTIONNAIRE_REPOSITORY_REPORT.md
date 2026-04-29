@@ -76,6 +76,7 @@ Optional `questionnaire_type` filter is supported.
 ## Defects found/fixed
 - Fixed test module import path from `app.settings` to `app.config.settings`.
 - Reworked async DB tests to use `asyncio.run(...)` to avoid `pytest-asyncio` dependency in this environment.
+- P0-08A4B2R follow-up: fixed JSONB bind parameter construction in `upsert_pre_visit_questionnaire_answer` so serialized `answer_value` cannot be overwritten by raw `dict`/`list` params before SQL execution; added a unit test that captures prepared SQL params and verifies JSON serialization.
 
 ## Carry-forward
 - P0-08A4B3: media repository (not included here by scope).
