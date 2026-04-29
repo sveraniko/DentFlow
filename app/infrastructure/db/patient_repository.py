@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from datetime import date, datetime, timezone
+from uuid import uuid4
 
 from sqlalchemy import text
 
@@ -18,6 +19,8 @@ from app.domain.patient_registry.models import (
     PatientMedicalSummary,
     PatientPhoto,
     PatientPreference,
+    PatientProfileDetails,
+    PatientRelationship,
 )
 from app.infrastructure.db.engine import create_engine
 from app.infrastructure.outbox.repository import OutboxRepository
@@ -308,10 +311,14 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
                     """
                 INSERT INTO core_patient.patient_preferences (
                   patient_preference_id, patient_id, preferred_language, preferred_reminder_channel,
-                  allow_sms, allow_telegram, allow_call, allow_email, marketing_opt_in, contact_time_window
+                  allow_sms, allow_telegram, allow_call, allow_email, marketing_opt_in, contact_time_window,
+                  notification_recipient_strategy, quiet_hours_start, quiet_hours_end, quiet_hours_timezone,
+                  default_branch_id, allow_any_branch
                 ) VALUES (
                   :patient_preference_id, :patient_id, :preferred_language, :preferred_reminder_channel,
-                  :allow_sms, :allow_telegram, :allow_call, :allow_email, :marketing_opt_in, :contact_time_window
+                  :allow_sms, :allow_telegram, :allow_call, :allow_email, :marketing_opt_in, :contact_time_window,
+                  :notification_recipient_strategy, :quiet_hours_start, :quiet_hours_end, :quiet_hours_timezone,
+                  :default_branch_id, :allow_any_branch
                 )
                 ON CONFLICT (patient_id) DO UPDATE SET
                   patient_preference_id=EXCLUDED.patient_preference_id,
@@ -323,6 +330,12 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
                   allow_email=EXCLUDED.allow_email,
                   marketing_opt_in=EXCLUDED.marketing_opt_in,
                   contact_time_window=EXCLUDED.contact_time_window,
+                  notification_recipient_strategy=EXCLUDED.notification_recipient_strategy,
+                  quiet_hours_start=EXCLUDED.quiet_hours_start,
+                  quiet_hours_end=EXCLUDED.quiet_hours_end,
+                  quiet_hours_timezone=EXCLUDED.quiet_hours_timezone,
+                  default_branch_id=EXCLUDED.default_branch_id,
+                  allow_any_branch=EXCLUDED.allow_any_branch,
                   updated_at=NOW()
                 """
                 ),
@@ -338,6 +351,254 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
                     payload={"preferred_language": preference.preferred_language},
                 )
         await engine.dispose()
+
+    async def get_profile_details(self, *, clinic_id: str, patient_id: str) -> PatientProfileDetails | None:
+        engine = create_engine(self._db_config)
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT patient_id, clinic_id, profile_completion_state, email, address_line1, address_line2,
+                               city, postal_code, country_code, emergency_contact_name, emergency_contact_phone,
+                               profile_completed_at, created_at, updated_at
+                        FROM core_patient.patient_profile_details
+                        WHERE clinic_id=:clinic_id AND patient_id=:patient_id
+                        """
+                    ),
+                    {"clinic_id": clinic_id, "patient_id": patient_id},
+                )
+            ).mappings().first()
+        await engine.dispose()
+        return _map_patient_profile_details(row) if row else None
+
+    async def upsert_profile_details(self, details: PatientProfileDetails) -> PatientProfileDetails:
+        engine = create_engine(self._db_config)
+        async with engine.begin() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO core_patient.patient_profile_details (
+                          patient_id, clinic_id, profile_completion_state, email, address_line1, address_line2,
+                          city, postal_code, country_code, emergency_contact_name, emergency_contact_phone, profile_completed_at
+                        ) VALUES (
+                          :patient_id, :clinic_id, :profile_completion_state, :email, :address_line1, :address_line2,
+                          :city, :postal_code, :country_code, :emergency_contact_name, :emergency_contact_phone, :profile_completed_at
+                        )
+                        ON CONFLICT (patient_id) DO UPDATE SET
+                          clinic_id=EXCLUDED.clinic_id,
+                          profile_completion_state=EXCLUDED.profile_completion_state,
+                          email=EXCLUDED.email,
+                          address_line1=EXCLUDED.address_line1,
+                          address_line2=EXCLUDED.address_line2,
+                          city=EXCLUDED.city,
+                          postal_code=EXCLUDED.postal_code,
+                          country_code=EXCLUDED.country_code,
+                          emergency_contact_name=EXCLUDED.emergency_contact_name,
+                          emergency_contact_phone=EXCLUDED.emergency_contact_phone,
+                          profile_completed_at=EXCLUDED.profile_completed_at,
+                          updated_at=NOW()
+                        RETURNING patient_id, clinic_id, profile_completion_state, email, address_line1, address_line2,
+                                  city, postal_code, country_code, emergency_contact_name, emergency_contact_phone,
+                                  profile_completed_at, created_at, updated_at
+                        """
+                    ),
+                    asdict(details),
+                )
+            ).mappings().one()
+        await engine.dispose()
+        return _map_patient_profile_details(row)
+
+    async def get_profile_completion_state(self, *, clinic_id: str, patient_id: str) -> str | None:
+        row = await self.get_profile_details(clinic_id=clinic_id, patient_id=patient_id)
+        return row.profile_completion_state if row else None
+
+    async def list_relationships(
+        self, *, clinic_id: str, manager_patient_id: str, include_inactive: bool = False
+    ) -> list[PatientRelationship]:
+        filters = ""
+        if not include_inactive:
+            filters = " AND consent_status='active' AND (expires_at IS NULL OR expires_at > NOW())"
+        engine = create_engine(self._db_config)
+        async with engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    text(
+                        f"""
+                        SELECT relationship_id, clinic_id, manager_patient_id, related_patient_id, relationship_type,
+                               consent_status, authority_scope, is_default_for_booking,
+                               is_default_notification_recipient, starts_at, expires_at, created_at, updated_at
+                        FROM core_patient.patient_relationships
+                        WHERE clinic_id=:clinic_id AND manager_patient_id=:manager_patient_id{filters}
+                        ORDER BY is_default_for_booking DESC, related_patient_id ASC
+                        """
+                    ),
+                    {"clinic_id": clinic_id, "manager_patient_id": manager_patient_id},
+                )
+            ).mappings().all()
+        await engine.dispose()
+        return [_map_patient_relationship(row) for row in rows]
+
+    async def upsert_relationship(self, relationship: PatientRelationship) -> PatientRelationship:
+        engine = create_engine(self._db_config)
+        async with engine.begin() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO core_patient.patient_relationships (
+                          relationship_id, clinic_id, manager_patient_id, related_patient_id, relationship_type,
+                          consent_status, authority_scope, is_default_for_booking, is_default_notification_recipient,
+                          starts_at, expires_at
+                        ) VALUES (
+                          :relationship_id, :clinic_id, :manager_patient_id, :related_patient_id, :relationship_type,
+                          :consent_status, :authority_scope, :is_default_for_booking, :is_default_notification_recipient,
+                          :starts_at, :expires_at
+                        )
+                        ON CONFLICT (relationship_id) DO UPDATE SET
+                          clinic_id=EXCLUDED.clinic_id,
+                          manager_patient_id=EXCLUDED.manager_patient_id,
+                          related_patient_id=EXCLUDED.related_patient_id,
+                          relationship_type=EXCLUDED.relationship_type,
+                          consent_status=EXCLUDED.consent_status,
+                          authority_scope=EXCLUDED.authority_scope,
+                          is_default_for_booking=EXCLUDED.is_default_for_booking,
+                          is_default_notification_recipient=EXCLUDED.is_default_notification_recipient,
+                          starts_at=EXCLUDED.starts_at,
+                          expires_at=EXCLUDED.expires_at,
+                          updated_at=NOW()
+                        RETURNING relationship_id, clinic_id, manager_patient_id, related_patient_id, relationship_type,
+                                  consent_status, authority_scope, is_default_for_booking, is_default_notification_recipient,
+                                  starts_at, expires_at, created_at, updated_at
+                        """
+                    ),
+                    asdict(relationship),
+                )
+            ).mappings().one()
+        await engine.dispose()
+        return _map_patient_relationship(row)
+
+    async def deactivate_relationship(self, *, clinic_id: str, relationship_id: str) -> PatientRelationship | None:
+        engine = create_engine(self._db_config)
+        async with engine.begin() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        UPDATE core_patient.patient_relationships
+                        SET consent_status='revoked', updated_at=NOW()
+                        WHERE clinic_id=:clinic_id AND relationship_id=:relationship_id
+                        RETURNING relationship_id, clinic_id, manager_patient_id, related_patient_id, relationship_type,
+                                  consent_status, authority_scope, is_default_for_booking, is_default_notification_recipient,
+                                  starts_at, expires_at, created_at, updated_at
+                        """
+                    ),
+                    {"clinic_id": clinic_id, "relationship_id": relationship_id},
+                )
+            ).mappings().first()
+        await engine.dispose()
+        return _map_patient_relationship(row) if row else None
+
+    async def list_linked_profiles_for_telegram(
+        self, *, clinic_id: str, telegram_user_id: int, include_inactive: bool = False
+    ) -> list[Patient]:
+        rel_filter = ""
+        patient_filter = ""
+        if not include_inactive:
+            rel_filter = "AND r.consent_status='active' AND (r.expires_at IS NULL OR r.expires_at > NOW())"
+            patient_filter = "AND p.status='active'"
+        engine = create_engine(self._db_config)
+        async with engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    text(
+                        f"""
+                        WITH managers AS (
+                          SELECT DISTINCT p.patient_id AS manager_patient_id
+                          FROM core_patient.patient_contacts c
+                          JOIN core_patient.patients p ON p.patient_id = c.patient_id
+                          WHERE p.clinic_id=:clinic_id
+                            AND c.contact_type='telegram'
+                            AND c.normalized_value=:normalized_value
+                            AND c.is_active=TRUE
+                        ),
+                        pool AS (
+                          SELECT m.manager_patient_id AS patient_id, TRUE AS is_manager, FALSE AS is_default_for_booking
+                          FROM managers m
+                          UNION ALL
+                          SELECT r.related_patient_id AS patient_id, FALSE AS is_manager, r.is_default_for_booking
+                          FROM core_patient.patient_relationships r
+                          JOIN managers m ON m.manager_patient_id = r.manager_patient_id
+                          WHERE r.clinic_id=:clinic_id {rel_filter}
+                        ),
+                        ranked AS (
+                          SELECT patient_id, BOOL_OR(is_manager) AS is_manager, BOOL_OR(is_default_for_booking) AS is_default_for_booking
+                          FROM pool
+                          GROUP BY patient_id
+                        )
+                        SELECT p.patient_id, p.clinic_id, p.patient_number, p.full_name_legal, p.first_name, p.last_name, p.middle_name,
+                               p.display_name, p.birth_date, p.sex_marker, p.status, p.first_seen_at, p.last_seen_at,
+                               ranked.is_manager, ranked.is_default_for_booking
+                        FROM ranked
+                        JOIN core_patient.patients p ON p.patient_id=ranked.patient_id
+                        WHERE p.clinic_id=:clinic_id {patient_filter}
+                        ORDER BY ranked.is_manager DESC, ranked.is_default_for_booking DESC, p.display_name ASC
+                        """
+                    ),
+                    {"clinic_id": clinic_id, "normalized_value": str(telegram_user_id)},
+                )
+            ).mappings().all()
+        await engine.dispose()
+        return [
+            Patient(
+                patient_id=row["patient_id"],
+                clinic_id=row["clinic_id"],
+                patient_number=row["patient_number"],
+                full_name_legal=row["full_name_legal"],
+                first_name=row["first_name"],
+                last_name=row["last_name"],
+                middle_name=row["middle_name"],
+                display_name=row["display_name"],
+                birth_date=row["birth_date"],
+                sex_marker=row["sex_marker"],
+                status=row["status"],
+                first_seen_at=row["first_seen_at"],
+                last_seen_at=row["last_seen_at"],
+            )
+            for row in rows
+        ]
+
+    async def get_patient_preferences(self, *, patient_id: str) -> PatientPreference | None:
+        row = await _fetch_preference_row(self._db_config, patient_id=patient_id)
+        return _map_patient_preference(row) if row else None
+
+    async def upsert_patient_preferences(self, preference: PatientPreference) -> PatientPreference:
+        await self.persist_preferences(preference)
+        row = await _fetch_preference_row(self._db_config, patient_id=preference.patient_id)
+        assert row is not None
+        return _map_patient_preference(row)
+
+    async def update_notification_preferences(self, *, patient_id: str, **changes) -> PatientPreference:
+        current = await self.get_patient_preferences(patient_id=patient_id)
+        if current is None:
+            current = PatientPreference(patient_preference_id=f"pp_{uuid4().hex}", patient_id=patient_id)
+        merged = asdict(current)
+        for key, value in changes.items():
+            if value is not None:
+                merged[key] = value
+        return await self.upsert_patient_preferences(PatientPreference(**merged))
+
+    async def update_branch_preferences(
+        self, *, patient_id: str, default_branch_id: str | None, allow_any_branch: bool
+    ) -> PatientPreference:
+        current = await self.get_patient_preferences(patient_id=patient_id)
+        if current is None:
+            current = PatientPreference(patient_preference_id=f"pp_{uuid4().hex}", patient_id=patient_id)
+        merged = asdict(current)
+        merged["default_branch_id"] = default_branch_id
+        merged["allow_any_branch"] = allow_any_branch
+        return await self.upsert_patient_preferences(PatientPreference(**merged))
 
     async def persist_flag(self, flag: PatientFlag, *, event_name: str) -> None:
         engine = create_engine(self._db_config)
@@ -704,20 +965,7 @@ class DbPatientPreferenceReader:
 
     async def get_preferences(self, patient_id: str) -> PatientPreference | None:
         row = await _fetch_preference_row(self._db_config, patient_id=patient_id)
-        if row is None:
-            return None
-        return PatientPreference(
-            patient_preference_id=row["patient_preference_id"],
-            patient_id=row["patient_id"],
-            preferred_language=row["preferred_language"],
-            preferred_reminder_channel=row["preferred_reminder_channel"],
-            allow_sms=row["allow_sms"],
-            allow_telegram=row["allow_telegram"],
-            allow_call=row["allow_call"],
-            allow_email=row["allow_email"],
-            marketing_opt_in=row["marketing_opt_in"],
-            contact_time_window=row["contact_time_window"],
-        )
+        return _map_patient_preference(row) if row else None
 
 
 class DbDoctorPatientReader:
@@ -804,7 +1052,9 @@ async def _fetch_preference_row(db_config, *, patient_id: str) -> dict | None:
                 text(
                     """
                     SELECT patient_preference_id, patient_id, preferred_language, preferred_reminder_channel,
-                           allow_sms, allow_telegram, allow_call, allow_email, marketing_opt_in, contact_time_window
+                           allow_sms, allow_telegram, allow_call, allow_email, marketing_opt_in, contact_time_window,
+                           notification_recipient_strategy, quiet_hours_start, quiet_hours_end, quiet_hours_timezone,
+                           default_branch_id, allow_any_branch
                     FROM core_patient.patient_preferences
                     WHERE patient_id=:patient_id
                     """
@@ -814,3 +1064,15 @@ async def _fetch_preference_row(db_config, *, patient_id: str) -> dict | None:
         ).mappings().first()
     await engine.dispose()
     return dict(row) if row else None
+
+
+def _map_patient_profile_details(row) -> PatientProfileDetails:
+    return PatientProfileDetails(**dict(row))
+
+
+def _map_patient_relationship(row) -> PatientRelationship:
+    return PatientRelationship(**dict(row))
+
+
+def _map_patient_preference(row) -> PatientPreference:
+    return PatientPreference(**dict(row))
