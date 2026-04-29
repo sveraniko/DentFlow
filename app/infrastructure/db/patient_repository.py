@@ -88,7 +88,9 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
                     text(
                         """
                         SELECT patient_preference_id, patient_id, preferred_language, preferred_reminder_channel,
-                               allow_sms, allow_telegram, allow_call, allow_email, marketing_opt_in, contact_time_window
+                               allow_sms, allow_telegram, allow_call, allow_email, marketing_opt_in, contact_time_window,
+                               notification_recipient_strategy, quiet_hours_start, quiet_hours_end,
+                               quiet_hours_timezone, default_branch_id, allow_any_branch
                         FROM core_patient.patient_preferences
                         """
                     )
@@ -105,6 +107,12 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
                     allow_email=row["allow_email"],
                     marketing_opt_in=row["marketing_opt_in"],
                     contact_time_window=row["contact_time_window"],
+                    notification_recipient_strategy=row.get("notification_recipient_strategy"),
+                    quiet_hours_start=row.get("quiet_hours_start"),
+                    quiet_hours_end=row.get("quiet_hours_end"),
+                    quiet_hours_timezone=row.get("quiet_hours_timezone"),
+                    default_branch_id=row.get("default_branch_id"),
+                    allow_any_branch=row.get("allow_any_branch", True),
                 )
             for row in (
                 await conn.execute(

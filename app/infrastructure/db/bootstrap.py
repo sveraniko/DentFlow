@@ -257,9 +257,116 @@ STACK1_TABLES: tuple[str, ...] = (
       allow_email BOOLEAN NOT NULL DEFAULT FALSE,
       marketing_opt_in BOOLEAN NOT NULL DEFAULT FALSE,
       contact_time_window JSONB NULL,
+      notification_recipient_strategy TEXT NULL,
+      quiet_hours_start TEXT NULL,
+      quiet_hours_end TEXT NULL,
+      quiet_hours_timezone TEXT NULL,
+      default_branch_id TEXT NULL REFERENCES core_reference.branches(branch_id),
+      allow_any_branch BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS core_patient.patient_profile_details (
+      patient_id TEXT PRIMARY KEY REFERENCES core_patient.patients(patient_id),
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      email TEXT NULL,
+      address_line1 TEXT NULL,
+      address_line2 TEXT NULL,
+      city TEXT NULL,
+      postal_code TEXT NULL,
+      country_code TEXT NULL,
+      emergency_contact_name TEXT NULL,
+      emergency_contact_phone TEXT NULL,
+      profile_completion_state TEXT NOT NULL DEFAULT 'missing',
+      profile_completed_at TIMESTAMPTZ NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_patient_profile_details_clinic
+    ON core_patient.patient_profile_details (clinic_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_patient_profile_details_completion_state
+    ON core_patient.patient_profile_details (profile_completion_state)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS core_patient.patient_relationships (
+      relationship_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      manager_patient_id TEXT NOT NULL REFERENCES core_patient.patients(patient_id),
+      related_patient_id TEXT NOT NULL REFERENCES core_patient.patients(patient_id),
+      relationship_type TEXT NOT NULL,
+      authority_scope TEXT NULL,
+      is_default_for_booking BOOLEAN NOT NULL DEFAULT FALSE,
+      is_default_notification_recipient BOOLEAN NOT NULL DEFAULT FALSE,
+      consent_status TEXT NOT NULL DEFAULT 'active',
+      starts_at TIMESTAMPTZ NULL,
+      expires_at TIMESTAMPTZ NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_patient_relationships_clinic_manager
+    ON core_patient.patient_relationships (clinic_id, manager_patient_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_patient_relationships_clinic_related
+    ON core_patient.patient_relationships (clinic_id, related_patient_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_patient_relationships_manager_type
+    ON core_patient.patient_relationships (manager_patient_id, relationship_type)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS core_patient.pre_visit_questionnaires (
+      questionnaire_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      patient_id TEXT NOT NULL REFERENCES core_patient.patients(patient_id),
+      booking_id TEXT NULL REFERENCES booking.bookings(booking_id),
+      questionnaire_type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1,
+      completed_at TIMESTAMPTZ NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_pre_visit_questionnaires_clinic_patient
+    ON core_patient.pre_visit_questionnaires (clinic_id, patient_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_pre_visit_questionnaires_booking
+    ON core_patient.pre_visit_questionnaires (booking_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_pre_visit_questionnaires_status
+    ON core_patient.pre_visit_questionnaires (status)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS core_patient.pre_visit_questionnaire_answers (
+      answer_id TEXT PRIMARY KEY,
+      questionnaire_id TEXT NOT NULL REFERENCES core_patient.pre_visit_questionnaires(questionnaire_id),
+      question_key TEXT NOT NULL,
+      answer_value JSONB NOT NULL,
+      answer_type TEXT NOT NULL,
+      visibility TEXT NOT NULL DEFAULT 'staff_only',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_pre_visit_questionnaire_answers_questionnaire
+    ON core_patient.pre_visit_questionnaire_answers (questionnaire_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_pre_visit_questionnaire_answers_question_key
+    ON core_patient.pre_visit_questionnaire_answers (question_key)
     """,
     """
     CREATE TABLE IF NOT EXISTS core_patient.patient_flags (
@@ -1013,6 +1120,13 @@ STACK1_TABLES: tuple[str, ...] = (
       byte_size BIGINT NULL,
       checksum_sha256 TEXT NULL,
       created_by_actor_id TEXT NULL REFERENCES access_identity.actor_identities(actor_id),
+      media_type TEXT NULL,
+      mime_type TEXT NULL,
+      size_bytes BIGINT NULL,
+      telegram_file_id TEXT NULL,
+      telegram_file_unique_id TEXT NULL,
+      object_key TEXT NULL,
+      uploaded_by_actor_id TEXT NULL REFERENCES access_identity.actor_identities(actor_id),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
@@ -1020,6 +1134,37 @@ STACK1_TABLES: tuple[str, ...] = (
     """
     CREATE INDEX IF NOT EXISTS idx_media_assets_clinic_kind
     ON media_docs.media_assets (clinic_id, asset_kind, created_at DESC)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS media_docs.media_links (
+      link_id TEXT PRIMARY KEY,
+      clinic_id TEXT NOT NULL REFERENCES core_reference.clinics(clinic_id),
+      media_asset_id TEXT NOT NULL REFERENCES media_docs.media_assets(media_asset_id),
+      owner_type TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      visibility TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_media_links_owner
+    ON media_docs.media_links (clinic_id, owner_type, owner_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_media_links_asset
+    ON media_docs.media_links (media_asset_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_media_links_owner_role
+    ON media_docs.media_links (owner_type, owner_id, role)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_media_links_owner_primary
+    ON media_docs.media_links (clinic_id, owner_type, owner_id, is_primary)
     """,
     """
     CREATE TABLE IF NOT EXISTS media_docs.document_templates (

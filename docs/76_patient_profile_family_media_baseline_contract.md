@@ -304,3 +304,8 @@ Future booking behavior:
 - A3 does not implement schema files, repository code, services, UI, media upload, or router splitting.
 - A3 does not modify live bot behavior.
 - A3 provides the baseline schema update contract only.
+
+## L. Implementation status note (A4A)
+
+- P0-08A4A implements baseline schema definitions in bootstrap and domain model additions.
+- Repository expansion, services, UI, and media upload implementation remain in follow-up PRs.
