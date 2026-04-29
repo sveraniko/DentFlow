@@ -6,6 +6,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
 
@@ -810,6 +811,7 @@ def make_router(
             )
         if nav_row:
             rows.append(nav_row)
+        rows.append([InlineKeyboardButton(text=i18n.t("patient.care.nav.home", locale), callback_data="phome:home")])
         await _send_or_edit_panel(
             actor_id=actor_id,
             message=message,
@@ -1224,6 +1226,15 @@ def make_router(
         state_token = session_id or f"actor:{actor_id}"
         state = await card_runtime.resolve_active_panel(actor_id=actor_id, panel_family=panel_family)
         if reply_keyboard is not None:
+            # Reply-keyboard panels always create a new message, so delete the
+            # previously bound panel message to keep the chat clean.
+            if state is not None:
+                try:
+                    await message.bot.delete_message(
+                        chat_id=state.chat_id, message_id=state.message_id,
+                    )
+                except Exception:
+                    pass
             if isinstance(message, CallbackQuery):
                 current_message = message.message
                 if current_message is None:
@@ -1264,7 +1275,11 @@ def make_router(
                 if state is not None and state.message_id != current_message.message_id:
                     await message.answer(i18n.t("common.card.callback.stale", _locale()), show_alert=True)
                     return
-                await current_message.edit_text(text=text, reply_markup=keyboard)
+                try:
+                    await current_message.edit_text(text=text, reply_markup=keyboard)
+                except TelegramBadRequest:
+                    await message.answer()
+                    return
                 await card_runtime.bind_panel(
                     actor_id=actor_id,
                     chat_id=current_message.chat.id,
@@ -1301,7 +1316,13 @@ def make_router(
                 )
                 return
             except Exception:
-                pass
+                # Edit failed — delete the old panel message to avoid orphans.
+                try:
+                    await message.bot.delete_message(
+                        chat_id=state.chat_id, message_id=state.message_id,
+                    )
+                except Exception:
+                    pass
         sent = await message.answer(text, reply_markup=reply_keyboard or keyboard)
         await card_runtime.bind_panel(
             actor_id=actor_id,
@@ -3242,6 +3263,11 @@ def make_router(
         flow = await _load_flow_state(actor_id)
         flow.care = state
         await _save_flow_state(actor_id, flow)
+        # Invalidate stale PATIENT_CATALOG panel state so cross-family
+        # transition (Home -> Care) is not blocked by the stale check.
+        await card_runtime.invalidate_panel(
+            actor_id=actor_id, panel_family=PanelFamily.PATIENT_CATALOG,
+        )
         await _render_care_categories_panel(message, actor_id=actor_id, clinic_id=clinic_id)
 
     @router.message(CommandStart())
@@ -3760,6 +3786,14 @@ def make_router(
     async def patient_home_main(callback: CallbackQuery) -> None:
         if not callback.from_user:
             return
+        # Invalidate stale panel states from other families so cross-family
+        # transition is not blocked by the stale check.
+        await card_runtime.invalidate_panel(
+            actor_id=callback.from_user.id, panel_family=PanelFamily.PATIENT_CATALOG,
+        )
+        await card_runtime.invalidate_panel(
+            actor_id=callback.from_user.id, panel_family=PanelFamily.BOOKING_DETAIL,
+        )
         await _render_patient_home_panel(callback, actor_id=callback.from_user.id)
 
     @router.callback_query(F.data == "phome:recommendations")
@@ -5660,6 +5694,26 @@ def make_router(
         if message.text == i18n.t("patient.home.nav.home", locale):
             if flow.booking_mode in {"new_booking_contact", "existing_lookup_contact", "new_booking_doctor_code", "review_edit_phone"}:
                 await _remove_patient_reply_keyboard(message)
+                # Delete the old panel message tracked in Redis (e.g. contact prompt)
+                for pf in (PanelFamily.BOOKING_DETAIL, PanelFamily.PATIENT_CATALOG):
+                    old_panel = await card_runtime.resolve_active_panel(
+                        actor_id=message.from_user.id, panel_family=pf,
+                    )
+                    if old_panel is not None:
+                        try:
+                            await message.bot.delete_message(
+                                chat_id=old_panel.chat_id, message_id=old_panel.message_id,
+                            )
+                        except Exception:
+                            pass
+                        await card_runtime.invalidate_panel(
+                            actor_id=message.from_user.id, panel_family=pf,
+                        )
+            # Delete the user's reply-keyboard text message ("Главное меню")
+            try:
+                await message.delete()
+            except Exception:
+                pass
             await _render_patient_home_panel(message, actor_id=message.from_user.id)
             return
         if message.text != _patient_back_nav_text(locale=locale):

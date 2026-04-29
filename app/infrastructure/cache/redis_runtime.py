@@ -21,6 +21,6 @@ class AsyncRedisRuntimeAdapter:
 
 
 def build_card_runtime_redis(settings: Settings) -> RedisLike:
-    if settings.app.env in {"prod", "production"}:
+    if settings.redis.url:
         return AsyncRedisRuntimeAdapter(url=settings.redis.url)
     return InMemoryRedis()

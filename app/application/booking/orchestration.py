@@ -328,13 +328,17 @@ class BookingOrchestrationService:
             )
             if progressed_session is None:
                 return InvalidStateOutcome(kind="invalid_state", reason="session cannot progress to slot-selection state canonically")
+            patch: dict[str, object] = {
+                "selected_slot_id": slot_id,
+                "selected_hold_id": active_hold.slot_hold_id,
+                "updated_at": now,
+            }
+            # Propagate branch from the selected slot to the session so the
+            # booking inherits the correct branch when finalized.
+            if slot.branch_id and not progressed_session.branch_id:
+                patch["branch_id"] = slot.branch_id
             updated_session = BookingSession(
-                **{
-                    **asdict(progressed_session),
-                    "selected_slot_id": slot_id,
-                    "selected_hold_id": active_hold.slot_hold_id,
-                    "updated_at": now,
-                }
+                **{**asdict(progressed_session), **patch}
             )
             await tx.upsert_booking_session(updated_session)
             return OrchestrationSuccess(kind="success", entity=active_hold)

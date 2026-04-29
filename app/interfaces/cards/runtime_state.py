@@ -211,3 +211,6 @@ class CardRuntimeCoordinator:
 
     async def clear_actor_session_state(self, *, scope: str, actor_id: int) -> None:
         await self._store.clear_actor_session_state(scope=scope, actor_id=actor_id)
+
+    async def invalidate_panel(self, *, actor_id: int, panel_family: PanelFamily) -> None:
+        await self._store.invalidate_panel(actor_id=actor_id, panel_family=panel_family)
