@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol
 
-from app.domain.patient_registry.models import Patient, PatientRelationship
+from app.domain.patient_registry.models import LinkedPatientProfile, PatientRelationship
 
 _ALLOWED_RELATIONSHIP_TYPES = {"self", "spouse", "child", "parent", "other"}
 _ALLOWED_CONSENT_STATUSES = {"active", "revoked", "expired"}
@@ -33,7 +33,9 @@ class BookingPatientSelectionResult:
 
 class PatientFamilyRepositoryProtocol(Protocol):
     async def list_relationships(self, *, clinic_id: str, manager_patient_id: str, include_inactive: bool = False) -> list[PatientRelationship]: ...
-    async def list_linked_profiles_for_telegram(self, *, clinic_id: str, telegram_user_id: int, include_inactive: bool = False) -> list[Patient]: ...
+    async def list_linked_profiles_for_telegram(
+        self, *, clinic_id: str, telegram_user_id: int, include_inactive: bool = False
+    ) -> list[LinkedPatientProfile]: ...
     async def upsert_relationship(self, relationship: PatientRelationship) -> PatientRelationship: ...
     async def deactivate_relationship(self, *, clinic_id: str, relationship_id: str) -> PatientRelationship | None: ...
     async def get_patient_preferences(self, *, patient_id: str): ...
@@ -48,16 +50,20 @@ class PatientFamilyService:
         patients = await self._repository.list_linked_profiles_for_telegram(clinic_id=clinic_id, telegram_user_id=telegram_user_id)
         options: list[LinkedPatientOption] = []
         for patient in patients:
-            relationship_type = "self" if bool(getattr(patient, "is_manager", False)) else "other"
+            relationship_type = str(
+                getattr(patient, "relationship_type", "self" if bool(getattr(patient, "is_manager", False)) else "other")
+            )
+            is_self = bool(getattr(patient, "is_self", relationship_type == "self"))
             options.append(
                 LinkedPatientOption(
                     patient_id=patient.patient_id,
                     display_name=patient.display_name,
                     relationship_type=relationship_type,
-                    is_self=relationship_type == "self",
+                    is_self=is_self,
                     is_default_for_booking=bool(getattr(patient, "is_default_for_booking", False)),
-                    is_default_notification_recipient=False,
+                    is_default_notification_recipient=bool(getattr(patient, "is_default_notification_recipient", False)),
                     phone=getattr(patient, "phone", None),
+                    telegram_user_id=getattr(patient, "telegram_user_id", None),
                 )
             )
         options.sort(key=lambda item: (not item.is_self, not item.is_default_for_booking, item.display_name.lower()))

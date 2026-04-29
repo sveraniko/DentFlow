@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.domain.patient_registry import PatientPreference, PatientProfileDetails, PatientRelationship
+from app.domain.patient_registry import LinkedPatientProfile, PatientPreference, PatientProfileDetails, PatientRelationship
 from app.infrastructure.db.patient_repository import (
     DbPatientRegistryRepository,
     _map_patient_preference,
@@ -103,3 +103,20 @@ def test_map_patient_preference_new_fields() -> None:
 
 def test_no_alembic_versions_added() -> None:
     assert not (ROOT / "alembic/versions").exists()
+
+
+def test_linked_patient_profile_contract_shape() -> None:
+    linked = LinkedPatientProfile(
+        patient_id="p_self",
+        clinic_id="c1",
+        display_name="Self",
+        relationship_type="self",
+        is_self=True,
+        is_default_for_booking=False,
+        is_default_notification_recipient=True,
+        phone="+15550001",
+        telegram_user_id=42,
+    )
+    assert isinstance(linked, LinkedPatientProfile)
+    assert linked.relationship_type == "self"
+    assert linked.is_self is True
