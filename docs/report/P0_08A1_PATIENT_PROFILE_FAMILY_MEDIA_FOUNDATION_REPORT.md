@@ -54,6 +54,37 @@ From current code inspection:
 - P0-08M2 product media admin
 - P0-08M3 patient avatar upload
 
+
+## P0-08A1 Matrix
+
+| Area | Check | Status |
+|---|---|---|
+| Docs | architecture doc exists | yes |
+| Docs | scope proposal updated | yes |
+| Docs | report exists | yes |
+| Profile | fast booking principle documented | yes |
+| Profile | unknown patient minimal name fallback | yes |
+| Profile | profile cabinet documented | yes |
+| Family | multiple profiles per Telegram documented | yes |
+| Family | dependents/children documented | yes |
+| Family | booking selector documented | yes |
+| Settings | notifications documented | yes |
+| Settings | branch preference documented | yes |
+| Settings | documents/questionnaire bridge documented | yes |
+| Media | MediaAsset/MediaLink documented | yes |
+| Media | Telegram storage first | yes |
+| Media | object storage later | yes |
+| Media | product media roles | yes |
+| Media | patient avatar optional | yes |
+| Media | clinical photo separated from avatar | yes |
+| Media | TradeFlow audit planned | yes |
+| Truth boundary | no false profile implementation claim | yes |
+| Truth boundary | no false media upload implementation claim | yes |
+| Regression | A1 tests | pass |
+| Regression | P0-07C checklist | pass |
+| Regression | care/recommendation | 230 passed (1 skipped) |
+| Regression | patient/booking | 105 passed |
+
 ## Tests run
 - `python -m compileall app tests scripts`
 - `pytest -q tests/test_p0_08a1_patient_profile_family_media_docs.py`
