@@ -12,6 +12,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
 
 from app.application.communication import ReminderActionService
+from app.application.patient import BookingPatientSelectorService, PatientFamilyService, PatientPreferenceService, PatientProfileService
 from app.application.care_commerce import CareCommerceService
 from app.application.booking.orchestration_outcomes import ConflictOutcome, InvalidStateOutcome, OrchestrationSuccess, SlotUnavailableOutcome
 from app.application.booking.telegram_flow import (
@@ -356,6 +357,10 @@ def make_router(
     reminder_actions: ReminderActionService,
     recommendation_service: RecommendationService | None = None,
     care_commerce_service: CareCommerceService | None = None,
+    patient_profile_service: PatientProfileService | None = None,
+    patient_preference_service: PatientPreferenceService | None = None,
+    patient_family_service: PatientFamilyService | None = None,
+    booking_patient_selector_service: BookingPatientSelectorService | None = None,
     recommendation_repository=None,
     *,
     default_locale: str,
@@ -2541,6 +2546,7 @@ def make_router(
         rows: list[list[InlineKeyboardButton]] = [
             [InlineKeyboardButton(text=i18n.t("patient.home.action.book", locale), callback_data="phome:book")],
             [InlineKeyboardButton(text=i18n.t("patient.home.action.my_booking", locale), callback_data="phome:my_booking")],
+            [InlineKeyboardButton(text=i18n.t("patient.profile.home.button", locale), callback_data="phome:profile")],
         ]
         if recommendation_service is not None:
             rows.append(
@@ -2558,6 +2564,54 @@ def make_router(
 
     def _patient_home_nav_button(*, locale: str) -> InlineKeyboardButton:
         return InlineKeyboardButton(text=i18n.t("patient.home.nav.home", locale), callback_data="phome:home")
+
+    def _profile_relationship_label(relationship_type: str, locale: str) -> str:
+        key = f"patient.profile.relationship.{relationship_type}"
+        translated = i18n.t(key, locale)
+        if translated != key:
+            return translated
+        return i18n.t("patient.profile.relationship.other", locale)
+
+    def _profile_completion_label(state: str, locale: str) -> str:
+        key = f"patient.profile.completion.{state}"
+        translated = i18n.t(key, locale)
+        if translated != key:
+            return translated
+        return i18n.t("patient.profile.completion.missing", locale)
+
+    def _profile_notification_summary(channel: str | None, locale: str) -> str:
+        if not channel:
+            return i18n.t("patient.profile.preferences_default", locale)
+        key = f"patient.profile.notification.channel.{channel}"
+        translated = i18n.t(key, locale)
+        return translated if translated != key else i18n.t("patient.profile.preferences_default", locale)
+
+    async def _render_profile_unavailable_panel(message: Message | CallbackQuery, *, actor_id: int) -> None:
+        locale = _locale()
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id="patient_profile",
+            text=i18n.t("patient.profile.unavailable.panel", locale),
+            keyboard=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=i18n.t("patient.profile.nav.my_booking", locale), callback_data="phome:my_booking")],
+                [InlineKeyboardButton(text=i18n.t("patient.profile.nav.home", locale), callback_data="phome:home")],
+            ]),
+        )
+
+    async def _render_profile_not_found_panel(message: Message | CallbackQuery, *, actor_id: int) -> None:
+        locale = _locale()
+        await _send_or_edit_panel(
+            actor_id=actor_id,
+            message=message,
+            session_id="patient_profile",
+            text=i18n.t("patient.profile.not_found.panel", locale),
+            keyboard=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=i18n.t("patient.profile.nav.my_booking", locale), callback_data="phome:my_booking")],
+                [InlineKeyboardButton(text=i18n.t("patient.profile.nav.book", locale), callback_data="phome:book")],
+                [InlineKeyboardButton(text=i18n.t("patient.profile.nav.home", locale), callback_data="phome:home")],
+            ]),
+        )
 
     def _care_entry_nav_keyboard(*, locale: str) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
@@ -3831,6 +3885,92 @@ def make_router(
         if not callback.from_user:
             return
         await _enter_recommendations_list(callback, actor_id=callback.from_user.id)
+
+    async def _open_profile_panel(message: Message | CallbackQuery, *, actor_id: int, clinic_id: str, patient_id: str, options) -> None:
+        locale = _locale()
+        linked_option = next((item for item in options if item.patient_id == patient_id), None)
+        if linked_option is None:
+            await _render_profile_not_found_panel(message, actor_id=actor_id)
+            return
+        profile = await patient_profile_service.get_profile_details(clinic_id=clinic_id, patient_id=patient_id) if patient_profile_service else None
+        preference = await patient_preference_service.get_preferences(patient_id=patient_id) if patient_preference_service else None
+        language = preference.preferred_language if preference and preference.preferred_language else locale
+        branch = reference.get_branch(clinic_id, preference.default_branch_id) if preference and preference.default_branch_id else None
+        branch_label = branch.display_name if branch is not None else i18n.t("patient.profile.branch_missing", locale)
+        lines = [
+            i18n.t("patient.profile.card.title", locale),
+            "",
+            linked_option.display_name,
+            "",
+            i18n.t("patient.profile.card.phone", locale).format(value=(linked_option.phone or i18n.t("patient.profile.missing_value", locale))),
+            i18n.t("patient.profile.card.language", locale).format(value=language),
+            i18n.t("patient.profile.card.email", locale).format(value=(profile.email if profile and profile.email else i18n.t("patient.profile.missing_value", locale))),
+            i18n.t("patient.profile.card.branch", locale).format(value=branch_label),
+            i18n.t("patient.profile.card.notifications", locale).format(
+                value=_profile_notification_summary(preference.preferred_reminder_channel if preference else None, locale)
+            ),
+            i18n.t("patient.profile.card.relationship", locale).format(value=_profile_relationship_label(linked_option.relationship_type, locale)),
+            i18n.t("patient.profile.card.completion", locale).format(
+                value=_profile_completion_label(profile.profile_completion_state if profile else "missing", locale)
+            ),
+            "",
+            i18n.t("patient.profile.card.readonly_note", locale),
+        ]
+        rows = [[InlineKeyboardButton(text=i18n.t("patient.profile.nav.my_booking", locale), callback_data="phome:my_booking")]]
+        if len(options) > 1:
+            rows.append([InlineKeyboardButton(text=i18n.t("patient.profile.nav.choose_other", locale), callback_data="phome:profile")])
+        rows.append([InlineKeyboardButton(text=i18n.t("patient.profile.nav.home", locale), callback_data="phome:home")])
+        await _send_or_edit_panel(
+            actor_id=actor_id, message=message, session_id="patient_profile", text="\n".join(lines), keyboard=InlineKeyboardMarkup(inline_keyboard=rows)
+        )
+
+    @router.callback_query(F.data == "phome:profile")
+    async def patient_home_profile(callback: CallbackQuery) -> None:
+        if not callback.from_user:
+            return
+        clinic_id = _primary_clinic_id()
+        if clinic_id is None or booking_patient_selector_service is None or patient_profile_service is None:
+            await _render_profile_unavailable_panel(callback, actor_id=callback.from_user.id)
+            return
+        resolution = await booking_patient_selector_service.resolve_for_telegram(clinic_id=clinic_id, telegram_user_id=callback.from_user.id)
+        if resolution.mode in {"phone_required", "no_match"} or not resolution.options:
+            await _render_profile_not_found_panel(callback, actor_id=callback.from_user.id)
+            return
+        if len(resolution.options) > 1:
+            locale = _locale()
+            rows = [[InlineKeyboardButton(
+                text=f"{item.display_name} — {_profile_relationship_label(item.relationship_type, locale)}",
+                callback_data=f"profile:open:{item.patient_id}",
+            )] for item in resolution.options]
+            rows.append([InlineKeyboardButton(text=i18n.t("patient.profile.nav.home", locale), callback_data="phome:home")])
+            await _send_or_edit_panel(
+                actor_id=callback.from_user.id,
+                message=callback,
+                session_id="patient_profile",
+                text=i18n.t("patient.profile.selector.panel", locale),
+                keyboard=InlineKeyboardMarkup(inline_keyboard=rows),
+            )
+            return
+        await _open_profile_panel(
+            callback, actor_id=callback.from_user.id, clinic_id=clinic_id, patient_id=resolution.options[0].patient_id, options=resolution.options
+        )
+
+    @router.callback_query(F.data.startswith("profile:open:"))
+    async def patient_profile_open(callback: CallbackQuery) -> None:
+        if not callback.from_user or not callback.data:
+            return
+        clinic_id = _primary_clinic_id()
+        if clinic_id is None or booking_patient_selector_service is None or patient_profile_service is None:
+            await _render_profile_unavailable_panel(callback, actor_id=callback.from_user.id)
+            return
+        patient_id = callback.data.split(":", 2)[2]
+        resolution = await booking_patient_selector_service.resolve_for_telegram(clinic_id=clinic_id, telegram_user_id=callback.from_user.id)
+        if not any(item.patient_id == patient_id for item in resolution.options):
+            await _render_profile_not_found_panel(callback, actor_id=callback.from_user.id)
+            return
+        await _open_profile_panel(
+            callback, actor_id=callback.from_user.id, clinic_id=clinic_id, patient_id=patient_id, options=resolution.options
+        )
 
     @router.callback_query(F.data.startswith("prec:list:"))
     async def recommendation_list_callback(callback: CallbackQuery) -> None:
