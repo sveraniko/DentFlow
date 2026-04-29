@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from datetime import date, datetime, timezone
+from typing import Any, Sequence
 from uuid import uuid4
 
 from sqlalchemy import text
@@ -21,6 +22,8 @@ from app.domain.patient_registry.models import (
     PatientPreference,
     PatientProfileDetails,
     PatientRelationship,
+    PreVisitQuestionnaire,
+    PreVisitQuestionnaireAnswer,
 )
 from app.infrastructure.db.engine import create_engine
 from app.infrastructure.outbox.repository import OutboxRepository
@@ -600,6 +603,241 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
         merged["allow_any_branch"] = allow_any_branch
         return await self.upsert_patient_preferences(PatientPreference(**merged))
 
+    async def get_pre_visit_questionnaire(
+        self, *, clinic_id: str, questionnaire_id: str
+    ) -> PreVisitQuestionnaire | None:
+        engine = create_engine(self._db_config)
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT questionnaire_id, clinic_id, patient_id, booking_id, questionnaire_type, status,
+                               version, completed_at, created_at, updated_at
+                        FROM core_patient.pre_visit_questionnaires
+                        WHERE clinic_id=:clinic_id AND questionnaire_id=:questionnaire_id
+                        """
+                    ),
+                    {"clinic_id": clinic_id, "questionnaire_id": questionnaire_id},
+                )
+            ).mappings().first()
+        await engine.dispose()
+        return _map_pre_visit_questionnaire(row) if row else None
+
+    async def list_pre_visit_questionnaires(
+        self, *, clinic_id: str, patient_id: str, booking_id: str | None = None, status: str | None = None
+    ) -> list[PreVisitQuestionnaire]:
+        engine = create_engine(self._db_config)
+        clauses = ["clinic_id=:clinic_id", "patient_id=:patient_id"]
+        params: dict[str, Any] = {"clinic_id": clinic_id, "patient_id": patient_id}
+        if booking_id is not None:
+            clauses.append("booking_id=:booking_id")
+            params["booking_id"] = booking_id
+        if status is not None:
+            clauses.append("status=:status")
+            params["status"] = status
+        where_sql = " AND ".join(clauses)
+        async with engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    text(
+                        f"""
+                        SELECT questionnaire_id, clinic_id, patient_id, booking_id, questionnaire_type, status,
+                               version, completed_at, created_at, updated_at
+                        FROM core_patient.pre_visit_questionnaires
+                        WHERE {where_sql}
+                        ORDER BY completed_at DESC NULLS LAST, updated_at DESC, created_at DESC
+                        """
+                    ),
+                    params,
+                )
+            ).mappings().all()
+        await engine.dispose()
+        return [_map_pre_visit_questionnaire(row) for row in rows]
+
+    async def upsert_pre_visit_questionnaire(self, questionnaire: PreVisitQuestionnaire) -> PreVisitQuestionnaire:
+        engine = create_engine(self._db_config)
+        async with engine.begin() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO core_patient.pre_visit_questionnaires (
+                          questionnaire_id, clinic_id, patient_id, booking_id, questionnaire_type, status,
+                          version, completed_at, created_at, updated_at
+                        ) VALUES (
+                          :questionnaire_id, :clinic_id, :patient_id, :booking_id, :questionnaire_type, :status,
+                          :version, :completed_at, COALESCE(:created_at, NOW()), COALESCE(:updated_at, NOW())
+                        )
+                        ON CONFLICT (questionnaire_id) DO UPDATE SET
+                          clinic_id=EXCLUDED.clinic_id,
+                          patient_id=EXCLUDED.patient_id,
+                          booking_id=EXCLUDED.booking_id,
+                          questionnaire_type=EXCLUDED.questionnaire_type,
+                          status=EXCLUDED.status,
+                          version=EXCLUDED.version,
+                          completed_at=EXCLUDED.completed_at,
+                          created_at=core_patient.pre_visit_questionnaires.created_at,
+                          updated_at=NOW()
+                        RETURNING questionnaire_id, clinic_id, patient_id, booking_id, questionnaire_type, status,
+                                  version, completed_at, created_at, updated_at
+                        """
+                    ),
+                    asdict(questionnaire),
+                )
+            ).mappings().one()
+        await engine.dispose()
+        return _map_pre_visit_questionnaire(row)
+
+    async def complete_pre_visit_questionnaire(
+        self, *, clinic_id: str, questionnaire_id: str, completed_at: datetime | None = None
+    ) -> PreVisitQuestionnaire | None:
+        engine = create_engine(self._db_config)
+        async with engine.begin() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        UPDATE core_patient.pre_visit_questionnaires
+                        SET status='completed',
+                            completed_at=COALESCE(:completed_at, NOW()),
+                            updated_at=NOW()
+                        WHERE clinic_id=:clinic_id AND questionnaire_id=:questionnaire_id
+                        RETURNING questionnaire_id, clinic_id, patient_id, booking_id, questionnaire_type, status,
+                                  version, completed_at, created_at, updated_at
+                        """
+                    ),
+                    {"clinic_id": clinic_id, "questionnaire_id": questionnaire_id, "completed_at": completed_at},
+                )
+            ).mappings().first()
+        await engine.dispose()
+        return _map_pre_visit_questionnaire(row) if row else None
+
+    async def list_pre_visit_questionnaire_answers(
+        self, *, questionnaire_id: str
+    ) -> list[PreVisitQuestionnaireAnswer]:
+        engine = create_engine(self._db_config)
+        async with engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT answer_id, questionnaire_id, question_key, answer_value, answer_type, visibility,
+                               created_at, updated_at
+                        FROM core_patient.pre_visit_questionnaire_answers
+                        WHERE questionnaire_id=:questionnaire_id
+                        ORDER BY question_key ASC
+                        """
+                    ),
+                    {"questionnaire_id": questionnaire_id},
+                )
+            ).mappings().all()
+        await engine.dispose()
+        return [_map_pre_visit_questionnaire_answer(row) for row in rows]
+
+    async def upsert_pre_visit_questionnaire_answer(self, answer: PreVisitQuestionnaireAnswer) -> PreVisitQuestionnaireAnswer:
+        engine = create_engine(self._db_config)
+        params = asdict(answer)
+        if not isinstance(params.get("answer_value"), (dict, list, str, int, float, bool, type(None))):
+            params["answer_value"] = str(params["answer_value"])
+        async with engine.begin() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO core_patient.pre_visit_questionnaire_answers (
+                          answer_id, questionnaire_id, question_key, answer_value, answer_type, visibility,
+                          created_at, updated_at
+                        ) VALUES (
+                          :answer_id, :questionnaire_id, :question_key, CAST(:answer_value AS JSONB), :answer_type, :visibility,
+                          COALESCE(:created_at, NOW()), COALESCE(:updated_at, NOW())
+                        )
+                        ON CONFLICT (answer_id) DO UPDATE SET
+                          questionnaire_id=EXCLUDED.questionnaire_id,
+                          question_key=EXCLUDED.question_key,
+                          answer_value=EXCLUDED.answer_value,
+                          answer_type=EXCLUDED.answer_type,
+                          visibility=EXCLUDED.visibility,
+                          created_at=core_patient.pre_visit_questionnaire_answers.created_at,
+                          updated_at=NOW()
+                        RETURNING answer_id, questionnaire_id, question_key, answer_value, answer_type, visibility,
+                                  created_at, updated_at
+                        """
+                    ),
+                    {"answer_value": json.dumps(params["answer_value"]), **params},
+                )
+            ).mappings().one()
+        await engine.dispose()
+        return _map_pre_visit_questionnaire_answer(row)
+
+    async def upsert_pre_visit_questionnaire_answers(
+        self, answers: Sequence[PreVisitQuestionnaireAnswer]
+    ) -> list[PreVisitQuestionnaireAnswer]:
+        persisted: list[PreVisitQuestionnaireAnswer] = []
+        for answer in answers:
+            persisted.append(await self.upsert_pre_visit_questionnaire_answer(answer))
+        return persisted
+
+    async def delete_pre_visit_questionnaire_answer(self, *, questionnaire_id: str, question_key: str) -> bool:
+        engine = create_engine(self._db_config)
+        async with engine.begin() as conn:
+            deleted = await conn.execute(
+                text(
+                    """
+                    DELETE FROM core_patient.pre_visit_questionnaire_answers
+                    WHERE questionnaire_id=:questionnaire_id AND question_key=:question_key
+                    """
+                ),
+                {"questionnaire_id": questionnaire_id, "question_key": question_key},
+            )
+        await engine.dispose()
+        return deleted.rowcount > 0
+
+    async def get_latest_pre_visit_questionnaire_for_booking(
+        self, *, clinic_id: str, booking_id: str, questionnaire_type: str | None = None
+    ) -> PreVisitQuestionnaire | None:
+        return await self._get_latest_pre_visit_questionnaire(
+            clinic_id=clinic_id, filters={"booking_id": booking_id}, questionnaire_type=questionnaire_type
+        )
+
+    async def get_latest_pre_visit_questionnaire_for_patient(
+        self, *, clinic_id: str, patient_id: str, questionnaire_type: str | None = None
+    ) -> PreVisitQuestionnaire | None:
+        return await self._get_latest_pre_visit_questionnaire(
+            clinic_id=clinic_id, filters={"patient_id": patient_id}, questionnaire_type=questionnaire_type
+        )
+
+    async def _get_latest_pre_visit_questionnaire(
+        self, *, clinic_id: str, filters: dict[str, str], questionnaire_type: str | None
+    ) -> PreVisitQuestionnaire | None:
+        clauses = ["clinic_id=:clinic_id"]
+        params: dict[str, Any] = {"clinic_id": clinic_id}
+        for key, value in filters.items():
+            clauses.append(f"{key}=:{key}")
+            params[key] = value
+        if questionnaire_type is not None:
+            clauses.append("questionnaire_type=:questionnaire_type")
+            params["questionnaire_type"] = questionnaire_type
+        engine = create_engine(self._db_config)
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        f"""
+                        SELECT questionnaire_id, clinic_id, patient_id, booking_id, questionnaire_type, status,
+                               version, completed_at, created_at, updated_at
+                        FROM core_patient.pre_visit_questionnaires
+                        WHERE {" AND ".join(clauses)}
+                        ORDER BY completed_at DESC NULLS LAST, updated_at DESC, created_at DESC
+                        LIMIT 1
+                        """
+                    ),
+                    params,
+                )
+            ).mappings().first()
+        await engine.dispose()
+        return _map_pre_visit_questionnaire(row) if row else None
+
     async def persist_flag(self, flag: PatientFlag, *, event_name: str) -> None:
         engine = create_engine(self._db_config)
         async with engine.begin() as conn:
@@ -1076,3 +1314,11 @@ def _map_patient_relationship(row) -> PatientRelationship:
 
 def _map_patient_preference(row) -> PatientPreference:
     return PatientPreference(**dict(row))
+
+
+def _map_pre_visit_questionnaire(row) -> PreVisitQuestionnaire:
+    return PreVisitQuestionnaire(**dict(row))
+
+
+def _map_pre_visit_questionnaire_answer(row) -> PreVisitQuestionnaireAnswer:
+    return PreVisitQuestionnaireAnswer(**dict(row))
