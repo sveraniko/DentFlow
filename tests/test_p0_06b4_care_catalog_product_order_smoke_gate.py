@@ -207,6 +207,25 @@ def test_p0_06b4_consolidated_care_catalog_product_order_smoke() -> None:
     _assert_allowed_callback_prefixes(callbacks)
 
 
+
+def test_p0_07d_ru_care_labels_and_price_formatting_smoke() -> None:
+    router, _, _, _, care_service = home._build_router(with_recommendations=True, with_care=True, locale="ru")
+    assert care_service is not None
+    b1._mock_product_content(care_service)
+    b3a._mock_single_category_product(care_service)
+    care_service.products["prod_1"].price_amount = 420
+    care_service.products["prod_1"].currency_code = "EUR"
+    care_service.products["prod_1"].category = "irrigator"
+
+    open_product = b1._open_first_product_runtime_callback(router)
+    product_cb = home._Callback(data=open_product, user_id=1001)
+    asyncio.run(home._handler(router, "runtime_card_callback", kind="callback")(product_cb))
+    text, _ = home._latest_callback_panel(product_cb)
+    assert "4.20 EUR" in text
+    assert "420 EUR" not in text
+    assert "Ирригаторы" in text
+
+
 def test_p0_06b4_command_fallback_and_router_grep_guards() -> None:
     router_text = Path("app/interfaces/bots/patient/router.py").read_text(encoding="utf-8")
 
