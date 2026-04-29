@@ -105,5 +105,11 @@ def test_complete_and_latest_delegate() -> None:
 
 def test_no_migrations_or_router_changes() -> None:
     import pathlib
-    migration_like = [p for p in pathlib.Path('.').rglob('*') if p.is_file() and ('alembic' in str(p).lower() or 'migration' in str(p).lower())]
+    skip_dirs = {".venv", "__pycache__", "node_modules", ".git"}
+    migration_like = [
+        p for p in pathlib.Path('.').rglob('*')
+        if p.is_file()
+        and not any(part in skip_dirs for part in p.parts)
+        and ('alembic' in str(p).lower() or 'migration' in str(p).lower())
+    ]
     assert not migration_like

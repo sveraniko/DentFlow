@@ -10,7 +10,7 @@ from app.application.patient.profile import PatientPreferenceService, PatientPro
 from app.application.patient.questionnaire import PreVisitQuestionnaireService
 from app.domain.patient_registry.models import PatientRelationship
 from app.infrastructure.db.media_repository import DbMediaRepository
-from app.infrastructure.db.patient_repository import DbPatientRegistryRepository
+from app.infrastructure.db.patient_repository import DbPatientRegistryRepository, find_patients_by_exact_contact
 from app.application.clinic_reference import ClinicReferenceService, InMemoryClinicReferenceRepository
 from app.domain.clinic_reference.models import Branch, RecordStatus
 from tests.helpers.seed_demo_db_harness import run_seed_demo_bootstrap_for_tests, safe_test_db_config, reset_test_db
@@ -29,7 +29,8 @@ def test_p0_08a4c5_service_db_smoke() -> None:
             Branch(
                 branch_id="branch_central",
                 clinic_id="clinic_main",
-                name="Central",
+                display_name="Central",
+                address_text="Central Office",
                 timezone="Europe/Moscow",
                 status=RecordStatus.ACTIVE,
             )
@@ -42,8 +43,9 @@ def test_p0_08a4c5_service_db_smoke() -> None:
 
         class _PatientLookup:
             async def find_by_phone(self, *, clinic_id: str, phone: str):
-                profiles = await patient_repo.find_profiles_by_phone(clinic_id=clinic_id, phone=phone)
-                return [{"patient_id": p.patient_id, "display_name": p.display_name} for p in profiles]
+                return await find_patients_by_exact_contact(
+                    db_config, contact_type="phone", contact_value=phone
+                )
 
         selector_service = BookingPatientSelectorService(family_service, patient_registry_service=_PatientLookup())
         questionnaire_service = PreVisitQuestionnaireService(patient_repo)
@@ -154,7 +156,7 @@ def test_p0_08a4c5_service_db_smoke() -> None:
         assert related_id not in {o.patient_id for o in after.options}
 
         # 5) selector phone
-        phone_single = await selector_service.resolve_for_phone(clinic_id=clinic_id, phone="+995555000111")
+        phone_single = await selector_service.resolve_for_phone(clinic_id=clinic_id, phone="+79997771010")
         assert phone_single.mode == "single_match"
         assert phone_single.selected_patient_id == "patient_giorgi_beridze"
         phone_missing = await selector_service.resolve_for_phone(clinic_id=clinic_id, phone="+10000000000")
