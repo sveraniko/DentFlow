@@ -28,10 +28,11 @@
 - no schema changes: yes
 - no Alembic/migrations: yes
 
-## Regression
-- C3 tests: pass
-- C2/C1 tests: pass
-- B4/B3/B2/B1 tests: pass/skipped
-- A4A/A3/A2/A1 tests: pass
-- care/recommendation: passed count = 230
-- patient/booking: 381 passed, 6 failed, 2 skipped
+## Regression (exact command results)
+- C3 tests: `9 passed`
+- C2/C1 tests: `9 passed`, `8 passed`
+- B4/B3/B2/B1 tests: `1 skipped`; `5 passed, 3 skipped`; `5 passed, 3 skipped`; `6 passed`
+- A4A/A3/A2/A1 tests: `6 passed`; `6 passed`; `6 passed`; `6 passed`
+- care/recommendation selector (`pytest -q tests -k "care or recommendation"`): `230 passed, 1 skipped, 633 deselected`
+- patient and booking selector (`pytest -q tests -k "patient and booking"`): `107 passed, 757 deselected`
+- classification: previously reported `381 passed, 6 failed, 2 skipped` was from broader non-acceptance selector (`patient or booking`), not this acceptance selector.
