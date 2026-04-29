@@ -22,8 +22,8 @@ Behavior:
 - Telegram identifiers stored only, no API calls: yes
 
 DB:
-- DB-backed tests run: yes
-- DB skip documented: yes
+- DB-backed tests run: no (B3R run had no `DENTFLOW_TEST_DB_DSN`; DB tests skipped)
+- DB skip documented: yes (explicit pytest skip reason asserted in test output)
 
 Truth boundary:
 - no Alembic: yes
@@ -35,5 +35,5 @@ Regression:
 - B2/B1 tests: pass
 - A4A tests: pass
 - A3/A2/A1 tests: pass
-- care/recommendation: passed count = 4
-- patient/booking: passed count = 4
+- care/recommendation: not run in B3R / deferred to A4B4
+- patient/booking: not run in B3R / deferred to A4B4

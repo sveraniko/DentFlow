@@ -34,8 +34,8 @@ Implemented repository-only media foundation with `DbMediaRepository` for media 
 - `find_media_asset_by_telegram_file_unique_id` implemented with clinic scoping and deterministic ordering.
 
 ## DB-backed tests executed or skipped
-- DB-backed tests are present and run when `DENTFLOW_TEST_DB_DSN` is set.
-- If not set, DB-backed tests are skipped explicitly.
+- DB-backed tests are present in `tests/test_p0_08a4b3_media_repository.py`.
+- In this B3R hardening pass, the DB lane command was run and DB-specific tests were skipped because `DENTFLOW_TEST_DB_DSN` was not set in the environment.
 
 ## No Alembic / no migrations confirmation
 - No migration files created.
@@ -43,16 +43,12 @@ Implemented repository-only media foundation with `DbMediaRepository` for media 
 
 ## Tests run with exact commands/results
 - `python -m compileall app tests scripts` — pass.
-- `pytest -q tests/test_p0_08a4b3_media_repository.py` — pass (or DB tests skipped if DSN missing).
+- `pytest -q tests/test_p0_08a4b3_media_repository.py` — pass; DB tests skipped in this run due to missing `DENTFLOW_TEST_DB_DSN`.
 - `pytest -q tests/test_p0_08a4b2_pre_visit_questionnaire_repository.py` — pass.
 - `pytest -q tests/test_p0_08a4b1_patient_profile_family_repositories.py` — pass.
 - `pytest -q tests/test_p0_08a4a_baseline_schema_models.py` — pass.
-- `pytest -q tests/test_p0_08a3_baseline_schema_contract_docs.py` — pass.
-- `pytest -q tests/test_p0_08a2_db_service_gap_audit_docs.py` — pass.
-- `pytest -q tests/test_p0_08a1_patient_profile_family_media_docs.py` — pass.
-- `pytest -q tests/test_p0_07c_manual_pre_live_checklist.py` — pass.
-- `pytest -q tests -k "care or recommendation"` — pass.
-- `pytest -q tests -k "patient and booking"` — pass.
+- `care/recommendation` broad regression lane — not run in B3R; deferred to A4B4.
+- `patient/booking` broad regression lane — not run in B3R; deferred to A4B4.
 
 ## Grep checks
 - Verified repository symbols and mapping helpers are present in `app` and tests.
@@ -60,7 +56,9 @@ Implemented repository-only media foundation with `DbMediaRepository` for media 
 - Verified no migration/revision additions beyond documentation statements.
 
 ## Defects found/fixed
-- None beyond requested repository implementation.
+- Fixed `set_primary_media` missing-link path to return inside transaction scope without disposing engine early.
+- Added missing-link unit coverage to assert no update query executes and `engine.dispose()` is called once after context exit.
+- Added DB-lane missing-link behavior coverage (runs when `DENTFLOW_TEST_DB_DSN` is available).
 
 ## Carry-forward
 - P0-08A4B4: full repository DB smoke remains.

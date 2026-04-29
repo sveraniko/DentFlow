@@ -105,6 +105,59 @@ def test_upsert_sql_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "created_at=media_docs.media_links.created_at" in merged_sql
 
 
+def test_set_primary_media_missing_link_disposes_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen_sql: list[str] = []
+
+    class _FakeResult:
+        def mappings(self):
+            return self
+
+        def first(self):
+            return None
+
+    class _FakeConn:
+        async def execute(self, sql, params):
+            seen_sql.append(str(sql))
+            return _FakeResult()
+
+    class _FakeBegin:
+        async def __aenter__(self):
+            return _FakeConn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        def __init__(self) -> None:
+            self.dispose_calls = 0
+
+        def begin(self):
+            return _FakeBegin()
+
+        async def dispose(self):
+            self.dispose_calls += 1
+            return None
+
+    fake_engine = _FakeEngine()
+    monkeypatch.setattr("app.infrastructure.db.media_repository.create_engine", lambda _cfg: fake_engine)
+    repo = DbMediaRepository(DatabaseConfig(dsn="postgresql+asyncpg://unused"))
+
+    result = asyncio.run(
+        repo.set_primary_media(
+            clinic_id="c1",
+            owner_type="care_product",
+            owner_id="SKU-BRUSH-SOFT",
+            role="product_cover",
+            link_id="missing",
+        )
+    )
+
+    assert result is None
+    assert fake_engine.dispose_calls == 1
+    assert len(seen_sql) == 1
+    assert "SELECT link_id FROM media_docs.media_links" in seen_sql[0]
+
+
 async def _build_repo() -> DbMediaRepository:
     dsn = os.getenv("DENTFLOW_TEST_DB_DSN")
     if not dsn:
@@ -152,6 +205,23 @@ def test_db_links_owner_list_primary_remove_and_join() -> None:
     assert len(joined) == 2 and isinstance(joined[0][0], MediaLink) and isinstance(joined[0][1], MediaAsset)
     assert deleted is True
     assert still_asset is not None
+
+
+def test_db_set_primary_media_missing_link_returns_none_and_preserves_existing() -> None:
+    repo = asyncio.run(_build_repo())
+    now = datetime.now(timezone.utc)
+    asyncio.run(repo.upsert_media_asset(MediaAsset("m20", "c1", "photo", "telegram", "ref20", media_type="photo", mime_type="image/jpeg", created_at=now, updated_at=now)))
+    asyncio.run(repo.upsert_media_asset(MediaAsset("m21", "c1", "photo", "telegram", "ref21", media_type="photo", mime_type="image/jpeg", created_at=now, updated_at=now)))
+    asyncio.run(repo.attach_media(MediaLink("l20", "c1", "m20", "care_product", "SKU-PASTE-MINT", "product_cover", "public", 0, True, now, now)))
+    asyncio.run(repo.attach_media(MediaLink("l21", "c1", "m21", "care_product", "SKU-PASTE-MINT", "product_cover", "public", 1, False, now, now)))
+
+    before = asyncio.run(repo.list_media_links(clinic_id="c1", owner_type="care_product", owner_id="SKU-PASTE-MINT", role="product_cover"))
+    result = asyncio.run(repo.set_primary_media(clinic_id="c1", owner_type="care_product", owner_id="SKU-PASTE-MINT", role="product_cover", link_id="missing-link"))
+    after = asyncio.run(repo.list_media_links(clinic_id="c1", owner_type="care_product", owner_id="SKU-PASTE-MINT", role="product_cover"))
+
+    assert result is None
+    assert [link.is_primary for link in before] == [link.is_primary for link in after]
+    assert [link.link_id for link in before] == [link.link_id for link in after]
 
 
 def test_no_alembic_versions_added() -> None:

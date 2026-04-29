@@ -257,25 +257,24 @@ class DbMediaRepository:
 
     async def set_primary_media(self, *, clinic_id: str, owner_type: str, owner_id: str, role: str, link_id: str) -> MediaLink | None:
         engine = create_engine(self._db_config)
+        row = None
         async with engine.begin() as conn:
             exists = (await conn.execute(text("""
                 SELECT link_id FROM media_docs.media_links
                 WHERE clinic_id=:clinic_id AND owner_type=:owner_type AND owner_id=:owner_id AND role=:role AND link_id=:link_id
             """), {"clinic_id": clinic_id, "owner_type": owner_type, "owner_id": owner_id, "role": role, "link_id": link_id})).mappings().first()
-            if exists is None:
-                await engine.dispose()
-                return None
-            await conn.execute(text("""
-                UPDATE media_docs.media_links
-                SET is_primary=FALSE, updated_at=NOW()
-                WHERE clinic_id=:clinic_id AND owner_type=:owner_type AND owner_id=:owner_id AND role=:role
-            """), {"clinic_id": clinic_id, "owner_type": owner_type, "owner_id": owner_id, "role": role})
-            row = (await conn.execute(text("""
-                UPDATE media_docs.media_links
-                SET is_primary=TRUE, updated_at=NOW()
-                WHERE clinic_id=:clinic_id AND owner_type=:owner_type AND owner_id=:owner_id AND role=:role AND link_id=:link_id
-                RETURNING link_id, clinic_id, media_asset_id, owner_type, owner_id, role, visibility, sort_order, is_primary, created_at, updated_at
-            """), {"clinic_id": clinic_id, "owner_type": owner_type, "owner_id": owner_id, "role": role, "link_id": link_id})).mappings().first()
+            if exists is not None:
+                await conn.execute(text("""
+                    UPDATE media_docs.media_links
+                    SET is_primary=FALSE, updated_at=NOW()
+                    WHERE clinic_id=:clinic_id AND owner_type=:owner_type AND owner_id=:owner_id AND role=:role
+                """), {"clinic_id": clinic_id, "owner_type": owner_type, "owner_id": owner_id, "role": role})
+                row = (await conn.execute(text("""
+                    UPDATE media_docs.media_links
+                    SET is_primary=TRUE, updated_at=NOW()
+                    WHERE clinic_id=:clinic_id AND owner_type=:owner_type AND owner_id=:owner_id AND role=:role AND link_id=:link_id
+                    RETURNING link_id, clinic_id, media_asset_id, owner_type, owner_id, role, visibility, sort_order, is_primary, created_at, updated_at
+                """), {"clinic_id": clinic_id, "owner_type": owner_type, "owner_id": owner_id, "role": role, "link_id": link_id})).mappings().first()
         await engine.dispose()
         return _map_media_link(row) if row is not None else None
 
