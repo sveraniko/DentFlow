@@ -259,3 +259,7 @@ Refined next stack:
 - P0-08M1 generic media baseline
 - P0-08M2 product media admin
 - P0-08M3 patient avatar upload
+
+
+## N. A3 baseline contract reference
+- A3 baseline contract: `docs/76_patient_profile_family_media_baseline_contract.md`.
