@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TypeAlias
 from datetime import date, datetime
 
 
@@ -117,12 +118,15 @@ class PreVisitQuestionnaire:
     updated_at: datetime | None = None
 
 
+JSONValue: TypeAlias = dict[str, object] | list[object] | str | int | float | bool | None
+
+
 @dataclass(slots=True, frozen=True)
 class PreVisitQuestionnaireAnswer:
     answer_id: str
     questionnaire_id: str
     question_key: str
-    answer_value: dict[str, object]
+    answer_value: JSONValue
     answer_type: str
     visibility: str = "staff_only"
     created_at: datetime | None = None

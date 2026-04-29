@@ -72,6 +72,19 @@ def test_save_answers_bulk_tuple_and_model_inputs() -> None:
     assert isinstance(out1, tuple) and len(out1) == 2 and isinstance(out2, tuple) and len(out2) == 1
 
 
+
+
+def test_answer_value_accepts_json_scalar_and_array_types() -> None:
+    service = PreVisitQuestionnaireService(FakeQuestionnaireRepo())
+    values = [
+        ("note", "text ok", "text"),
+        ("symptoms", ["pain", "swelling"], "json"),
+        ("pain_level", 3, "number"),
+        ("consent", True, "boolean"),
+    ]
+    persisted = [run(service.save_answer(questionnaire_id="q1", question_key=k, answer_value=v, answer_type=t)) for k, v, t in values]
+    assert [a.answer_value for a in persisted] == ["text ok", ["pain", "swelling"], 3, True]
+
 def test_invalid_answer_inputs() -> None:
     service = PreVisitQuestionnaireService(FakeQuestionnaireRepo())
     with pytest.raises(ValueError): run(service.save_answer(questionnaire_id="q1", question_key="", answer_value="x", answer_type="text"))
