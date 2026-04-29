@@ -75,6 +75,55 @@ def test_map_pre_visit_questionnaire_answer_json_shapes() -> None:
     assert mapped_list.answer_value == ["a", "b"]
 
 
+def test_upsert_answer_serializes_jsonb_param(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeResult:
+        def mappings(self):
+            return self
+
+        def one(self):
+            now = datetime.now(timezone.utc)
+            return {
+                "answer_id": "a1",
+                "questionnaire_id": "q1",
+                "question_key": "allergy",
+                "answer_value": {"value": "latex"},
+                "answer_type": "json",
+                "visibility": "staff_only",
+                "created_at": now,
+                "updated_at": now,
+            }
+
+    class _FakeConn:
+        async def execute(self, _sql, params):
+            captured.update(params)
+            return _FakeResult()
+
+    class _FakeBegin:
+        async def __aenter__(self):
+            return _FakeConn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        def begin(self):
+            return _FakeBegin()
+
+        async def dispose(self):
+            return None
+
+    monkeypatch.setattr("app.infrastructure.db.patient_repository.create_engine", lambda _cfg: _FakeEngine())
+    repo = DbPatientRegistryRepository(DatabaseConfig(dsn="postgresql+asyncpg://unused"))
+    answer = PreVisitQuestionnaireAnswer("a1", "q1", "allergy", {"value": "latex"}, "json")
+
+    persisted = asyncio.run(repo.upsert_pre_visit_questionnaire_answer(answer))
+
+    assert isinstance(persisted, PreVisitQuestionnaireAnswer)
+    assert captured["answer_value"] == '{"value": "latex"}'
+
+
 async def _build_db_repo() -> DbPatientRegistryRepository:
     dsn = os.getenv("DENTFLOW_TEST_DB_DSN")
     if not dsn:

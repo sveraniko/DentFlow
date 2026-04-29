@@ -740,6 +740,7 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
         params = asdict(answer)
         if not isinstance(params.get("answer_value"), (dict, list, str, int, float, bool, type(None))):
             params["answer_value"] = str(params["answer_value"])
+        params["answer_value"] = json.dumps(params["answer_value"])
         async with engine.begin() as conn:
             row = (
                 await conn.execute(
@@ -764,7 +765,7 @@ class DbPatientRegistryRepository(InMemoryPatientRegistryRepository):
                                   created_at, updated_at
                         """
                     ),
-                    {"answer_value": json.dumps(params["answer_value"]), **params},
+                    params,
                 )
             ).mappings().one()
         await engine.dispose()
